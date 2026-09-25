@@ -1,0 +1,12 @@
+[project]
+name = "everest-bot"
+version = "0.1.0"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "google-genai>=0.8.0",
+    "pillow>=10.0.0",
+    "aiohttp>=3.9.0",
+]
+
+[dependency-groups]
+dev = ["workers-py"]
