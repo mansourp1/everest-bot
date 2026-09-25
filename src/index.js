@@ -319,30 +319,70 @@ async function fetchTwelveData(symbol, interval, apiKey, size = 200) {
   }));
 }
 
-async function callGemini(apiKey, prompt, model = 'gemini-2.5-flash') {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: {
-        temperature: 0.2,
-        topP: 0.9,
-        maxOutputTokens: 12288
-      }
-    })
-  });
-
-  const data = await res.json();
-
-  if (!res.ok) {
-    throw new Error(data.error?.message || `HTTP ${res.status}`);
+// چرخش خودکار کلیدهای Gemini
+async function callGemini(apiKeys, prompt, model = 'gemini-2.5-flash') {
+  const keys = Array.isArray(apiKeys) ? apiKeys.filter(Boolean) : [apiKeys].filter(Boolean);
+  
+  if (!keys.length) {
+    throw new Error('هیچ کلید Gemini تنظیم نشده');
   }
 
-  const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-  if (!text) throw new Error('پاسخ خالی از Gemini');
-  return text;
+  let lastError = null;
+
+  for (let i = 0; i < keys.length; i++) {
+    const apiKey = keys[i];
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: {
+            temperature: 0.2,
+            topP: 0.9,
+            maxOutputTokens: 12288
+          }
+        })
+      });
+
+      const data = await res.json();
+
+      if (res.ok) {
+        const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (text) {
+          console.log(`Gemini success with key ${i + 1}/${keys.length}`);
+          return text;
+        }
+      }
+
+      lastError = data.error?.message || `HTTP ${res.status}`;
+
+      // اگه سهمیه تموم شده یا سرور شلوغه، برو کلید بعدی
+      if (res.status === 429 || res.status === 503 || res.status === 500 ||
+          lastError.includes('quota') || lastError.includes('rate') ||
+          lastError.includes('demand') || lastError.includes('overloaded')) {
+        console.log(`Key ${i + 1} failed with ${res.status}, trying next...`);
+        continue;
+      }
+
+      // خطای غیرقابل جبران (کلید اشتباه، بدنه اشتباه و...)
+      if (res.status === 401 || res.status === 403 || res.status === 400) {
+        console.log(`Key ${i + 1} invalid, trying next...`);
+        continue;
+      }
+
+      throw new Error(lastError);
+
+    } catch (e) {
+      lastError = e.message;
+      console.log(`Key ${i + 1} error: ${e.message}`);
+      continue;
+    }
+  }
+
+  throw new Error(`همه کلیدهای Gemini خطا دادند. آخرین خطا: ${lastError}`);
 }
 
 // ============================================
@@ -359,8 +399,23 @@ function regimeLabel(r) {
   return labels[r] || '';
 }
 
-function buildCaption(levels) {
+function timeframeLabel(tf) {
+  const labels = {
+    '1min': '1 دقیقه',
+    '3min': '3 دقیقه',
+    '5min': '5 دقیقه',
+    '15min': '15 دقیقه',
+    '1h': '1 ساعت',
+    '4h': '4 ساعت'
+  };
+  return labels[tf] || tf;
+}
+
+function buildCaption(levels, symbol, timeframe) {
   let c = '<b>📊 تحلیل چارت</b>\n\n';
+  c += `<b>نماد:</b> ${symbol}\n`;
+  c += `<b>تایم‌فریم:</b> ${timeframeLabel(timeframe)}\n\n`;
+
   const direction = levels.direction || 'WAIT';
   const dirText = direction === 'BUY' ? '🟢 خرید' : direction === 'SELL' ? '🔴 فروش' : '⏸️ انتظار';
   c += `<b>جهت:</b> ${dirText}\n`;
@@ -438,10 +493,23 @@ export default {
   }
 };
 
+// استخراج کلیدهای Gemini از environment
+function getGeminiKeys(env) {
+  const keys = [];
+  // کلیدهای جدید (اولویت بالا)
+  if (env.GEMINI_KEY_1) keys.push(env.GEMINI_KEY_1);
+  if (env.GEMINI_KEY_2) keys.push(env.GEMINI_KEY_2);
+  if (env.GEMINI_KEY_3) keys.push(env.GEMINI_KEY_3);
+  if (env.GEMINI_KEY_4) keys.push(env.GEMINI_KEY_4);
+  // کلید قدیمی (سازگاری با گذشته)
+  if (env.GEMINI_KEY) keys.push(env.GEMINI_KEY);
+  return keys;
+}
+
 async function handleUpdate(update, env) {
   const token = env.TG_TOKEN;
   const twelveKey = env.TWELVE_KEY;
-  const geminiKey = env.GEMINI_KEY;
+  const geminiKeys = getGeminiKeys(env);
   const geminiModel = env.GEMINI_MODEL || 'gemini-2.5-flash';
 
   if (update.message) {
@@ -467,13 +535,20 @@ async function handleUpdate(update, env) {
         '• XAU/USD (طلا)\n' +
         '• EUR/USD (یورو/دلار)\n' +
         '• BTC/USD (بیت‌کوین)\n' +
-        '• GBP/USD (پوند/دلار)'
+        '• GBP/USD (پوند/دلار)\n\n' +
+        '<b>تایم‌فریم‌ها:</b>\n' +
+        '• 1 دقیقه\n' +
+        '• 3 دقیقه\n' +
+        '• 5 دقیقه\n' +
+        '• 15 دقیقه\n' +
+        '• 1 ساعت\n' +
+        '• 4 ساعت'
       );
       return;
     }
 
     if (text === '/status') {
-      const geminiOk = geminiKey ? '✅' : '❌';
+      const geminiOk = geminiKeys.length > 0 ? `✅ (${geminiKeys.length} کلید)` : '❌';
       const twelveOk = twelveKey ? '✅' : '❌';
       await sendMessage(token, chatId,
         `🤖 <b>وضعیت سیستم</b>\n\n` +
@@ -488,12 +563,12 @@ async function handleUpdate(update, env) {
       const keyboard = {
         inline_keyboard: [
           [
-            { text: '🥇 XAU/USD', callback_data: 'analyze_XAUUSD' },
-            { text: '💶 EUR/USD', callback_data: 'analyze_EURUSD' }
+            { text: '🥇 XAU/USD', callback_data: 'symbol_XAUUSD' },
+            { text: '💶 EUR/USD', callback_data: 'symbol_EURUSD' }
           ],
           [
-            { text: '₿ BTC/USD', callback_data: 'analyze_BTCUSD' },
-            { text: '💷 GBP/USD', callback_data: 'analyze_GBPUSD' }
+            { text: '₿ BTC/USD', callback_data: 'symbol_BTCUSD' },
+            { text: '💷 GBP/USD', callback_data: 'symbol_GBPUSD' }
           ]
         ]
       };
@@ -503,7 +578,11 @@ async function handleUpdate(update, env) {
 
     if (text.startsWith('/analyze ')) {
       const symbol = text.replace('/analyze ', '').trim().toUpperCase();
-      await runAnalysis(token, chatId, symbol, twelveKey, geminiKey, geminiModel);
+      // اگر با تایم‌فریم همراه بود (مثل /analyze XAU/USD 15min)
+      const parts = symbol.split(/\s+/);
+      const sym = parts[0];
+      const tf = parts[1] || '1h';
+      await runAnalysis(token, chatId, sym, twelveKey, geminiKeys, geminiModel, tf);
       return;
     }
   }
@@ -515,30 +594,88 @@ async function handleUpdate(update, env) {
 
     await answerCallback(token, callback.id);
 
-    if (data.startsWith('analyze_')) {
-      const symbol = data.replace('analyze_', '').replace('USD', '/USD');
-      await runAnalysis(token, chatId, symbol, twelveKey, geminiKey, geminiModel);
+    // مرحله ۱: انتخاب نماد → نمایش منوی تایم‌فریم
+    if (data.startsWith('symbol_')) {
+      const symbol = data.replace('symbol_', '').replace('USD', '/USD');
+
+      const keyboard = {
+        inline_keyboard: [
+          [
+            { text: '⏱️ 1 دقیقه', callback_data: `tf_${symbol}_1min` },
+            { text: '⏱️ 3 دقیقه', callback_data: `tf_${symbol}_3min` }
+          ],
+          [
+            { text: '⏱️ 5 دقیقه', callback_data: `tf_${symbol}_5min` },
+            { text: '⏱️ 15 دقیقه', callback_data: `tf_${symbol}_15min` }
+          ],
+          [
+            { text: '🕐 1 ساعت', callback_data: `tf_${symbol}_1h` },
+            { text: '📅 4 ساعت', callback_data: `tf_${symbol}_4h` }
+          ]
+        ]
+      };
+
+      await sendMessage(token, chatId,
+        `⏰ <b>تایم‌فریم تحلیل ${symbol} را انتخاب کنید:</b>`,
+        keyboard
+      );
+      return;
+    }
+
+    // مرحله ۲: انتخاب تایم‌فریم → اجرای تحلیل
+    if (data.startsWith('tf_')) {
+      const rest = data.replace('tf_', '');
+      // جدا کردن symbol از timeframe (آخرین بخش)
+      const tfMatch = rest.match(/_([^_]+)$/);
+      if (!tfMatch) return;
+
+      const timeframe = tfMatch[1];
+      const symbol = rest.slice(0, -tfMatch[0].length).replace('USD', '/USD');
+
+      await runAnalysis(token, chatId, symbol, twelveKey, geminiKeys, geminiModel, timeframe);
+      return;
     }
   }
 }
 
-async function runAnalysis(token, chatId, symbol, twelveKey, geminiKey, geminiModel, timeframe = '1h') {
+async function runAnalysis(token, chatId, symbol, twelveKey, geminiKeys, geminiModel, timeframe = '1h') {
   try {
-    await sendMessage(token, chatId, `⏳ در حال تحلیل <b>${symbol}</b>...`);
+    await sendMessage(token, chatId,
+      `⏳ در حال تحلیل <b>${symbol}</b>\nتایم‌فریم: <b>${timeframeLabel(timeframe)}</b>...`
+    );
 
-    const intervalMap = { '4H': '4h', '1H': '1h', '15M': '15min', '1M': '1min' };
-    const interval = intervalMap[timeframe.toUpperCase()] || '1h';
+    // تایم‌فریم‌های پشتیبانی‌شده توسط Twelve Data
+    const supportedIntervals = ['1min', '5min', '15min', '30min', '45min', '1h', '2h', '4h', '8h', '1day', '1week', '1month'];
+    
+    // نگاشت تایم‌فریم‌های سفارشی
+    const intervalMap = {
+      '1min': '1min',
+      '3min': '5min',  // Twelve Data از 3min پشتیبانی نمی‌کند، پس 5min می‌گیریم
+      '5min': '5min',
+      '15min': '15min',
+      '1h': '1h',
+      '4h': '4h'
+    };
+    
+    const interval = intervalMap[timeframe] || '1h';
 
     const klines = await fetchTwelveData(symbol, interval, twelveKey, 200);
 
-    const fullPrompt = LIVE_PREFIX + `نماد: ${symbol}\n\n` + klinesToText(klines, symbol, timeframe.toUpperCase()) + '\n\n';
+    const fullPrompt = LIVE_PREFIX +
+      `نماد: ${symbol}\n` +
+      `تایم‌فریم: ${timeframeLabel(timeframe)}\n\n` +
+      klinesToText(klines, symbol, timeframeLabel(timeframe)) + '\n\n';
 
-    const analysisText = await callGemini(geminiKey, SYSTEM_PROMPT + '\n\n' + fullPrompt, geminiModel);
+    const analysisText = await callGemini(
+      geminiKeys,
+      SYSTEM_PROMPT + '\n\n' + fullPrompt,
+      geminiModel
+    );
 
     let levels = extractLevels(analysisText);
     levels = validateSignal(levels, { minConfidence: 65, minRR: 1.5 });
 
-    const caption = buildCaption(levels);
+    const caption = buildCaption(levels, symbol, timeframe);
     await sendMessage(token, chatId, caption);
 
     const fullText = tgFormat(analysisText);
