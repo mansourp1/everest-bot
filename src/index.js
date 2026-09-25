@@ -257,6 +257,22 @@ ${rows}`;
 }
 
 // ============================================
+// SYMBOL NORMALIZATION (رفع مشکل double-slash)
+// ============================================
+
+function normalizeSymbol(sym) {
+  if (!sym) return '';
+  // اگه قبلاً / داره، همون رو برگردون
+  if (sym.includes('/')) return sym.toUpperCase();
+
+  // XAUUSD → XAU/USD
+  const match = sym.toUpperCase().match(/^([A-Z]+)(USD|EUR|GBP|JPY|CHF|AUD|CAD|NZD)$/);
+  if (match) return `${match[1]}/${match[2]}`;
+
+  return sym.toUpperCase();
+}
+
+// ============================================
 // TELEGRAM API
 // ============================================
 
@@ -322,7 +338,7 @@ async function fetchTwelveData(symbol, interval, apiKey, size = 200) {
 // چرخش خودکار کلیدهای Gemini
 async function callGemini(apiKeys, prompt, model = 'gemini-2.5-flash') {
   const keys = Array.isArray(apiKeys) ? apiKeys.filter(Boolean) : [apiKeys].filter(Boolean);
-  
+
   if (!keys.length) {
     throw new Error('هیچ کلید Gemini تنظیم نشده');
   }
@@ -496,12 +512,10 @@ export default {
 // استخراج کلیدهای Gemini از environment
 function getGeminiKeys(env) {
   const keys = [];
-  // کلیدهای جدید (اولویت بالا)
   if (env.GEMINI_KEY_1) keys.push(env.GEMINI_KEY_1);
   if (env.GEMINI_KEY_2) keys.push(env.GEMINI_KEY_2);
   if (env.GEMINI_KEY_3) keys.push(env.GEMINI_KEY_3);
   if (env.GEMINI_KEY_4) keys.push(env.GEMINI_KEY_4);
-  // کلید قدیمی (سازگاری با گذشته)
   if (env.GEMINI_KEY) keys.push(env.GEMINI_KEY);
   return keys;
 }
@@ -577,10 +591,8 @@ async function handleUpdate(update, env) {
     }
 
     if (text.startsWith('/analyze ')) {
-      const symbol = text.replace('/analyze ', '').trim().toUpperCase();
-      // اگر با تایم‌فریم همراه بود (مثل /analyze XAU/USD 15min)
-      const parts = symbol.split(/\s+/);
-      const sym = parts[0];
+      const parts = text.replace('/analyze ', '').trim().split(/\s+/);
+      const sym = normalizeSymbol(parts[0]);
       const tf = parts[1] || '1h';
       await runAnalysis(token, chatId, sym, twelveKey, geminiKeys, geminiModel, tf);
       return;
@@ -596,27 +608,28 @@ async function handleUpdate(update, env) {
 
     // مرحله ۱: انتخاب نماد → نمایش منوی تایم‌فریم
     if (data.startsWith('symbol_')) {
-      const symbol = data.replace('symbol_', '').replace('USD', '/USD');
+      const symbolRaw = data.replace('symbol_', ''); // مثل XAUUSD
+      const symbolDisplay = normalizeSymbol(symbolRaw); // مثل XAU/USD
 
       const keyboard = {
         inline_keyboard: [
           [
-            { text: '⏱️ 1 دقیقه', callback_data: `tf_${symbol}_1min` },
-            { text: '⏱️ 3 دقیقه', callback_data: `tf_${symbol}_3min` }
+            { text: '⏱️ 1 دقیقه', callback_data: `tf_${symbolRaw}_1min` },
+            { text: '⏱️ 3 دقیقه', callback_data: `tf_${symbolRaw}_3min` }
           ],
           [
-            { text: '⏱️ 5 دقیقه', callback_data: `tf_${symbol}_5min` },
-            { text: '⏱️ 15 دقیقه', callback_data: `tf_${symbol}_15min` }
+            { text: '⏱️ 5 دقیقه', callback_data: `tf_${symbolRaw}_5min` },
+            { text: '⏱️ 15 دقیقه', callback_data: `tf_${symbolRaw}_15min` }
           ],
           [
-            { text: '🕐 1 ساعت', callback_data: `tf_${symbol}_1h` },
-            { text: '📅 4 ساعت', callback_data: `tf_${symbol}_4h` }
+            { text: '🕐 1 ساعت', callback_data: `tf_${symbolRaw}_1h` },
+            { text: '📅 4 ساعت', callback_data: `tf_${symbolRaw}_4h` }
           ]
         ]
       };
 
       await sendMessage(token, chatId,
-        `⏰ <b>تایم‌فریم تحلیل ${symbol} را انتخاب کنید:</b>`,
+        `⏰ <b>تایم‌فریم تحلیل ${symbolDisplay} را انتخاب کنید:</b>`,
         keyboard
       );
       return;
@@ -624,13 +637,14 @@ async function handleUpdate(update, env) {
 
     // مرحله ۲: انتخاب تایم‌فریم → اجرای تحلیل
     if (data.startsWith('tf_')) {
+      // data = tf_XAUUSD_15min
       const rest = data.replace('tf_', '');
-      // جدا کردن symbol از timeframe (آخرین بخش)
       const tfMatch = rest.match(/_([^_]+)$/);
       if (!tfMatch) return;
 
       const timeframe = tfMatch[1];
-      const symbol = rest.slice(0, -tfMatch[0].length).replace('USD', '/USD');
+      const symbolRaw = rest.slice(0, -tfMatch[0].length); // XAUUSD
+      const symbol = normalizeSymbol(symbolRaw); // XAU/USD
 
       await runAnalysis(token, chatId, symbol, twelveKey, geminiKeys, geminiModel, timeframe);
       return;
@@ -644,19 +658,16 @@ async function runAnalysis(token, chatId, symbol, twelveKey, geminiKeys, geminiM
       `⏳ در حال تحلیل <b>${symbol}</b>\nتایم‌فریم: <b>${timeframeLabel(timeframe)}</b>...`
     );
 
-    // تایم‌فریم‌های پشتیبانی‌شده توسط Twelve Data
-    const supportedIntervals = ['1min', '5min', '15min', '30min', '45min', '1h', '2h', '4h', '8h', '1day', '1week', '1month'];
-    
     // نگاشت تایم‌فریم‌های سفارشی
     const intervalMap = {
       '1min': '1min',
-      '3min': '5min',  // Twelve Data از 3min پشتیبانی نمی‌کند، پس 5min می‌گیریم
+      '3min': '5min',  // Twelve Data از 3min پشتیبانی نمی‌کند → 5min
       '5min': '5min',
       '15min': '15min',
       '1h': '1h',
       '4h': '4h'
     };
-    
+
     const interval = intervalMap[timeframe] || '1h';
 
     const klines = await fetchTwelveData(symbol, interval, twelveKey, 200);
