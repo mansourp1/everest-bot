@@ -277,7 +277,7 @@ async function buildChartImage(symbol, timeframe, env) {
     exchange = 'NASDAQ';
   }
 
-  // ۲. نگاشت تایم‌فریم
+  // ۲. نگاشت تایم‌فریم به مقادیر معتبر Chart-Img
   var intervalMap = {
     '1min': '1',
     '3min': '3',
@@ -288,10 +288,10 @@ async function buildChartImage(symbol, timeframe, env) {
   };
   var chartInterval = intervalMap[timeframe] || '60';
 
-  // ۳. ساخت آدرس به صورت رشته‌ای (نه با new URL)
+  // ۳. ساخت آدرس
   var apiUrl = 'https://api.chart-img.com/v2/tradingview/advanced-chart';
 
-  // ۴. بدنه درخواست (JSON)
+  // ۴. بدنه درخواست با نام‌های صحیح اندیکاتورها
   var requestBody = {
     symbol: exchange + ':' + symUpper,
     interval: chartInterval,
@@ -301,7 +301,7 @@ async function buildChartImage(symbol, timeframe, env) {
     studies: [
       { name: 'Volume', forceOverlay: true },
       { name: 'MACD' },
-      { name: 'RSI' }
+      { name: 'Relative Strength Index' } // نام صحیح برای RSI
     ]
   };
 
