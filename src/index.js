@@ -284,6 +284,22 @@ async function sendMessage(token, chatId, text, keyboard = null) {
     parse_mode: 'HTML',
     disable_web_page_preview: true
   };
+  async function sendPhoto(token, chatId, photoUrl, caption = '') {
+  const url = `https://api.telegram.org/bot${token}/sendPhoto`;
+  const payload = {
+    chat_id: chatId,
+    photo: photoUrl,
+    caption: caption.slice(0, 1000),
+    parse_mode: 'HTML'
+  };
+
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+  return res.json();
+}
   if (keyboard) payload.reply_markup = keyboard;
 
   const res = await fetch(url, {
@@ -424,6 +440,57 @@ function timeframeLabel(tf) {
     '1h': '1 ساعت',
     '4h': '4 ساعت'
   };
+  function buildChartImageUrl(symbol, timeframe, klines) {
+  // فقط ۶۰ کندل آخر برای خوانایی بیشتر
+  const recent = klines.slice(-60);
+  const closes = recent.map(k => k.close);
+  const labels = recent.map(k => {
+    if (!k.datetime) return '';
+    // فقط ساعت رو نشون بده
+    return k.datetime.length > 11 ? k.datetime.slice(11, 16) : k.datetime;
+  });
+
+  const chartConfig = {
+    type: 'line',
+    data: {
+      labels: labels,
+      datasets: [{
+        label: `${symbol} - ${timeframeLabel(timeframe)}`,
+        data: closes,
+        borderColor: '#00c6ff',
+        backgroundColor: 'rgba(0, 198, 255, 0.15)',
+        borderWidth: 2,
+        pointRadius: 0,
+        fill: true,
+        tension: 0.1
+      }]
+    },
+    options: {
+      title: {
+        display: true,
+        text: `${symbol} - ${timeframeLabel(timeframe)}`,
+        fontColor: '#ffffff',
+        fontSize: 16
+      },
+      legend: {
+        labels: { fontColor: '#ffffff' }
+      },
+      scales: {
+        yAxes: [{
+          ticks: { fontColor: '#aaaaaa' },
+          gridLines: { color: 'rgba(255,255,255,0.1)' }
+        }],
+        xAxes: [{
+          ticks: { fontColor: '#aaaaaa', maxTicksLimit: 10 },
+          gridLines: { color: 'rgba(255,255,255,0.05)' }
+        }]
+      }
+    }
+  };
+
+  const encodedConfig = encodeURIComponent(JSON.stringify(chartConfig));
+  return `https://quickchart.io/chart?c=${encodedConfig}&w=900&h=450&bkg=%231a1a3e&format=png`;
+}
   return labels[tf] || tf;
 }
 
@@ -671,6 +738,12 @@ async function runAnalysis(token, chatId, symbol, twelveKey, geminiKeys, geminiM
     const interval = intervalMap[timeframe] || '1h';
 
     const klines = await fetchTwelveData(symbol, interval, twelveKey, 200);
+
+    // ← این دو خط جدید:
+    const chartUrl = buildChartImageUrl(symbol, timeframe, klines);
+    await sendPhoto(token, chatId, chartUrl, `📊 چارت ${symbol} - ${timeframeLabel(timeframe)}`);
+
+    const fullPrompt = LIVE_PREFIX +
 
     const fullPrompt = LIVE_PREFIX +
       `نماد: ${symbol}\n` +
