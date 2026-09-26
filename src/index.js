@@ -257,19 +257,31 @@ ${rows}`;
 }
 
 // ============================================
-// SYMBOL NORMALIZATION (رفع مشکل double-slash)
+// SYMBOL NORMALIZATION
 // ============================================
 
 function normalizeSymbol(sym) {
   if (!sym) return '';
+  const cleaned = sym.trim().toUpperCase();
+
   // اگه قبلاً / داره، همون رو برگردون
-  if (sym.includes('/')) return sym.toUpperCase();
+  if (cleaned.includes('/')) return cleaned;
 
   // XAUUSD → XAU/USD
-  const match = sym.toUpperCase().match(/^([A-Z]+)(USD|EUR|GBP|JPY|CHF|AUD|CAD|NZD)$/);
+  const match = cleaned.match(/^([A-Z]+)(USD|EUR|GBP|JPY|CHF|AUD|CAD|NZD)$/);
   if (match) return `${match[1]}/${match[2]}`;
 
-  return sym.toUpperCase();
+  return cleaned;
+}
+
+// تشخیص اینکه آیا متن ورودی شبیه نماد است
+function looksLikeSymbol(text) {
+  if (!text) return false;
+  const cleaned = text.trim();
+  // الگو: ۳ تا ۱۰ حرف بزرگ، اختیاری با / یا - یا بدون جداکننده
+  // مثل: XAUUSD، XAU/USD، EURUSD، BTCUSD، AAPL، ETH/USD
+  return /^[A-Za-z]{2,10}(\/[A-Za-z]{2,10})?$/.test(cleaned) ||
+         /^[A-Za-z]{2,10}[-][A-Za-z]{2,10}$/.test(cleaned);
 }
 
 // ============================================
@@ -284,14 +296,7 @@ async function sendMessage(token, chatId, text, keyboard = null) {
     parse_mode: 'HTML',
     disable_web_page_preview: true
   };
-  async function sendPhoto(token, chatId, photoUrl, caption = '') {
-  const url = `https://api.telegram.org/bot${token}/sendPhoto`;
-  const payload = {
-    chat_id: chatId,
-    photo: photoUrl,
-    caption: caption.slice(0, 1000),
-    parse_mode: 'HTML'
-  };
+  if (keyboard) payload.reply_markup = keyboard;
 
   const res = await fetch(url, {
     method: 'POST',
@@ -300,7 +305,15 @@ async function sendMessage(token, chatId, text, keyboard = null) {
   });
   return res.json();
 }
-  if (keyboard) payload.reply_markup = keyboard;
+
+async function sendPhoto(token, chatId, photoUrl, caption = '') {
+  const url = `https://api.telegram.org/bot${token}/sendPhoto`;
+  const payload = {
+    chat_id: chatId,
+    photo: photoUrl,
+    caption: caption.slice(0, 1000),
+    parse_mode: 'HTML'
+  };
 
   const res = await fetch(url, {
     method: 'POST',
@@ -351,8 +364,7 @@ async function fetchTwelveData(symbol, interval, apiKey, size = 200) {
   }));
 }
 
-// چرخش خودکار کلیدهای Gemini
-async function callGemini(apiKeys, prompt, model = 'gemini-2.5-flash') {
+async function callGemini(apiKeys, prompt, model = 'gemini-3.5-flash-lite') {
   const keys = Array.isArray(apiKeys) ? apiKeys.filter(Boolean) : [apiKeys].filter(Boolean);
 
   if (!keys.length) {
@@ -391,7 +403,6 @@ async function callGemini(apiKeys, prompt, model = 'gemini-2.5-flash') {
 
       lastError = data.error?.message || `HTTP ${res.status}`;
 
-      // اگه سهمیه تموم شده یا سرور شلوغه، برو کلید بعدی
       if (res.status === 429 || res.status === 503 || res.status === 500 ||
           lastError.includes('quota') || lastError.includes('rate') ||
           lastError.includes('demand') || lastError.includes('overloaded')) {
@@ -399,7 +410,6 @@ async function callGemini(apiKeys, prompt, model = 'gemini-2.5-flash') {
         continue;
       }
 
-      // خطای غیرقابل جبران (کلید اشتباه، بدنه اشتباه و...)
       if (res.status === 401 || res.status === 403 || res.status === 400) {
         console.log(`Key ${i + 1} invalid, trying next...`);
         continue;
@@ -415,6 +425,82 @@ async function callGemini(apiKeys, prompt, model = 'gemini-2.5-flash') {
   }
 
   throw new Error(`همه کلیدهای Gemini خطا دادند. آخرین خطا: ${lastError}`);
+}
+
+// ============================================
+// CHART IMAGE (QuickChart)
+// ============================================
+
+async function buildChartImageUrl(symbol, timeframe, klines) {
+  // فقط ۵۰ کندل آخر برای خوانایی
+  const recent = klines.slice(-50);
+  const closes = recent.map(k => k.close);
+  const labels = recent.map(k => {
+    if (!k.datetime) return '';
+    return k.datetime.length > 11 ? k.datetime.slice(11, 16) : k.datetime;
+  });
+
+  const chartConfig = {
+    type: 'line',
+    data: {
+      labels: labels,
+      datasets: [{
+        label: `${symbol} - ${timeframeLabel(timeframe)}`,
+        data: closes,
+        borderColor: '#00c6ff',
+        backgroundColor: 'rgba(0, 198, 255, 0.15)',
+        borderWidth: 2,
+        pointRadius: 0,
+        fill: true,
+        tension: 0.1
+      }]
+    },
+    options: {
+      title: {
+        display: true,
+        text: `${symbol} - ${timeframeLabel(timeframe)}`
+      },
+      legend: {
+        display: false
+      },
+      scales: {
+        yAxes: [{
+          ticks: { fontColor: '#aaaaaa' },
+          gridLines: { color: 'rgba(255,255,255,0.1)' }
+        }],
+        xAxes: [{
+          ticks: { fontColor: '#aaaaaa', maxTicksLimit: 8 },
+          gridLines: { color: 'rgba(255,255,255,0.05)' }
+        }]
+      }
+    }
+  };
+
+  // استفاده از POST برای دریافت URL کوتاه
+  try {
+    const res = await fetch('https://quickchart.io/chart/create', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chart: chartConfig,
+        width: 900,
+        height: 450,
+        backgroundColor: '#1a1a3e',
+        format: 'png'
+      })
+    });
+
+    const data = await res.json();
+    if (data.success && data.url) {
+      return data.url;
+    }
+  } catch (e) {
+    console.error('QuickChart POST error:', e.message);
+  }
+
+  // fallback: استفاده از GET با URL-encoded
+  const encoded = encodeURIComponent(JSON.stringify(chartConfig));
+  return `https://quickchart.io/chart?c=${encoded}&w=900&h=450&bkg=%231a1a3e&format=png`;
 }
 
 // ============================================
@@ -440,57 +526,6 @@ function timeframeLabel(tf) {
     '1h': '1 ساعت',
     '4h': '4 ساعت'
   };
-  function buildChartImageUrl(symbol, timeframe, klines) {
-  // فقط ۶۰ کندل آخر برای خوانایی بیشتر
-  const recent = klines.slice(-60);
-  const closes = recent.map(k => k.close);
-  const labels = recent.map(k => {
-    if (!k.datetime) return '';
-    // فقط ساعت رو نشون بده
-    return k.datetime.length > 11 ? k.datetime.slice(11, 16) : k.datetime;
-  });
-
-  const chartConfig = {
-    type: 'line',
-    data: {
-      labels: labels,
-      datasets: [{
-        label: `${symbol} - ${timeframeLabel(timeframe)}`,
-        data: closes,
-        borderColor: '#00c6ff',
-        backgroundColor: 'rgba(0, 198, 255, 0.15)',
-        borderWidth: 2,
-        pointRadius: 0,
-        fill: true,
-        tension: 0.1
-      }]
-    },
-    options: {
-      title: {
-        display: true,
-        text: `${symbol} - ${timeframeLabel(timeframe)}`,
-        fontColor: '#ffffff',
-        fontSize: 16
-      },
-      legend: {
-        labels: { fontColor: '#ffffff' }
-      },
-      scales: {
-        yAxes: [{
-          ticks: { fontColor: '#aaaaaa' },
-          gridLines: { color: 'rgba(255,255,255,0.1)' }
-        }],
-        xAxes: [{
-          ticks: { fontColor: '#aaaaaa', maxTicksLimit: 10 },
-          gridLines: { color: 'rgba(255,255,255,0.05)' }
-        }]
-      }
-    }
-  };
-
-  const encodedConfig = encodeURIComponent(JSON.stringify(chartConfig));
-  return `https://quickchart.io/chart?c=${encodedConfig}&w=900&h=450&bkg=%231a1a3e&format=png`;
-}
   return labels[tf] || tf;
 }
 
@@ -576,7 +611,6 @@ export default {
   }
 };
 
-// استخراج کلیدهای Gemini از environment
 function getGeminiKeys(env) {
   const keys = [];
   if (env.GEMINI_KEY_1) keys.push(env.GEMINI_KEY_1);
@@ -591,19 +625,22 @@ async function handleUpdate(update, env) {
   const token = env.TG_TOKEN;
   const twelveKey = env.TWELVE_KEY;
   const geminiKeys = getGeminiKeys(env);
-  const geminiModel = env.GEMINI_MODEL || 'gemini-2.5-flash';
+  const geminiModel = env.GEMINI_MODEL || 'gemini-3.5-flash-lite';
 
   if (update.message) {
     const chatId = update.message.chat.id;
     const text = (update.message.text || '').trim();
 
+    // دستورات
     if (text === '/start') {
       await sendMessage(token, chatId,
         '🎯 <b>Everest AI Terminal</b>\n\n' +
         'به بات تحلیل‌گر خوش آمدید!\n\n' +
-        '/analyze - شروع تحلیل\n' +
+        '/analyze - منوی تحلیل\n' +
         '/status - وضعیت اتصالات\n' +
-        '/help - راهنما'
+        '/help - راهنما\n\n' +
+        '💡 <b>می‌توانید مستقیم نماد مورد نظرتان را تایپ کنید</b>\n' +
+        'مثال: <code>GBPJPY</code> یا <code>ETH/USD</code> یا <code>AAPL</code>'
       );
       return;
     }
@@ -611,19 +648,16 @@ async function handleUpdate(update, env) {
     if (text === '/help') {
       await sendMessage(token, chatId,
         '📖 <b>راهنما</b>\n\n' +
-        'برای تحلیل، از /analyze استفاده کنید.\n\n' +
-        '<b>نمادهای پشتیبانی‌شده:</b>\n' +
-        '• XAU/USD (طلا)\n' +
-        '• EUR/USD (یورو/دلار)\n' +
-        '• BTC/USD (بیت‌کوین)\n' +
-        '• GBP/USD (پوند/دلار)\n\n' +
+        'برای تحلیل، از /analyze استفاده کنید یا مستقیم نماد را تایپ کنید.\n\n' +
+        '<b>نمونه نمادها:</b>\n' +
+        '• <code>XAU/USD</code> (طلا)\n' +
+        '• <code>EUR/USD</code> (یورو/دلار)\n' +
+        '• <code>BTC/USD</code> (بیت‌کوین)\n' +
+        '• <code>GBPJPY</code> (پوند/ین)\n' +
+        '• <code>AAPL</code> (سهام اپل)\n' +
+        '• <code>ETH/USD</code> (اتریوم)\n\n' +
         '<b>تایم‌فریم‌ها:</b>\n' +
-        '• 1 دقیقه\n' +
-        '• 3 دقیقه\n' +
-        '• 5 دقیقه\n' +
-        '• 15 دقیقه\n' +
-        '• 1 ساعت\n' +
-        '• 4 ساعت'
+        '1 دقیقه، 3 دقیقه، 5 دقیقه، 15 دقیقه، 1 ساعت، 4 ساعت'
       );
       return;
     }
@@ -650,6 +684,9 @@ async function handleUpdate(update, env) {
           [
             { text: '₿ BTC/USD', callback_data: 'symbol_BTCUSD' },
             { text: '💷 GBP/USD', callback_data: 'symbol_GBPUSD' }
+          ],
+          [
+            { text: '✏️ نماد دیگر', callback_data: 'custom_symbol' }
           ]
         ]
       };
@@ -657,11 +694,72 @@ async function handleUpdate(update, env) {
       return;
     }
 
+    // دستور /analyze با نماد دلخواه
     if (text.startsWith('/analyze ')) {
       const parts = text.replace('/analyze ', '').trim().split(/\s+/);
       const sym = normalizeSymbol(parts[0]);
       const tf = parts[1] || '1h';
-      await runAnalysis(token, chatId, sym, twelveKey, geminiKeys, geminiModel, tf);
+
+      // نمایش منوی تایم‌فریم
+      const symbolRaw = sym.replace('/', '');
+      const keyboard = {
+        inline_keyboard: [
+          [
+            { text: '⏱️ 1 دقیقه', callback_data: `tf_${symbolRaw}_1min` },
+            { text: '⏱️ 3 دقیقه', callback_data: `tf_${symbolRaw}_3min` }
+          ],
+          [
+            { text: '⏱️ 5 دقیقه', callback_data: `tf_${symbolRaw}_5min` },
+            { text: '⏱️ 15 دقیقه', callback_data: `tf_${symbolRaw}_15min` }
+          ],
+          [
+            { text: '🕐 1 ساعت', callback_data: `tf_${symbolRaw}_1h` },
+            { text: '📅 4 ساعت', callback_data: `tf_${symbolRaw}_4h` }
+          ]
+        ]
+      };
+      await sendMessage(token, chatId, `⏰ <b>تایم‌فریم تحلیل ${sym} را انتخاب کنید:</b>`, keyboard);
+      return;
+    }
+
+    // ورودی متن آزاد: اگر شبیه نماد باشد
+    if (text && !text.startsWith('/') && looksLikeSymbol(text)) {
+      const sym = normalizeSymbol(text);
+      const symbolRaw = sym.replace('/', '');
+
+      const keyboard = {
+        inline_keyboard: [
+          [
+            { text: '⏱️ 1 دقیقه', callback_data: `tf_${symbolRaw}_1min` },
+            { text: '⏱️ 3 دقیقه', callback_data: `tf_${symbolRaw}_3min` }
+          ],
+          [
+            { text: '⏱️ 5 دقیقه', callback_data: `tf_${symbolRaw}_5min` },
+            { text: '⏱️ 15 دقیقه', callback_data: `tf_${symbolRaw}_15min` }
+          ],
+          [
+            { text: '🕐 1 ساعت', callback_data: `tf_${symbolRaw}_1h` },
+            { text: '📅 4 ساعت', callback_data: `tf_${symbolRaw}_4h` }
+          ]
+        ]
+      };
+
+      await sendMessage(token, chatId,
+        `✅ نماد شناسایی شد: <b>${sym}</b>\n\n⏰ <b>تایم‌فریم را انتخاب کنید:</b>`,
+        keyboard
+      );
+      return;
+    }
+
+    // اگر متن نه دستور بود و نه شبیه نماد، راهنما بفرست
+    if (text) {
+      await sendMessage(token, chatId,
+        '❓ متوجه نشدم.\n\n' +
+        'برای تحلیل:\n' +
+        '• دستور /analyze را بزنید\n' +
+        '• یا مستقیم نماد را تایپ کنید (مثل <code>GBPJPY</code>)\n\n' +
+        'راهنما: /help'
+      );
       return;
     }
   }
@@ -673,10 +771,23 @@ async function handleUpdate(update, env) {
 
     await answerCallback(token, callback.id);
 
+    // درخواست نماد سفارشی
+    if (data === 'custom_symbol') {
+      await sendMessage(token, chatId,
+        '✏️ <b>نماد مورد نظر را تایپ کنید</b>\n\n' +
+        'مثال‌ها:\n' +
+        '• <code>GBPJPY</code>\n' +
+        '• <code>ETH/USD</code>\n' +
+        '• <code>AAPL</code>\n' +
+        '• <code>XAG/USD</code> (نقره)'
+      );
+      return;
+    }
+
     // مرحله ۱: انتخاب نماد → نمایش منوی تایم‌فریم
     if (data.startsWith('symbol_')) {
-      const symbolRaw = data.replace('symbol_', ''); // مثل XAUUSD
-      const symbolDisplay = normalizeSymbol(symbolRaw); // مثل XAU/USD
+      const symbolRaw = data.replace('symbol_', '');
+      const symbolDisplay = normalizeSymbol(symbolRaw);
 
       const keyboard = {
         inline_keyboard: [
@@ -704,14 +815,13 @@ async function handleUpdate(update, env) {
 
     // مرحله ۲: انتخاب تایم‌فریم → اجرای تحلیل
     if (data.startsWith('tf_')) {
-      // data = tf_XAUUSD_15min
       const rest = data.replace('tf_', '');
       const tfMatch = rest.match(/_([^_]+)$/);
       if (!tfMatch) return;
 
       const timeframe = tfMatch[1];
-      const symbolRaw = rest.slice(0, -tfMatch[0].length); // XAUUSD
-      const symbol = normalizeSymbol(symbolRaw); // XAU/USD
+      const symbolRaw = rest.slice(0, -tfMatch[0].length);
+      const symbol = normalizeSymbol(symbolRaw);
 
       await runAnalysis(token, chatId, symbol, twelveKey, geminiKeys, geminiModel, timeframe);
       return;
@@ -725,10 +835,9 @@ async function runAnalysis(token, chatId, symbol, twelveKey, geminiKeys, geminiM
       `⏳ در حال تحلیل <b>${symbol}</b>\nتایم‌فریم: <b>${timeframeLabel(timeframe)}</b>...`
     );
 
-    // نگاشت تایم‌فریم‌های سفارشی
     const intervalMap = {
       '1min': '1min',
-      '3min': '5min',  // Twelve Data از 3min پشتیبانی نمی‌کند → 5min
+      '3min': '5min',
       '5min': '5min',
       '15min': '15min',
       '1h': '1h',
@@ -739,11 +848,13 @@ async function runAnalysis(token, chatId, symbol, twelveKey, geminiKeys, geminiM
 
     const klines = await fetchTwelveData(symbol, interval, twelveKey, 200);
 
-    // ← این دو خط جدید:
-    const chartUrl = buildChartImageUrl(symbol, timeframe, klines);
-    await sendPhoto(token, chatId, chartUrl, `📊 چارت ${symbol} - ${timeframeLabel(timeframe)}`);
-
-    const fullPrompt = LIVE_PREFIX +
+    // ارسال عکس چارت
+    try {
+      const chartUrl = await buildChartImageUrl(symbol, timeframe, klines);
+      await sendPhoto(token, chatId, chartUrl, `📊 چارت ${symbol} - ${timeframeLabel(timeframe)}`);
+    } catch (chartErr) {
+      console.error('Chart error:', chartErr.message);
+    }
 
     const fullPrompt = LIVE_PREFIX +
       `نماد: ${symbol}\n` +
