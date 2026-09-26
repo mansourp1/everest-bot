@@ -225,65 +225,38 @@ function tgFormat(text) {
 }
 
 async function buildChartUrl(symbol, timeframe, klines) {
-  var recent = klines.slice(-30);
-  var closes = [];
-  var labels = [];
-  for (var i = 0; i < recent.length; i++) {
-    closes.push(recent[i].close);
-    var dt = recent[i].datetime || '';
-    labels.push(dt.length > 16 ? dt.slice(11, 16) : dt);
+  // تبدیل نماد به فرمت مورد نیاز Chart-Img (مثلاً XAU/USD -> OANDA:XAUUSD)
+  const chartSymbol = symbol.replace('/', '');
+  const chartInterval = timeframe.replace('min', '').replace('h', '') + (timeframe.includes('h') ? 'h' : 'min');
+
+  // ساخت URL درخواست به Chart-Img
+  const url = new URL('https://api.chart-img.com/v2/tradingview/advanced-chart');
+  url.searchParams.set('symbol', `OANDA:${chartSymbol}`);
+  url.searchParams.set('interval', chartInterval);
+  url.searchParams.set('theme', 'dark');
+  url.searchParams.set('width', '1000');
+  url.searchParams.set('height', '600');
+  url.searchParams.set('studies', 'RSI@tv-basicstudies,MACD@tv-basicstudies'); // اضافه کردن اندیکاتورها
+
+  // ارسال درخواست به Chart-Img
+  const res = await fetch(url.toString(), {
+    headers: {
+      'x-api-key': env.CHART_IMG_KEY // خواندن کلید از Secrets
+    }
+  });
+
+  if (!res.ok) {
+    throw new Error(`Chart-Img API error: ${res.status} ${res.statusText}`);
   }
 
-  var chartConfig = {
-    type: 'line',
-    data: {
-      labels: labels,
-      datasets: [{
-        label: symbol,
-        data: closes,
-        borderColor: '#00c6ff',
-        backgroundColor: 'rgba(0, 198, 255, 0.15)',
-        borderWidth: 2,
-        pointRadius: 0,
-        fill: true
-      }]
-    },
-    options: {
-      scales: {
-        yAxes: [{
-          ticks: { fontColor: '#aaaaaa' },
-          gridLines: { color: 'rgba(255,255,255,0.1)' }
-        }],
-        xAxes: [{
-          ticks: { fontColor: '#aaaaaa', maxTicksLimit: 8 },
-          gridLines: { color: 'rgba(255,255,255,0.05)' }
-        }]
-      }
-    }
-  };
+  // دریافت تصویر به صورت Blob
+  const imageBlob = await res.blob();
 
-  try {
-    var res = await fetch('https://quickchart.io/chart/create', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        chart: chartConfig,
-        width: 900,
-        height: 450,
-        backgroundColor: '#1a1a3e',
-        format: 'png'
-      })
-    });
-    var data = await res.json();
-    if (data.success && data.url) {
-      return data.url;
-    }
-  } catch (e) {
-    console.error('QuickChart POST error: ' + e.message);
-  }
+  // تبدیل Blob به Base64 برای ارسال به تلگرام
+  const buffer = await imageBlob.arrayBuffer();
+  const base64 = btoa(String.fromCharCode(...new Uint8Array(buffer)));
 
-  var encoded = encodeURIComponent(JSON.stringify(chartConfig));
-  return 'https://quickchart.io/chart?c=' + encoded + '&w=900&h=450&bkg=%231a1a3e&format=png';
+  return `data:image/png;base64,${base64}`;
 }
 
 async function sendMessage(token, chatId, text, keyboard) {
@@ -303,15 +276,16 @@ async function sendMessage(token, chatId, text, keyboard) {
   return res.json();
 }
 
-async function sendPhoto(token, chatId, photoUrl, caption) {
-  var url = 'https://api.telegram.org/bot' + token + '/sendPhoto';
-  var payload = {
+async function sendPhoto(token, chatId, photoBase64, caption) {
+  const url = `https://api.telegram.org/bot${token}/sendPhoto`;
+  const payload = {
     chat_id: chatId,
-    photo: photoUrl,
+    photo: photoBase64, // مستقیماً Base64 را می‌فرستیم
     caption: (caption || '').slice(0, 1000),
     parse_mode: 'HTML'
   };
-  var res = await fetch(url, {
+
+  const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload)
