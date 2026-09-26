@@ -224,15 +224,16 @@ function tgFormat(text) {
   return h.trim();
 }
 
-function buildChartUrl(symbol, timeframe, klines) {
-  var recent = klines.slice(-50);
+async function buildChartUrl(symbol, timeframe, klines) {
+  var recent = klines.slice(-30);
   var closes = [];
   var labels = [];
   for (var i = 0; i < recent.length; i++) {
     closes.push(recent[i].close);
     var dt = recent[i].datetime || '';
-    labels.push(dt.length > 11 ? dt.slice(11, 16) : dt);
+    labels.push(dt.length > 16 ? dt.slice(11, 16) : dt);
   }
+
   var chartConfig = {
     type: 'line',
     data: {
@@ -246,8 +247,41 @@ function buildChartUrl(symbol, timeframe, klines) {
         pointRadius: 0,
         fill: true
       }]
+    },
+    options: {
+      scales: {
+        yAxes: [{
+          ticks: { fontColor: '#aaaaaa' },
+          gridLines: { color: 'rgba(255,255,255,0.1)' }
+        }],
+        xAxes: [{
+          ticks: { fontColor: '#aaaaaa', maxTicksLimit: 8 },
+          gridLines: { color: 'rgba(255,255,255,0.05)' }
+        }]
+      }
     }
   };
+
+  try {
+    var res = await fetch('https://quickchart.io/chart/create', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chart: chartConfig,
+        width: 900,
+        height: 450,
+        backgroundColor: '#1a1a3e',
+        format: 'png'
+      })
+    });
+    var data = await res.json();
+    if (data.success && data.url) {
+      return data.url;
+    }
+  } catch (e) {
+    console.error('QuickChart POST error: ' + e.message);
+  }
+
   var encoded = encodeURIComponent(JSON.stringify(chartConfig));
   return 'https://quickchart.io/chart?c=' + encoded + '&w=900&h=450&bkg=%231a1a3e&format=png';
 }
