@@ -267,9 +267,8 @@ async function buildChartImage(symbol, timeframe, env) {
     throw new Error('CHART_IMG_KEY تنظیم نشده');
   }
 
-  // ۱. تعیین صرافی مناسب بر اساس نوع نماد
   var symUpper = symbol.toUpperCase().replace('/', '');
-  var exchange = 'OANDA'; // پیش‌فرض برای فارکس و طلا
+  var exchange = 'OANDA';
 
   if (symUpper === 'BTCUSD' || symUpper === 'ETHUSD' || symUpper.includes('USDT')) {
     exchange = 'BINANCE';
@@ -277,21 +276,19 @@ async function buildChartImage(symbol, timeframe, env) {
     exchange = 'NASDAQ';
   }
 
-  // ۲. نگاشت تایم‌فریم به مقادیر معتبر Chart-Img
+  // ✅ نگاشت صحیح تایم‌فریم به فرمت Chart-Img
   var intervalMap = {
-    '1min': '1',
-    '3min': '3',
-    '5min': '5',
-    '15min': '15',
-    '1h': '60',
-    '4h': '240'
+    '1min': '1m',
+    '3min': '3m',
+    '5min': '5m',
+    '15min': '15m',
+    '1h': '1h',
+    '4h': '4h'
   };
-  var chartInterval = intervalMap[timeframe] || '60';
+  var chartInterval = intervalMap[timeframe] || '1h';
 
-  // ۳. ساخت آدرس
   var apiUrl = 'https://api.chart-img.com/v2/tradingview/advanced-chart';
 
-  // ۴. بدنه درخواست با نام‌های صحیح اندیکاتورها
   var requestBody = {
     symbol: exchange + ':' + symUpper,
     interval: chartInterval,
@@ -301,11 +298,10 @@ async function buildChartImage(symbol, timeframe, env) {
     studies: [
       { name: 'Volume', forceOverlay: true },
       { name: 'MACD' },
-      { name: 'Relative Strength Index' } // نام صحیح برای RSI
+      { name: 'Relative Strength Index' }
     ]
   };
 
-  // ۵. ارسال درخواست POST
   var res = await fetch(apiUrl, {
     method: 'POST',
     headers: {
