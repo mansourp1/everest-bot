@@ -28,20 +28,14 @@ const SYSTEM_PROMPT = "شما یک تحلیل‌گر ارشد بازارهای �
 
 const MULTI_TF_PROMPT = "شما یک تحلیل‌گر ارشد بازارهای مالی با ۱۵ سال تجربه در SMC، ICT و پرایس اکشن هستید.\n\n" +
 "**تحلیل Multi-Timeframe با ۴ تایم‌فریم**\n\n" +
-"🎯 **HTF (4H) — روند اصلی (قطعی)**\n" +
-"جهت نهایی از این تایم‌فریم تعیین می‌شود.\n\n" +
-"🔍 **MTF (1H) — تأیید ساختار**\n" +
-"اگر با 4H هم‌جهت باشد → تأیید.\n\n" +
-"📊 **LTF (15M) — ستاپ معاملاتی**\n" +
-"نقاط ورود از اینجا استخراج می‌شود.\n\n" +
-"⏱️ **EntryTF (1M) — فقط تایمینگ**\n" +
-"هرگز جهت نهایی را تغییر نمی‌دهد.\n\n" +
-"**قوانین تصمیم‌گیری:**\n" +
-"1. جهت نهایی = جهت 4H\n" +
-"2. اگر 1H و 15M تأیید کردند → Confidence بالا\n" +
-"3. اگر فقط یکی تأیید کرد → Confidence متوسط\n" +
-"4. اگر 1H و 15M مخالف 4H بودند → WAIT\n" +
-"5. 1M فقط برای Entry\n\n" +
+"🎯 HTF (4H) — روند اصلی (قطعی)\n" +
+"🔍 MTF (1H) — تأیید ساختار\n" +
+"📊 LTF (15M) — ستاپ معاملاتی\n" +
+"⏱️ EntryTF (1M) — فقط تایمینگ\n\n" +
+"**قوانین:**\n" +
+"1. جهت نهایی = جهت 4H (بدون استثنا)\n" +
+"2. 1M فقط تایمینگ ورود است\n" +
+"3. اگر 4H رنج بود → WAIT\n\n" +
 "**در انتهای پاسخ دقیقاً این فرمت را بنویس:**\n" +
 "---\n" +
 "Direction: [BUY/SELL/WAIT]\n" +
@@ -57,12 +51,54 @@ const MULTI_TF_PROMPT = "شما یک تحلیل‌گر ارشد بازارهای
 "TP2: [عدد یا N/A]\n" +
 "TP3: [عدد یا N/A]\n" +
 "R/R: [نسبت یا N/A]\n" +
+"---";
+
+// ⭐ پرامپت مخصوص تحلیل تصویر
+const IMAGE_PROMPT = "شما یک تحلیل‌گر ارشد بازارهای مالی با ۱۵ سال تجربه در SMC، ICT و پرایس اکشن هستید.\n\n" +
+"**وظیفه: تحلیل چارت از روی تصویر ارسالی**\n\n" +
+"**مراحل تحلیل:**\n" +
+"1. تشخیص نماد و تایم‌فریم از روی تصویر (اگر قابل خواندن است)\n" +
+"2. کالیبراسیون محور Y — پیدا کردن قیمت‌ها\n" +
+"3. تشخیص رژیم بازار (Trending/Ranging/Transitional)\n" +
+"4. شناسایی ساختار بازار (BOS، CHoCH، Retest)\n" +
+"5. کشف Order Blocks و FVG\n" +
+"6. بررسی الگوهای کندلی\n" +
+"7. تعیین سطوح کلیدی (حمایت و مقاومت)\n" +
+"8. سناریو معاملاتی\n\n" +
+"**کالیبراسیون محور Y (خیلی مهم):**\n" +
+"دو نقطه واقعی روی محور قیمت پیدا کن (بالاترین و پایین‌ترین)\n" +
+"و درصد فاصله‌شان از بالای تصویر را تخمین بزن.\n" +
+"این کار برای تبدیل پیکسل به قیمت ضروری است.\n\n" +
+"**ساختار تحلیل:**\n" +
+"### ۰. اطلاعات تصویر\n" +
+"نماد، تایم‌فریم، رنج قیمتی\n\n" +
+"### ۱. رژیم بازار\n\n" +
+"### ۲. ساختار بازار (BOS، CHoCH)\n\n" +
+"### ۳. SMC (Order Blocks، FVG)\n\n" +
+"### ۴. الگوهای کندلی\n\n" +
+"### ۵. سطوح کلیدی\n\n" +
+"### ۶. سناریو معاملاتی\n\n" +
+"### ۷. خلاصه اجرایی\n\n" +
+"**در انتهای پاسخ دقیقاً این فرمت را بنویس:**\n" +
+"---\n" +
+"Direction: [BUY/SELL/WAIT]\n" +
+"Symbol: [نماد یا UNKNOWN]\n" +
+"Timeframe: [تایم‌فریم یا UNKNOWN]\n" +
+"Regime: [TRENDING_UP/TRENDING_DOWN/RANGING/TRANSITIONAL]\n" +
+"ConfidenceScore: [0-100]\n" +
+"Entry: [عدد یا N/A]\n" +
+"Stop Loss: [عدد یا N/A]\n" +
+"TP1: [عدد یا N/A]\n" +
+"TP2: [عدد یا N/A]\n" +
+"TP3: [عدد یا N/A]\n" +
+"R/R: [نسبت یا N/A]\n" +
 "---\n\n" +
 "**قوانین:**\n" +
-"1. جهت نهایی = جهت 4H (بدون استثنا)\n" +
-"2. 1M فقط تایمینگ ورود است\n" +
-"3. اگر 4H رنج بود → WAIT\n" +
-"4. تحلیل کامل بنویس";
+"1. اگر Confidence کمتر از 65 باشد → WAIT\n" +
+"2. حد ضرر ساختاری\n" +
+"3. در BUY، SL زیر Entry و در SELL، SL بالای Entry\n" +
+"4. اگر نماد یا تایم‌فریم قابل تشخیص نبود → UNKNOWN بنویس\n" +
+"5. اگر محور Y قابل خواندن نبود → از تخمین نسبی استفاده کن";
 
 // ============================================
 // PARSING
@@ -78,8 +114,7 @@ function parseRR(rrStr) {
   if (!rrStr) return null;
   var m = String(rrStr).match(/(\d+(?:\.\d+)?)\s*[:/]\s*(\d+(?:\.\d+)?)/);
   if (m) {
-    var a = parseFloat(m[1]);
-    var b = parseFloat(m[2]);
+    var a = parseFloat(m[1]); var b = parseFloat(m[2]);
     return a > 0 ? b / a : null;
   }
   var n = parseFloat(rrStr);
@@ -127,7 +162,9 @@ function extractLevels(rawText) {
       rr: jsonData.rr || null,
       confluenceScore: jsonData.confluenceScore || null,
       htf: jsonData.htf4h || null, mtf: jsonData.mtf1h || null,
-      ltf: jsonData.ltf15m || null, entryTf: jsonData.entrytf1m || null
+      ltf: jsonData.ltf15m || null, entryTf: jsonData.entrytf1m || null,
+      detectedSymbol: jsonData.symbol || null,
+      detectedTimeframe: jsonData.timeframe || null
     };
   }
   var blocks = rawText.match(/---\s*\n([\s\S]*?)\n\s*---/g);
@@ -140,6 +177,8 @@ function extractLevels(rawText) {
   var mtfMatch = text.match(/MTF1H\s*[:=]\s*(BULLISH|BEARISH|RANGING)/i);
   var ltfMatch = text.match(/LTF15M\s*[:=]\s*(BULLISH|BEARISH|RANGING)/i);
   var etfMatch = text.match(/EntryTF1M\s*[:=]\s*(BULLISH|BEARISH|RANGING)/i);
+  var symMatch = text.match(/Symbol\s*[:=]\s*([^\n]+)/i);
+  var tfMatch2 = text.match(/Timeframe\s*[:=]\s*([^\n]+)/i);
   return {
     direction: detectDirection(rawText),
     regime: regimeMatch ? regimeMatch[1].toUpperCase() : null,
@@ -152,7 +191,9 @@ function extractLevels(rawText) {
     htf: htfMatch ? htfMatch[1].toUpperCase() : null,
     mtf: mtfMatch ? mtfMatch[1].toUpperCase() : null,
     ltf: ltfMatch ? ltfMatch[1].toUpperCase() : null,
-    entryTf: etfMatch ? etfMatch[1].toUpperCase() : null
+    entryTf: etfMatch ? etfMatch[1].toUpperCase() : null,
+    detectedSymbol: symMatch ? symMatch[1].trim() : null,
+    detectedTimeframe: tfMatch2 ? tfMatch2[1].trim() : null
   };
 }
 
@@ -236,7 +277,7 @@ function directionEmoji(d) {
 }
 
 // ============================================
-// KEYBOARDS (MENUS)
+// KEYBOARDS
 // ============================================
 
 function mainMenu() {
@@ -247,14 +288,15 @@ function mainMenu() {
         { text: '🎯 تحلیل MTF', callback_data: 'menu_mtf' }
       ],
       [
-        { text: '📓 ژورنال', callback_data: 'menu_journal' },
-        { text: '🔔 هشدارها', callback_data: 'menu_watch' }
+        { text: '📸 تحلیل تصویر', callback_data: 'menu_image' },
+        { text: '📓 ژورنال', callback_data: 'menu_journal' }
       ],
       [
-        { text: '⚙️ تنظیمات', callback_data: 'menu_settings' },
-        { text: '📈 وضعیت', callback_data: 'menu_status' }
+        { text: '🔔 هشدارها', callback_data: 'menu_watch' },
+        { text: '⚙️ تنظیمات', callback_data: 'menu_settings' }
       ],
       [
+        { text: '📈 وضعیت', callback_data: 'menu_status' },
         { text: '📖 راهنما', callback_data: 'menu_help' }
       ]
     ]
@@ -264,24 +306,11 @@ function mainMenu() {
 function symbolMenu() {
   return {
     inline_keyboard: [
-      [
-        { text: '🥇 XAU/USD', callback_data: 'sym_XAUUSD' },
-        { text: '💶 EUR/USD', callback_data: 'sym_EURUSD' }
-      ],
-      [
-        { text: '₿ BTC/USD', callback_data: 'sym_BTCUSD' },
-        { text: '💷 GBP/USD', callback_data: 'sym_GBPUSD' }
-      ],
-      [
-        { text: '💎 ETH/USD', callback_data: 'sym_ETHUSD' },
-        { text: '💵 USD/JPY', callback_data: 'sym_USDJPY' }
-      ],
-      [
-        { text: '✏️ نماد دیگر', callback_data: 'sym_custom' }
-      ],
-      [
-        { text: '🏠 منوی اصلی', callback_data: 'menu_main' }
-      ]
+      [{ text: '🥇 XAU/USD', callback_data: 'sym_XAUUSD' }, { text: '💶 EUR/USD', callback_data: 'sym_EURUSD' }],
+      [{ text: '₿ BTC/USD', callback_data: 'sym_BTCUSD' }, { text: '💷 GBP/USD', callback_data: 'sym_GBPUSD' }],
+      [{ text: '💎 ETH/USD', callback_data: 'sym_ETHUSD' }, { text: '💵 USD/JPY', callback_data: 'sym_USDJPY' }],
+      [{ text: '✏️ نماد دیگر', callback_data: 'sym_custom' }],
+      [{ text: '🏠 منوی اصلی', callback_data: 'menu_main' }]
     ]
   };
 }
@@ -290,18 +319,9 @@ function timeframeMenu(symbolRaw) {
   return {
     inline_keyboard: [
       [{ text: '🎯 تحلیل MTF (4H+1H+15M+1M)', callback_data: 'mtf_' + symbolRaw }],
-      [
-        { text: '⏱️ 1 دقیقه', callback_data: 'tf_' + symbolRaw + '_1min' },
-        { text: '⏱️ 3 دقیقه', callback_data: 'tf_' + symbolRaw + '_3min' }
-      ],
-      [
-        { text: '⏱️ 5 دقیقه', callback_data: 'tf_' + symbolRaw + '_5min' },
-        { text: '⏱️ 15 دقیقه', callback_data: 'tf_' + symbolRaw + '_15min' }
-      ],
-      [
-        { text: '🕐 1 ساعت', callback_data: 'tf_' + symbolRaw + '_1h' },
-        { text: '📅 4 ساعت', callback_data: 'tf_' + symbolRaw + '_4h' }
-      ],
+      [{ text: '⏱️ 1 دقیقه', callback_data: 'tf_' + symbolRaw + '_1min' }, { text: '⏱️ 3 دقیقه', callback_data: 'tf_' + symbolRaw + '_3min' }],
+      [{ text: '⏱️ 5 دقیقه', callback_data: 'tf_' + symbolRaw + '_5min' }, { text: '⏱️ 15 دقیقه', callback_data: 'tf_' + symbolRaw + '_15min' }],
+      [{ text: '🕐 1 ساعت', callback_data: 'tf_' + symbolRaw + '_1h' }, { text: '📅 4 ساعت', callback_data: 'tf_' + symbolRaw + '_4h' }],
       [{ text: '◀️ بازگشت', callback_data: 'menu_analyze' }]
     ]
   };
@@ -311,10 +331,7 @@ function journalMenu() {
   return {
     inline_keyboard: [
       [{ text: '➕ ثبت معامله جدید', callback_data: 'journal_add' }],
-      [
-        { text: '📋 لیست معاملات', callback_data: 'journal_list' },
-        { text: '📊 آمار عملکرد', callback_data: 'journal_stats' }
-      ],
+      [{ text: '📋 لیست معاملات', callback_data: 'journal_list' }, { text: '📊 آمار عملکرد', callback_data: 'journal_stats' }],
       [{ text: '🗑️ پاک کردن همه', callback_data: 'journal_clear' }],
       [{ text: '🏠 منوی اصلی', callback_data: 'menu_main' }]
     ]
@@ -332,16 +349,6 @@ function watchMenu() {
   };
 }
 
-function settingsMenu(env) {
-  var mode = 'medium';
-  return {
-    inline_keyboard: [
-      [{ text: '🎯 حالت تحلیل: ' + mode, callback_data: 'settings_mode' }],
-      [{ text: '🏠 منوی اصلی', callback_data: 'menu_main' }]
-    ]
-  };
-}
-
 function modeMenu() {
   return {
     inline_keyboard: [
@@ -354,7 +361,7 @@ function modeMenu() {
 }
 
 // ============================================
-// WIZARD STATE MANAGEMENT
+// USER STATE
 // ============================================
 
 async function setUserState(env, chatId, state) {
@@ -362,9 +369,7 @@ async function setUserState(env, chatId, state) {
 }
 
 async function getUserState(env, chatId) {
-  try {
-    return await env.KV.get('state:' + chatId, 'json');
-  } catch (e) { return null; }
+  try { return await env.KV.get('state:' + chatId, 'json'); } catch (e) { return null; }
 }
 
 async function clearUserState(env, chatId) {
@@ -376,51 +381,38 @@ async function clearUserState(env, chatId) {
 // ============================================
 
 async function getJournal(env, chatId) {
-  try { return await env.KV.get('journal:' + chatId, 'json') || []; }
-  catch (e) { return []; }
+  try { return await env.KV.get('journal:' + chatId, 'json') || []; } catch (e) { return []; }
 }
-
-async function saveJournal(env, chatId, journal) {
-  await env.KV.put('journal:' + chatId, JSON.stringify(journal));
-}
-
+async function saveJournal(env, chatId, journal) { await env.KV.put('journal:' + chatId, JSON.stringify(journal)); }
 async function getWatchlist(env, chatId) {
-  try { return await env.KV.get('watch:' + chatId, 'json') || []; }
-  catch (e) { return []; }
+  try { return await env.KV.get('watch:' + chatId, 'json') || []; } catch (e) { return []; }
 }
-
-async function saveWatchlist(env, chatId, list) {
-  await env.KV.put('watch:' + chatId, JSON.stringify(list));
-}
+async function saveWatchlist(env, chatId, list) { await env.KV.put('watch:' + chatId, JSON.stringify(list)); }
 
 // ============================================
 // MENU VIEWS
 // ============================================
 
-async function showMainMenu(token, chatId, editMessageId) {
-  var text = '🎯 <b>Everest AI Terminal</b>\n\n' +
-    'به بات تحلیل‌گر خوش آمدید!\n' +
-    'از منوی زیر انتخاب کنید:';
-  await sendOrEdit(token, chatId, editMessageId, text, mainMenu());
+async function showMainMenu(token, chatId, messageId) {
+  await sendOrEdit(token, chatId, messageId,
+    '🎯 <b>Everest AI Terminal</b>\n\nاز منوی زیر انتخاب کنید:',
+    mainMenu());
 }
 
-async function showSymbolMenu(token, chatId, editMessageId) {
-  await sendOrEdit(token, chatId, editMessageId,
-    '🎯 <b>نماد را انتخاب کنید</b>\n\n' +
-    'نمادهای پرطرفدار یا نماد دیگری تایپ کنید:',
+async function showSymbolMenu(token, chatId, messageId) {
+  await sendOrEdit(token, chatId, messageId,
+    '🎯 <b>نماد را انتخاب کنید</b>',
     symbolMenu());
 }
 
-async function showTimeframeMenu(token, chatId, editMessageId, symbolRaw) {
+async function showTimeframeMenu(token, chatId, messageId, symbolRaw) {
   var display = normalizeSymbol(symbolRaw);
-  await sendOrEdit(token, chatId, editMessageId,
-    '⏰ <b>روش تحلیل ' + display + '</b>\n\n' +
-    '🎯 MTF = تحلیل همزمان ۴ تایم‌فریم\n' +
-    '⏱️ تک تایم‌فریم = تحلیل ساده‌تر',
+  await sendOrEdit(token, chatId, messageId,
+    '⏰ <b>روش تحلیل ' + display + '</b>',
     timeframeMenu(symbolRaw));
 }
 
-async function showJournalMenu(token, chatId, editMessageId, env) {
+async function showJournalMenu(token, chatId, messageId, env) {
   var journal = await getJournal(env, chatId);
   var text = '📓 <b>ژورنال معاملات</b>\n\n';
   if (journal.length) {
@@ -429,62 +421,48 @@ async function showJournalMenu(token, chatId, editMessageId, env) {
       if (journal[i].result === 'win') wins++;
       if (journal[i].result === 'loss') losses++;
     }
-    text += '📈 کل: <b>' + journal.length + '</b>\n';
-    text += '✅ برد: <b>' + wins + '</b>\n';
-    text += '❌ باخت: <b>' + losses + '</b>\n\n';
+    text += '📈 کل: <b>' + journal.length + '</b>\n✅ برد: <b>' + wins + '</b>\n❌ باخت: <b>' + losses + '</b>\n\n';
   } else {
     text += '<i>هنوز معامله‌ای ثبت نشده</i>\n\n';
   }
-  text += 'یک گزینه انتخاب کنید:';
-  await sendOrEdit(token, chatId, editMessageId, text, journalMenu());
+  await sendOrEdit(token, chatId, messageId, text, journalMenu());
 }
 
-async function showWatchMenu(token, chatId, editMessageId, env) {
+async function showWatchMenu(token, chatId, messageId, env) {
   var list = await getWatchlist(env, chatId);
   var text = '🔔 <b>هشدارهای قیمتی</b>\n\n';
-  if (list.length) {
-    text += '📊 ' + list.length + ' هشدار فعال\n';
-    text += '⏱️ بررسی خودکار هر ۵ دقیقه\n\n';
-  } else {
-    text += '<i>هیچ هشداری تنظیم نشده</i>\n\n';
-  }
-  text += 'یک گزینه انتخاب کنید:';
-  await sendOrEdit(token, chatId, editMessageId, text, watchMenu());
+  if (list.length) text += '📊 ' + list.length + ' هشدار فعال\n⏱️ بررسی خودکار هر ۵ دقیقه\n\n';
+  else text += '<i>هیچ هشداری تنظیم نشده</i>\n\n';
+  await sendOrEdit(token, chatId, messageId, text, watchMenu());
 }
 
-async function showSettingsMenu(token, chatId, editMessageId) {
-  await sendOrEdit(token, chatId, editMessageId,
-    '⚙️ <b>تنظیمات</b>\n\n' +
-    'تنظیمات فعلی را تغییر دهید:',
-    settingsMenu());
+async function showSettingsMenu(token, chatId, messageId) {
+  await sendOrEdit(token, chatId, messageId,
+    '⚙️ <b>تنظیمات</b>',
+    { inline_keyboard: [[{ text: '🎯 حالت تحلیل', callback_data: 'settings_mode' }], [{ text: '🏠 منوی اصلی', callback_data: 'menu_main' }]] });
 }
 
-async function showStatus(token, chatId, editMessageId, env) {
+async function showStatus(token, chatId, messageId, env) {
   var geminiKeys = getGeminiKeys(env);
   var geminiOk = geminiKeys.length > 0 ? '✅ (' + geminiKeys.length + ')' : '❌';
   var twelveOk = env.TWELVE_KEY ? '✅' : '❌';
   var chartOk = env.CHART_IMG_KEY ? '✅' : '❌';
   var kvOk = env.KV ? '✅' : '❌';
-
   var text = '🤖 <b>وضعیت سیستم</b>\n\n' +
     '• Gemini AI: ' + geminiOk + '\n' +
     '• Twelve Data: ' + twelveOk + '\n' +
     '• Chart-Img: ' + chartOk + '\n' +
     '• حافظه KV: ' + kvOk + '\n' +
-    '• Telegram: ✅\n\n' +
-    '💡 همه سرویس‌ها آماده‌اند';
-
-  await sendOrEdit(token, chatId, editMessageId, text, {
-    inline_keyboard: [[{ text: '🏠 منوی اصلی', callback_data: 'menu_main' }]]
-  });
+    '• Telegram: ✅';
+  await sendOrEdit(token, chatId, messageId, text, { inline_keyboard: [[{ text: '🏠 منوی اصلی', callback_data: 'menu_main' }]] });
 }
 
-async function showHelp(token, chatId, editMessageId) {
-  var text = '📖 <b>راهنمای کامل</b>\n\n' +
-    '<b>🎯 تحلیل:</b>\n' +
-    '• تحلیل تک تایم‌فریم\n' +
+async function showHelp(token, chatId, messageId) {
+  var text = '📖 <b>راهنما</b>\n\n' +
+    '<b>📊 تحلیل:</b>\n' +
+    '• تحلیل تک تایم‌فریم (Live)\n' +
     '• تحلیل MTF (۴ تایم‌فریم)\n' +
-    '• چارت با خطوط Entry/SL/TP\n\n' +
+    '• تحلیل تصویر ارسالی 📸\n\n' +
     '<b>📓 ژورنال:</b>\n' +
     '• ثبت معاملات\n' +
     '• پیگیری نتایج\n' +
@@ -492,23 +470,34 @@ async function showHelp(token, chatId, editMessageId) {
     '<b>🔔 هشدار:</b>\n' +
     '• هشدار بالای/زیر قیمت\n' +
     '• بررسی خودکار هر ۵ دقیقه\n\n' +
-    '<b>نمادهای پشتیبانی:</b>\n' +
-    '• فارکس: XAU/USD, EUR/USD, GBP/JPY\n' +
-    '• کریپتو: BTC/USD, ETH/USD\n' +
-    '• سهام: AAPL, TSLA\n\n' +
-    '<b>دستورات مستقیم:</b>\n' +
+    '<b>📸 تحلیل تصویر:</b>\n' +
+    'فقط عکس چارت را بفرستید، بات خودکار تشخیص می‌دهد!\n\n' +
+    '<b>دستورات:</b>\n' +
     '• /menu — منوی اصلی\n' +
-    '• /analyze — تحلیل سریع\n' +
-    '• /journal — ژورنال\n' +
-    '• /watch — هشدارها';
+    '• /help — راهنما';
+  await sendOrEdit(token, chatId, messageId, text, { inline_keyboard: [[{ text: '🏠 منوی اصلی', callback_data: 'menu_main' }]] });
+}
 
-  await sendOrEdit(token, chatId, editMessageId, text, {
-    inline_keyboard: [[{ text: '🏠 منوی اصلی', callback_data: 'menu_main' }]]
-  });
+async function showImageGuide(token, chatId, messageId) {
+  var text = '📸 <b>تحلیل تصویر چارت</b>\n\n' +
+    'فقط کافیه <b>عکس چارت</b> رو برام بفرستی!\n\n' +
+    '<b>💡 نکات برای بهترین نتیجه:</b>\n' +
+    '• محور Y (قیمت) کاملاً واضح باشد\n' +
+    '• تصویر با کیفیت و خوانا باشد\n' +
+    '• چارت خالی (بدون اندیکاتورهای زیاد) بهتر است\n' +
+    '• نماد و تایم‌فریم اگر مشخص باشد، بهتر\n\n' +
+    '<b>🎯 چی تحلیل می‌شه؟</b>\n' +
+    '• ساختار بازار (BOS/CHoCH)\n' +
+    '• Order Blocks و FVG\n' +
+    '• الگوهای کندلی\n' +
+    '• سطوح Entry/SL/TP\n' +
+    '• رژیم بازار';
+  await sendOrEdit(token, chatId, messageId, text,
+    { inline_keyboard: [[{ text: '🏠 منوی اصلی', callback_data: 'menu_main' }]] });
 }
 
 // ============================================
-// SEND/EDIT HELPERS
+// SEND/EDIT
 // ============================================
 
 async function sendOrEdit(token, chatId, messageId, text, keyboard) {
@@ -518,12 +507,9 @@ async function sendOrEdit(token, chatId, messageId, text, keyboard) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          chat_id: chatId,
-          message_id: messageId,
-          text: text.slice(0, 4000),
-          parse_mode: 'HTML',
-          disable_web_page_preview: true,
-          reply_markup: keyboard
+          chat_id: chatId, message_id: messageId,
+          text: text.slice(0, 4000), parse_mode: 'HTML',
+          disable_web_page_preview: true, reply_markup: keyboard
         })
       });
       var data = await res.json();
@@ -536,10 +522,8 @@ async function sendOrEdit(token, chatId, messageId, text, keyboard) {
 async function sendMessage(token, chatId, text, keyboard) {
   var url = 'https://api.telegram.org/bot' + token + '/sendMessage';
   var payload = {
-    chat_id: chatId,
-    text: text.slice(0, 4000),
-    parse_mode: 'HTML',
-    disable_web_page_preview: true
+    chat_id: chatId, text: text.slice(0, 4000),
+    parse_mode: 'HTML', disable_web_page_preview: true
   };
   if (keyboard) payload.reply_markup = keyboard;
   var res = await fetch(url, {
@@ -556,10 +540,7 @@ async function sendPhotoBytes(token, chatId, imageBuffer, caption) {
   formData.append('caption', (caption || '').slice(0, 1000));
   formData.append('parse_mode', 'HTML');
   formData.append('photo', new Blob([imageBuffer], { type: 'image/png' }), 'chart.png');
-  var res = await fetch('https://api.telegram.org/bot' + token + '/sendPhoto', {
-    method: 'POST',
-    body: formData
-  });
+  var res = await fetch('https://api.telegram.org/bot' + token + '/sendPhoto', { method: 'POST', body: formData });
   return res.json();
 }
 
@@ -569,6 +550,33 @@ async function answerCallback(token, callbackId) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ callback_query_id: callbackId })
   });
+}
+
+// ============================================
+// TELEGRAM FILE DOWNLOAD
+// ============================================
+
+async function downloadTelegramPhoto(token, fileId) {
+  // مرحله ۱: دریافت file_path از تلگرام
+  var res = await fetch('https://api.telegram.org/bot' + token + '/getFile?file_id=' + fileId);
+  var data = await res.json();
+  if (!data.ok) throw new Error('خطا در دریافت file path: ' + (data.description || ''));
+  var filePath = data.result.file_path;
+
+  // مرحله ۲: دانلود فایل
+  var fileRes = await fetch('https://api.telegram.org/file/bot' + token + '/' + filePath);
+  if (!fileRes.ok) throw new Error('خطا در دانلود فایل');
+  var arrayBuffer = await fileRes.arrayBuffer();
+
+  // مرحله ۳: تبدیل به base64
+  var bytes = new Uint8Array(arrayBuffer);
+  var binary = '';
+  var chunkSize = 8192;
+  for (var i = 0; i < bytes.length; i += chunkSize) {
+    var chunk = bytes.subarray(i, i + chunkSize);
+    binary += String.fromCharCode.apply(null, chunk);
+  }
+  return { base64: btoa(binary), size: bytes.length };
 }
 
 // ============================================
@@ -620,6 +628,45 @@ async function callGemini(apiKeys, prompt, model) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: { temperature: 0.1, topP: 0.85, maxOutputTokens: 12288 }
+        })
+      });
+      var data = await res.json();
+      if (res.ok) {
+        var text = data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts && data.candidates[0].content.parts[0] && data.candidates[0].content.parts[0].text;
+        if (text) return text;
+      }
+      lastError = (data.error && data.error.message) || ('HTTP ' + res.status);
+      if (res.status === 429 || res.status === 503 || res.status === 500 || res.status === 401 || res.status === 403 || res.status === 400) continue;
+      throw new Error(lastError);
+    } catch (e) {
+      lastError = e.message;
+      continue;
+    }
+  }
+  throw new Error('همه کلیدها خطا دادند: ' + lastError);
+}
+
+// ⭐ Gemini Vision برای تحلیل تصویر
+async function callGeminiVision(apiKeys, imageBase64, mimeType, prompt, model) {
+  model = model || 'gemini-3.5-flash-lite';
+  var keys = Array.isArray(apiKeys) ? apiKeys.filter(Boolean) : [apiKeys];
+  if (!keys.length) throw new Error('هیچ کلید Gemini تنظیم نشده');
+  var lastError = null;
+  for (var i = 0; i < keys.length; i++) {
+    var apiKey = keys[i];
+    var url = 'https://generativelanguage.googleapis.com/v1beta/models/' + model + ':generateContent?key=' + apiKey;
+    try {
+      var res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{
+            parts: [
+              { text: prompt },
+              { inline_data: { mime_type: mimeType, data: imageBase64 } }
+            ]
+          }],
           generationConfig: { temperature: 0.1, topP: 0.85, maxOutputTokens: 12288 }
         })
       });
@@ -700,8 +747,30 @@ async function buildChartImage(symbol, timeframe, levels, env) {
 
 function buildCaption(levels, symbol, timeframe) {
   var c = '<b>📊 تحلیل چارت</b>\n\n';
-  c += '<b>نماد:</b> ' + symbol + '\n';
-  c += '<b>تایم‌فریم:</b> ' + timeframeLabel(timeframe) + '\n\n';
+  c += '<b>نماد:</b> ' + symbol + '\n<b>تایم‌فریم:</b> ' + timeframeLabel(timeframe) + '\n\n';
+  var direction = levels.direction || 'WAIT';
+  var dirText = direction === 'BUY' ? '🟢 خرید' : direction === 'SELL' ? '🔴 فروش' : '⏸️ انتظار';
+  c += '<b>جهت:</b> ' + dirText + '\n';
+  if (levels.regime) c += '<b>رژیم:</b> ' + regimeLabel(levels.regime) + '\n';
+  if (levels.confidence !== null && levels.confidence !== undefined) c += '<b>اطمینان:</b> ' + levels.confidence + '%\n';
+  c += '\n';
+  if (direction === 'WAIT') c += '<i>ستاپ معتبری شناسایی نشد.</i>\n';
+  else {
+    if (levels.entry) c += '<b>🎯 ورود:</b> <code>' + levels.entry + '</code>\n';
+    if (levels.sl) c += '<b>🛑 SL:</b> <code>' + levels.sl + '</code>\n';
+    if (levels.tp1) c += '<b>✅ TP1:</b> <code>' + levels.tp1 + '</code>\n';
+    if (levels.tp2) c += '<b>✅ TP2:</b> <code>' + levels.tp2 + '</code>\n';
+    if (levels.tp3) c += '<b>✅ TP3:</b> <code>' + levels.tp3 + '</code>\n';
+    if (levels.rr) c += '<b>⚖️ R/R:</b> <code>' + levels.rr + '</code>\n';
+  }
+  return c;
+}
+
+function buildImageCaption(levels) {
+  var c = '<b>📸 تحلیل تصویر</b>\n\n';
+  if (levels.detectedSymbol && levels.detectedSymbol !== 'UNKNOWN') c += '<b>نماد:</b> ' + levels.detectedSymbol + '\n';
+  if (levels.detectedTimeframe && levels.detectedTimeframe !== 'UNKNOWN') c += '<b>تایم‌فریم:</b> ' + levels.detectedTimeframe + '\n';
+  c += '\n';
   var direction = levels.direction || 'WAIT';
   var dirText = direction === 'BUY' ? '🟢 خرید' : direction === 'SELL' ? '🔴 فروش' : '⏸️ انتظار';
   c += '<b>جهت:</b> ' + dirText + '\n';
@@ -721,8 +790,7 @@ function buildCaption(levels, symbol, timeframe) {
 }
 
 function buildMultiTFCaption(levels, symbol) {
-  var c = '<b>🎯 تحلیل Multi-Timeframe</b>\n\n';
-  c += '<b>نماد:</b> ' + symbol + '\n\n';
+  var c = '<b>🎯 تحلیل Multi-Timeframe</b>\n\n<b>نماد:</b> ' + symbol + '\n\n';
   if (levels.htf || levels.mtf || levels.ltf || levels.entryTf) {
     c += '<b>📊 تحلیل تایم‌فریم‌ها:</b>\n';
     c += '• 4H: ' + directionEmoji(levels.htf) + '\n';
@@ -789,7 +857,7 @@ async function runAnalysis(token, chatId, symbol, twelveKey, geminiKeys, geminiM
         await sendMessage(token, chatId, fullText.slice(i, i + 3800));
       }
     }
-    await sendMessage(token, chatId, '🏠 برای بازگشت به منو:', {
+    await sendMessage(token, chatId, '🏠 بازگشت:', {
       inline_keyboard: [[{ text: '🏠 منوی اصلی', callback_data: 'menu_main' }]]
     });
   } catch (e) {
@@ -827,7 +895,7 @@ async function runMultiTFAnalysis(token, chatId, symbol, twelveKey, geminiKeys, 
         await sendMessage(token, chatId, fullText.slice(i, i + 3800));
       }
     }
-    await sendMessage(token, chatId, '🏠 برای بازگشت:', {
+    await sendMessage(token, chatId, '🏠 بازگشت:', {
       inline_keyboard: [[{ text: '🏠 منوی اصلی', callback_data: 'menu_main' }]]
     });
   } catch (e) {
@@ -835,8 +903,52 @@ async function runMultiTFAnalysis(token, chatId, symbol, twelveKey, geminiKeys, 
   }
 }
 
+// ⭐ تحلیل تصویر ارسالی
+async function runImageAnalysis(token, chatId, photoFileId, env) {
+  var geminiKeys = getGeminiKeys(env);
+  var geminiModel = env.GEMINI_MODEL || 'gemini-3.5-flash-lite';
+
+  try {
+    await sendMessage(token, chatId, '📸 دریافت تصویر...');
+
+    // دانلود عکس از تلگرام
+    var photoData = await downloadTelegramPhoto(token, photoFileId);
+
+    if (photoData.size > 5 * 1024 * 1024) {
+      await sendMessage(token, chatId, '❌ حجم تصویر بیشتر از ۵ مگابایت است. لطفاً تصویر کوچکتری بفرستید.');
+      return;
+    }
+
+    await sendMessage(token, chatId, '🧠 در حال تحلیل تصویر...\n⏳ ممکنه ۲۰-۳۰ ثانیه طول بکشه');
+
+    // ارسال به Gemini Vision
+    var analysisText = await callGeminiVision(geminiKeys, photoData.base64, 'image/jpeg', IMAGE_PROMPT, geminiModel);
+
+    var levels = extractLevels(analysisText);
+    levels = validateSignal(levels);
+
+    // ارسال کپشن
+    await sendMessage(token, chatId, buildImageCaption(levels));
+
+    // ارسال تحلیل کامل
+    var fullText = tgFormat(analysisText);
+    if (fullText.length > 100) {
+      for (var i = 0; i < fullText.length; i += 3800) {
+        await sendMessage(token, chatId, fullText.slice(i, i + 3800));
+      }
+    }
+
+    await sendMessage(token, chatId, '🏠 بازگشت:', {
+      inline_keyboard: [[{ text: '🏠 منوی اصلی', callback_data: 'menu_main' }]]
+    });
+
+  } catch (e) {
+    await sendMessage(token, chatId, '❌ خطا در تحلیل تصویر: <code>' + e.message + '</code>');
+  }
+}
+
 // ============================================
-// JOURNAL VIEWS
+// JOURNAL
 // ============================================
 
 async function showJournalList(token, chatId, env) {
@@ -854,12 +966,7 @@ async function showJournalList(token, chatId, env) {
     text += status + ' <b>#' + t.id + '</b> ' + t.symbol + ' ' + (t.direction === 'BUY' ? '🟢' : '🔴') + '\n';
     text += '   E:<code>' + t.entry + '</code> SL:<code>' + t.sl + '</code> TP:<code>' + t.tp + '</code>\n\n';
   }
-  if (journal.length > 15) text += '... (' + (journal.length - 15) + ' مورد دیگر)\n';
-  text += '\n<b>ثبت نتیجه:</b>\n';
-  text += '<code>/journal win ID</code> یا <code>/journal loss ID</code>\n';
-  await sendMessage(token, chatId, text, {
-    inline_keyboard: [[{ text: '◀️ بازگشت', callback_data: 'menu_journal' }]]
-  });
+  await sendMessage(token, chatId, text, { inline_keyboard: [[{ text: '◀️ بازگشت', callback_data: 'menu_journal' }]] });
 }
 
 async function showJournalStats(token, chatId, env) {
@@ -890,13 +997,13 @@ async function showJournalStats(token, chatId, env) {
   var winRate = closed > 0 ? (wins / closed * 100).toFixed(1) : '0';
   var avgRR = rrCount > 0 ? (totalRR / rrCount).toFixed(2) : '0';
 
-  var text = '<b>📊 آمار عملکرد</b>\n\n';
-  text += '📈 کل معاملات: <b>' + journal.length + '</b>\n';
-  text += '✅ برد: <b>' + wins + '</b>\n';
-  text += '❌ باخت: <b>' + losses + '</b>\n';
-  text += '⏳ در انتظار: <b>' + pending + '</b>\n\n';
-  text += '🎯 نرخ برد: <b>' + winRate + '%</b>\n';
-  text += '⚖️ میانگین R/R: <b>1:' + avgRR + '</b>\n\n';
+  var text = '<b>📊 آمار عملکرد</b>\n\n' +
+    '📈 کل: <b>' + journal.length + '</b>\n' +
+    '✅ برد: <b>' + wins + '</b>\n' +
+    '❌ باخت: <b>' + losses + '</b>\n' +
+    '⏳ در انتظار: <b>' + pending + '</b>\n\n' +
+    '🎯 نرخ برد: <b>' + winRate + '%</b>\n' +
+    '⚖️ میانگین R/R: <b>1:' + avgRR + '</b>\n\n';
 
   var bestSymbol = null, bestRate = -1;
   for (var s in symbolStats) {
@@ -904,15 +1011,13 @@ async function showJournalStats(token, chatId, env) {
     var rate = total > 0 ? symbolStats[s].win / total : 0;
     if (rate > bestRate && total >= 2) { bestRate = rate; bestSymbol = s + ' (' + (rate * 100).toFixed(0) + '%)'; }
   }
-  if (bestSymbol) text += '🏆 بهترین نماد: <b>' + bestSymbol + '</b>\n';
+  if (bestSymbol) text += '🏆 بهترین: <b>' + bestSymbol + '</b>\n';
 
-  await sendMessage(token, chatId, text, {
-    inline_keyboard: [[{ text: '◀️ بازگشت', callback_data: 'menu_journal' }]]
-  });
+  await sendMessage(token, chatId, text, { inline_keyboard: [[{ text: '◀️ بازگشت', callback_data: 'menu_journal' }]] });
 }
 
 // ============================================
-// WATCHLIST VIEWS
+// WATCHLIST
 // ============================================
 
 async function showWatchList(token, chatId, env) {
@@ -926,12 +1031,9 @@ async function showWatchList(token, chatId, env) {
   var text = '<b>🔔 لیست هشدارها</b>\n\n';
   for (var i = 0; i < list.length; i++) {
     var w = list[i];
-    text += '#' + w.id + ' ' + w.symbol + ' — ' + (w.condition === 'above' ? '⬆️ بالای' : '⬇️ زیر') + ' <code>' + w.price + '</code>\n';
+    text += '#' + w.id + ' ' + w.symbol + ' — ' + (w.condition === 'above' ? '⬆️' : '⬇️') + ' <code>' + w.price + '</code>\n';
   }
-  text += '\n<b>حذف:</b>\n<code>/watch remove ID</code>\n';
-  await sendMessage(token, chatId, text, {
-    inline_keyboard: [[{ text: '◀️ بازگشت', callback_data: 'menu_watch' }]]
-  });
+  await sendMessage(token, chatId, text, { inline_keyboard: [[{ text: '◀️ بازگشت', callback_data: 'menu_watch' }]] });
 }
 
 // ============================================
@@ -940,167 +1042,102 @@ async function showWatchList(token, chatId, env) {
 
 async function startJournalWizard(token, chatId, env) {
   await setUserState(env, chatId, { action: 'journal_add', step: 'symbol', data: {} });
-  await sendMessage(token, chatId,
-    '📝 <b>ثبت معامله جدید</b>\n\n' +
-    'مرحله ۱ از ۵\n\n' +
-    '<b>نماد را تایپ کنید:</b>\n' +
-    'مثال: <code>XAUUSD</code>',
-    { inline_keyboard: [[{ text: '❌ لغو', callback_data: 'wizard_cancel' }]] }
-  );
+  await sendMessage(token, chatId, '📝 <b>ثبت معامله</b>\n\nمرحله ۱/۵\n\n<b>نماد:</b>',
+    { inline_keyboard: [[{ text: '❌ لغو', callback_data: 'wizard_cancel' }]] });
 }
 
 async function handleJournalWizard(token, chatId, text, env, state) {
   var data = state.data || {};
-
   if (state.step === 'symbol') {
     data.symbol = normalizeSymbol(text);
-    state.data = data;
-    state.step = 'direction';
+    state.data = data; state.step = 'direction';
     await setUserState(env, chatId, state);
-    await sendMessage(token, chatId,
-      '📝 <b>مرحله ۲ از ۵</b>\n\nجهت معامله:',
-      {
-        inline_keyboard: [
-          [
-            { text: '🟢 BUY', callback_data: 'wiz_dir_BUY' },
-            { text: '🔴 SELL', callback_data: 'wiz_dir_SELL' }
-          ],
-          [{ text: '❌ لغو', callback_data: 'wizard_cancel' }]
-        ]
-      }
-    );
+    await sendMessage(token, chatId, '📝 مرحله ۲/۵\n\n<b>جهت:</b>', {
+      inline_keyboard: [
+        [{ text: '🟢 BUY', callback_data: 'wiz_dir_BUY' }, { text: '🔴 SELL', callback_data: 'wiz_dir_SELL' }],
+        [{ text: '❌ لغو', callback_data: 'wizard_cancel' }]
+      ]
+    });
     return;
   }
-
   if (state.step === 'entry') {
     var entry = parseFloat(text.replace(/[^\d.\-]/g, ''));
-    if (isNaN(entry)) {
-      await sendMessage(token, chatId, '❌ عدد نامعتبر. دوباره وارد کنید:');
-      return;
-    }
-    data.entry = entry;
-    state.data = data;
-    state.step = 'sl';
+    if (isNaN(entry)) { await sendMessage(token, chatId, '❌ عدد نامعتبر:'); return; }
+    data.entry = entry; state.data = data; state.step = 'sl';
     await setUserState(env, chatId, state);
-    await sendMessage(token, chatId, '📝 <b>مرحله ۴ از ۵</b>\n\nحد ضرر (SL):',
+    await sendMessage(token, chatId, '📝 مرحله ۴/۵\n\n<b>حد ضرر (SL):</b>',
       { inline_keyboard: [[{ text: '❌ لغو', callback_data: 'wizard_cancel' }]] });
     return;
   }
-
   if (state.step === 'sl') {
     var sl = parseFloat(text.replace(/[^\d.\-]/g, ''));
-    if (isNaN(sl)) {
-      await sendMessage(token, chatId, '❌ عدد نامعتبر. دوباره وارد کنید:');
-      return;
-    }
-    data.sl = sl;
-    state.data = data;
-    state.step = 'tp';
+    if (isNaN(sl)) { await sendMessage(token, chatId, '❌ عدد نامعتبر:'); return; }
+    data.sl = sl; state.data = data; state.step = 'tp';
     await setUserState(env, chatId, state);
-    await sendMessage(token, chatId, '📝 <b>مرحله ۵ از ۵</b>\n\nحد سود (TP):',
+    await sendMessage(token, chatId, '📝 مرحله ۵/۵\n\n<b>حد سود (TP):</b>',
       { inline_keyboard: [[{ text: '❌ لغو', callback_data: 'wizard_cancel' }]] });
     return;
   }
-
   if (state.step === 'tp') {
     var tp = parseFloat(text.replace(/[^\d.\-]/g, ''));
-    if (isNaN(tp)) {
-      await sendMessage(token, chatId, '❌ عدد نامعتبر. دوباره وارد کنید:');
-      return;
-    }
+    if (isNaN(tp)) { await sendMessage(token, chatId, '❌ عدد نامعتبر:'); return; }
     data.tp = tp;
 
-    // ذخیره
     var journal = await getJournal(env, chatId);
     journal.push({
-      id: journal.length + 1,
-      symbol: data.symbol,
-      direction: data.direction,
-      entry: data.entry,
-      sl: data.sl,
-      tp: data.tp,
-      ts: Date.now(),
-      result: null
+      id: journal.length + 1, symbol: data.symbol, direction: data.direction,
+      entry: data.entry, sl: data.sl, tp: data.tp, ts: Date.now(), result: null
     });
     await saveJournal(env, chatId, journal);
     await clearUserState(env, chatId);
 
     var rr = Math.abs(data.tp - data.entry) / Math.abs(data.entry - data.sl);
     await sendMessage(token, chatId,
-      '✅ <b>معامله ثبت شد</b>\n\n' +
-      '📌 شماره: <b>#' + journal.length + '</b>\n' +
-      '🔹 نماد: ' + data.symbol + '\n' +
-      '🔹 جهت: ' + (data.direction === 'BUY' ? '🟢 خرید' : '🔴 فروش') + '\n' +
-      '🔹 ورود: <code>' + data.entry + '</code>\n' +
-      '🔹 SL: <code>' + data.sl + '</code>\n' +
-      '🔹 TP: <code>' + data.tp + '</code>\n' +
-      '🔹 R/R: 1:' + rr.toFixed(2),
-      { inline_keyboard: [[{ text: '📓 ژورنال', callback_data: 'menu_journal' }]] }
-    );
+      '✅ <b>ثبت شد</b>\n\n#' + journal.length + ' ' + data.symbol + ' ' + data.direction + '\n' +
+      'E:<code>' + data.entry + '</code> SL:<code>' + data.sl + '</code> TP:<code>' + data.tp + '</code>\n' +
+      'R/R: 1:' + rr.toFixed(2),
+      { inline_keyboard: [[{ text: '📓 ژورنال', callback_data: 'menu_journal' }]] });
     return;
   }
 }
 
 async function startWatchWizard(token, chatId, env) {
   await setUserState(env, chatId, { action: 'watch_add', step: 'symbol', data: {} });
-  await sendMessage(token, chatId,
-    '🔔 <b>افزودن هشدار قیمتی</b>\n\n' +
-    'مرحله ۱ از ۳\n\n' +
-    '<b>نماد را تایپ کنید:</b>\n' +
-    'مثال: <code>XAUUSD</code>',
-    { inline_keyboard: [[{ text: '❌ لغو', callback_data: 'wizard_cancel' }]] }
-  );
+  await sendMessage(token, chatId, '🔔 <b>افزودن هشدار</b>\n\nمرحله ۱/۳\n\n<b>نماد:</b>',
+    { inline_keyboard: [[{ text: '❌ لغو', callback_data: 'wizard_cancel' }]] });
 }
 
 async function handleWatchWizard(token, chatId, text, env, state) {
   var data = state.data || {};
-
   if (state.step === 'symbol') {
     data.symbol = normalizeSymbol(text);
-    state.data = data;
-    state.step = 'condition';
+    state.data = data; state.step = 'condition';
     await setUserState(env, chatId, state);
-    await sendMessage(token, chatId,
-      '🔔 <b>مرحله ۲ از ۳</b>\n\nشرط هشدار:',
-      {
-        inline_keyboard: [
-          [{ text: '⬆️ بالاتر از', callback_data: 'wiz_cond_above' }],
-          [{ text: '⬇️ پایین‌تر از', callback_data: 'wiz_cond_below' }],
-          [{ text: '❌ لغو', callback_data: 'wizard_cancel' }]
-        ]
-      }
-    );
+    await sendMessage(token, chatId, '🔔 مرحله ۲/۳\n\n<b>شرط:</b>', {
+      inline_keyboard: [
+        [{ text: '⬆️ بالاتر از', callback_data: 'wiz_cond_above' }],
+        [{ text: '⬇️ پایین‌تر از', callback_data: 'wiz_cond_below' }],
+        [{ text: '❌ لغو', callback_data: 'wizard_cancel' }]
+      ]
+    });
     return;
   }
-
   if (state.step === 'price') {
     var price = parseFloat(text.replace(/[^\d.\-]/g, ''));
-    if (isNaN(price)) {
-      await sendMessage(token, chatId, '❌ عدد نامعتبر. دوباره وارد کنید:');
-      return;
-    }
+    if (isNaN(price)) { await sendMessage(token, chatId, '❌ عدد نامعتبر:'); return; }
     data.price = price;
 
     var list = await getWatchlist(env, chatId);
     var newId = list.length > 0 ? Math.max.apply(null, list.map(function(w) { return w.id; })) + 1 : 1;
-    list.push({
-      id: newId,
-      symbol: data.symbol,
-      condition: data.condition,
-      price: data.price,
-      ts: Date.now()
-    });
+    list.push({ id: newId, symbol: data.symbol, condition: data.condition, price: data.price, ts: Date.now() });
     await saveWatchlist(env, chatId, list);
     await clearUserState(env, chatId);
 
     await sendMessage(token, chatId,
-      '✅ <b>هشدار ثبت شد</b>\n\n' +
-      '🔔 شماره: #' + newId + '\n' +
-      '📌 نماد: ' + data.symbol + '\n' +
-      '🎯 شرط: ' + (data.condition === 'above' ? 'بالاتر از' : 'پایین‌تر از') + ' <code>' + data.price + '</code>\n\n' +
-      '⏱️ بررسی خودکار هر ۵ دقیقه',
-      { inline_keyboard: [[{ text: '🔔 هشدارها', callback_data: 'menu_watch' }]] }
-    );
+      '✅ <b>هشدار ثبت شد</b>\n\n#' + newId + ' ' + data.symbol + '\n' +
+      (data.condition === 'above' ? '⬆️ بالای' : '⬇️ زیر') + ' <code>' + data.price + '</code>\n\n' +
+      '⏱️ بررسی هر ۵ دقیقه',
+      { inline_keyboard: [[{ text: '🔔 هشدارها', callback_data: 'menu_watch' }]] });
     return;
   }
 }
@@ -1128,18 +1165,14 @@ async function checkWatchlist(env) {
           if (triggered) {
             await sendMessage(token, chatId,
               '🔔 <b>هشدار فعال شد!</b>\n\n' +
-              '📌 نماد: <b>' + w.symbol + '</b>\n' +
-              '🎯 شرط: ' + (w.condition === 'above' ? 'بالای' : 'زیر') + ' <code>' + w.price + '</code>\n' +
-              '💰 قیمت فعلی: <code>' + price + '</code>\n\n' +
-              '📊 برای تحلیل: <code>' + w.symbol + '</code> را بفرستید',
-              { inline_keyboard: [[{ text: '📊 تحلیل سریع', callback_data: 'sym_' + w.symbol.replace('/', '') }]] }
-            );
+              '📌 ' + w.symbol + '\n' +
+              (w.condition === 'above' ? 'بالای' : 'زیر') + ' <code>' + w.price + '</code>\n' +
+              '💰 قیمت فعلی: <code>' + price + '</code>',
+              { inline_keyboard: [[{ text: '📊 تحلیل', callback_data: 'sym_' + w.symbol.replace('/', '') }]] });
           } else {
             remaining.push(w);
           }
-        } catch (e) {
-          remaining.push(w);
-        }
+        } catch (e) { remaining.push(w); }
       }
       await env.KV.put(key, JSON.stringify(remaining));
     }
@@ -1155,20 +1188,16 @@ async function handleCallback(token, chatId, messageId, data, env) {
   var geminiKeys = getGeminiKeys(env);
   var geminiModel = env.GEMINI_MODEL || 'gemini-3.5-flash-lite';
 
-  // منوی اصلی
   if (data === 'menu_main') { await showMainMenu(token, chatId, messageId); return; }
   if (data === 'menu_analyze') { await showSymbolMenu(token, chatId, messageId); return; }
-  if (data === 'menu_mtf') {
-    await sendOrEdit(token, chatId, messageId, '🎯 <b>تحلیل MTF</b>\n\nنماد را انتخاب کنید:', symbolMenu());
-    return;
-  }
+  if (data === 'menu_mtf') { await showSymbolMenu(token, chatId, messageId); return; }
+  if (data === 'menu_image') { await showImageGuide(token, chatId, messageId); return; }
   if (data === 'menu_journal') { await showJournalMenu(token, chatId, messageId, env); return; }
   if (data === 'menu_watch') { await showWatchMenu(token, chatId, messageId, env); return; }
-  if (data === 'menu_settings') { await showSettingsMenu(token, chatId, messageId, env); return; }
+  if (data === 'menu_settings') { await showSettingsMenu(token, chatId, messageId); return; }
   if (data === 'menu_status') { await showStatus(token, chatId, messageId, env); return; }
   if (data === 'menu_help') { await showHelp(token, chatId, messageId); return; }
 
-  // لغو Wizard
   if (data === 'wizard_cancel') {
     await clearUserState(env, chatId);
     await sendOrEdit(token, chatId, messageId, '❌ لغو شد', {
@@ -1177,31 +1206,25 @@ async function handleCallback(token, chatId, messageId, data, env) {
     return;
   }
 
-  // نماد سفارشی
   if (data === 'sym_custom') {
     await setUserState(env, chatId, { action: 'custom_symbol', step: 'input', data: {} });
-    await sendOrEdit(token, chatId, messageId,
-      '✏️ <b>نماد را تایپ کنید</b>\n\nمثال: GBPJPY, ETH/USD, AAPL',
-      { inline_keyboard: [[{ text: '❌ لغو', callback_data: 'wizard_cancel' }]] }
-    );
+    await sendOrEdit(token, chatId, messageId, '✏️ <b>نماد را تایپ کنید</b>',
+      { inline_keyboard: [[{ text: '❌ لغو', callback_data: 'wizard_cancel' }]] });
     return;
   }
 
-  // انتخاب نماد
   if (data.indexOf('sym_') === 0) {
     var symbolRaw = data.replace('sym_', '');
     await showTimeframeMenu(token, chatId, messageId, symbolRaw);
     return;
   }
 
-  // تحلیل MTF
   if (data.indexOf('mtf_') === 0) {
     var symbolMTF = normalizeSymbol(data.replace('mtf_', ''));
     await runMultiTFAnalysis(token, chatId, symbolMTF, twelveKey, geminiKeys, geminiModel, env);
     return;
   }
 
-  // تحلیل تک تایم‌فریم
   if (data.indexOf('tf_') === 0) {
     var rest = data.replace('tf_', '');
     var tfMatch = rest.match(/_([^_]+)$/);
@@ -1213,69 +1236,58 @@ async function handleCallback(token, chatId, messageId, data, env) {
     return;
   }
 
-  // ژورنال
   if (data === 'journal_add') { await startJournalWizard(token, chatId, env); return; }
   if (data === 'journal_list') { await showJournalList(token, chatId, env); return; }
   if (data === 'journal_stats') { await showJournalStats(token, chatId, env); return; }
   if (data === 'journal_clear') {
     await saveJournal(env, chatId, []);
-    await sendOrEdit(token, chatId, messageId, '🗑️ ژورنال پاک شد', {
+    await sendOrEdit(token, chatId, messageId, '🗑️ پاک شد', {
       inline_keyboard: [[{ text: '◀️ بازگشت', callback_data: 'menu_journal' }]]
     });
     return;
   }
 
-  // Wizard Direction
   if (data.indexOf('wiz_dir_') === 0) {
     var state = await getUserState(env, chatId);
     if (!state || state.action !== 'journal_add') return;
     state.data.direction = data.replace('wiz_dir_', '');
     state.step = 'entry';
     await setUserState(env, chatId, state);
-    await sendOrEdit(token, chatId, messageId,
-      '📝 <b>مرحله ۳ از ۵</b>\n\nقیمت ورود (Entry):',
-      { inline_keyboard: [[{ text: '❌ لغو', callback_data: 'wizard_cancel' }]] }
-    );
+    await sendOrEdit(token, chatId, messageId, '📝 مرحله ۳/۵\n\n<b>قیمت ورود (Entry):</b>',
+      { inline_keyboard: [[{ text: '❌ لغو', callback_data: 'wizard_cancel' }]] });
     return;
   }
 
-  // هشدار
   if (data === 'watch_add') { await startWatchWizard(token, chatId, env); return; }
   if (data === 'watch_list') { await showWatchList(token, chatId, env); return; }
   if (data === 'watch_clear') {
     await saveWatchlist(env, chatId, []);
-    await sendOrEdit(token, chatId, messageId, '🗑️ همه هشدارها پاک شدند', {
+    await sendOrEdit(token, chatId, messageId, '🗑️ پاک شد', {
       inline_keyboard: [[{ text: '◀️ بازگشت', callback_data: 'menu_watch' }]]
     });
     return;
   }
 
-  // Wizard Condition
   if (data.indexOf('wiz_cond_') === 0) {
     var state2 = await getUserState(env, chatId);
     if (!state2 || state2.action !== 'watch_add') return;
     state2.data.condition = data.replace('wiz_cond_', '');
     state2.step = 'price';
     await setUserState(env, chatId, state2);
-    await sendOrEdit(token, chatId, messageId,
-      '🔔 <b>مرحله ۳ از ۳</b>\n\nقیمت هدف:',
-      { inline_keyboard: [[{ text: '❌ لغو', callback_data: 'wizard_cancel' }]] }
-    );
+    await sendOrEdit(token, chatId, messageId, '🔔 مرحله ۳/۳\n\n<b>قیمت هدف:</b>',
+      { inline_keyboard: [[{ text: '❌ لغو', callback_data: 'wizard_cancel' }]] });
     return;
   }
 
-  // تنظیمات
   if (data === 'settings_mode') {
-    await sendOrEdit(token, chatId, messageId, '⚙️ <b>حالت تحلیل را انتخاب کنید:</b>', modeMenu());
+    await sendOrEdit(token, chatId, messageId, '⚙️ حالت تحلیل:', modeMenu());
     return;
   }
   if (data.indexOf('mode_') === 0) {
     var mode = data.replace('mode_', '');
     await env.KV.put('mode:' + chatId, mode);
-    await sendOrEdit(token, chatId, messageId,
-      '✅ حالت تحلیل روی <b>' + mode + '</b> تنظیم شد',
-      { inline_keyboard: [[{ text: '◀️ بازگشت', callback_data: 'menu_settings' }]] }
-    );
+    await sendOrEdit(token, chatId, messageId, '✅ حالت: <b>' + mode + '</b>',
+      { inline_keyboard: [[{ text: '◀️ بازگشت', callback_data: 'menu_settings' }]] });
     return;
   }
 }
@@ -1294,61 +1306,55 @@ async function handleUpdate(update, env) {
     var chatId = update.message.chat.id;
     var text = (update.message.text || '').trim();
 
-    // ⭐ چک کردن Wizard state
+    // ⭐ چک کردن عکس
+    if (update.message.photo && update.message.photo.length > 0) {
+      // بزرگترین سایز عکس
+      var largestPhoto = update.message.photo[update.message.photo.length - 1];
+      await runImageAnalysis(token, chatId, largestPhoto.file_id, env);
+      return;
+    }
+
+    // ⭐ چک کردن عکس به صورت فایل (document)
+    if (update.message.document && update.message.document.mime_type && update.message.document.mime_type.indexOf('image/') === 0) {
+      await runImageAnalysis(token, chatId, update.message.document.file_id, env);
+      return;
+    }
+
+    // چک Wizard state
     var state = await getUserState(env, chatId);
     if (state) {
-      if (state.action === 'journal_add') {
-        await handleJournalWizard(token, chatId, text, env, state);
-        return;
-      }
-      if (state.action === 'watch_add') {
-        await handleWatchWizard(token, chatId, text, env, state);
-        return;
-      }
+      if (state.action === 'journal_add') { await handleJournalWizard(token, chatId, text, env, state); return; }
+      if (state.action === 'watch_add') { await handleWatchWizard(token, chatId, text, env, state); return; }
       if (state.action === 'custom_symbol') {
         var sym = normalizeSymbol(text);
         await clearUserState(env, chatId);
-        var symbolRaw = sym.replace('/', '');
-        await showTimeframeMenu(token, chatId, null, symbolRaw);
+        await showTimeframeMenu(token, chatId, null, sym.replace('/', ''));
         return;
       }
     }
 
-    // دستورات
-    if (text === '/start' || text === '/menu') {
-      await showMainMenu(token, chatId, null);
-      return;
-    }
+    if (text === '/start' || text === '/menu') { await showMainMenu(token, chatId, null); return; }
     if (text === '/help') { await showHelp(token, chatId, null); return; }
     if (text === '/status') { await showStatus(token, chatId, null, env); return; }
     if (text === '/analyze') { await showSymbolMenu(token, chatId, null); return; }
     if (text === '/journal') { await showJournalMenu(token, chatId, null, env); return; }
     if (text === '/watch') { await showWatchMenu(token, chatId, null, env); return; }
 
-    // تایپ مستقیم نماد
     if (text && text.charAt(0) !== '/' && /^[A-Za-z]{2,10}(\/[A-Za-z]{2,10})?$/.test(text.trim())) {
       var symTyped = normalizeSymbol(text);
-      var symbolRawTyped = symTyped.replace('/', '');
-      await showTimeframeMenu(token, chatId, null, symbolRawTyped);
+      await showTimeframeMenu(token, chatId, null, symTyped.replace('/', ''));
       return;
     }
 
-    // پیش‌فرض
-    await sendMessage(token, chatId, '❓ متوجه نشدم', mainMenu());
+    await sendMessage(token, chatId, '❓ متوجه نشدم\n\n💡 می‌توانید عکس چارت هم بفرستید!', mainMenu());
   }
 
   if (update.callback_query) {
     var callback = update.callback_query;
-    var cbChatId = callback.message.chat.id;
-    var cbMessageId = callback.message.message_id;
     await answerCallback(token, callback.id);
-    await handleCallback(token, cbChatId, cbMessageId, callback.data, env);
+    await handleCallback(token, callback.message.chat.id, callback.message.message_id, callback.data, env);
   }
 }
-
-// ============================================
-// EXPORT
-// ============================================
 
 export default {
   async fetch(request, env, ctx) {
