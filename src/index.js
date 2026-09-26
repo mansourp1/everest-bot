@@ -267,7 +267,17 @@ async function buildChartImage(symbol, timeframe, env) {
     throw new Error('CHART_IMG_KEY تنظیم نشده');
   }
 
-  var chartSymbol = symbol.replace('/', '').toUpperCase();
+  // ۱. تعیین صرافی مناسب بر اساس نوع نماد
+  var symUpper = symbol.toUpperCase().replace('/', '');
+  var exchange = 'OANDA'; // پیش‌فرض برای فارکس و طلا
+
+  if (symUpper === 'BTCUSD' || symUpper === 'ETHUSD' || symUpper.includes('USDT')) {
+    exchange = 'BINANCE';
+  } else if (symUpper === 'AAPL' || symUpper === 'MSFT' || symUpper === 'TSLA' || symUpper === 'GOOGL') {
+    exchange = 'NASDAQ';
+  }
+
+  // ۲. نگاشت تایم‌فریم
   var intervalMap = {
     '1min': '1',
     '3min': '3',
@@ -278,18 +288,31 @@ async function buildChartImage(symbol, timeframe, env) {
   };
   var chartInterval = intervalMap[timeframe] || '60';
 
-  var url = new URL('https://api.chart-img.com/v2/tradingview/advanced-chart');
-  url.searchParams.set('symbol', 'OANDA:' + chartSymbol);
-  url.searchParams.set('interval', chartInterval);
-  url.searchParams.set('theme', 'dark');
-  url.searchParams.set('width', '1000');
-  url.searchParams.set('height', '600');
-  url.searchParams.set('studies', 'RSI@tv-basicstudies,MACD@tv-basicstudies');
+  // ۳. ساخت آدرس به صورت رشته‌ای (نه با new URL)
+  var apiUrl = 'https://api.chart-img.com/v2/tradingview/advanced-chart';
 
-  var res = await fetch(url.toString(), {
+  // ۴. بدنه درخواست (JSON)
+  var requestBody = {
+    symbol: exchange + ':' + symUpper,
+    interval: chartInterval,
+    theme: 'dark',
+    width: 1000,
+    height: 600,
+    studies: [
+      { name: 'Volume', forceOverlay: true },
+      { name: 'MACD' },
+      { name: 'RSI' }
+    ]
+  };
+
+  // ۵. ارسال درخواست POST
+  var res = await fetch(apiUrl, {
+    method: 'POST',
     headers: {
-      'x-api-key': env.CHART_IMG_KEY
-    }
+      'x-api-key': env.CHART_IMG_KEY,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(requestBody)
   });
 
   if (!res.ok) {
