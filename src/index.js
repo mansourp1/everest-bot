@@ -7,18 +7,18 @@ const SYSTEM_PROMPT = "شما یک تحلیل‌گر ارشد بازارهای �
 "۵. بررسی الگوهای کندلی\n" +
 "۶. امتیازدهی ۶ لایه هم‌گرایی\n" +
 "۷. تصمیم نهایی\n\n" +
-"**ساختار تحلیل — حتماً همه بخش‌ها را با جزئیات کامل بنویس:**\n\n" +
-"### ۰. رژیم بازار (Trending/Ranging/Transitional)\n" +
-"### ۱. ساختار بازار (BOS، CHoCH، Retest، نقدینگی)\n" +
-"### ۲. SMC (Order Blocks، FVG، Premium/Discount)\n" +
-"### ۳. ICT (ساختار داخلی، OTE)\n" +
+"**ساختار تحلیل:**\n" +
+"### ۰. رژیم بازار\n" +
+"### ۱. ساختار بازار\n" +
+"### ۲. SMC\n" +
+"### ۳. ICT\n" +
 "### ۴. الگوهای کندلی\n" +
-"### ۵. سطوح کلیدی R1/R2/R3، S1/S2/S3\n" +
-"### ۶. سناریو معاملاتی با حد ضرر ساختاری\n" +
-"### ۷. امتیازدهی ۶ لایه (0-100)\n" +
+"### ۵. سطوح کلیدی\n" +
+"### ۶. سناریو معاملاتی\n" +
+"### ۷. امتیازدهی ۶ لایه\n" +
 "### ۸. سناریوی مخالف\n" +
 "### ۹. خلاصه اجرایی\n\n" +
-"**در انتهای پاسخ دقیقاً این فرمت را بنویس:**\n\n" +
+"**در انتهای پاسخ دقیقاً این فرمت را بنویس:**\n" +
 "---\n" +
 "Direction: [BUY/SELL/WAIT]\n" +
 "Regime: [TRENDING_UP/TRENDING_DOWN/RANGING/TRANSITIONAL]\n" +
@@ -35,53 +35,39 @@ const SYSTEM_PROMPT = "شما یک تحلیل‌گر ارشد بازارهای �
 "2. حد ضرر باید ساختاری باشد\n" +
 "3. در BUY، SL زیر Entry و در SELL، SL بالای Entry\n" +
 "4. R/R اعلامی با محاسبه واقعی مطابقت داشته باشد\n" +
-"5. تحلیل کامل و مفصل بنویس، حداقل ۵۰۰ کلمه";
+"5. تحلیل کامل و مفصل بنویس";
 
-// ⭐ پرامپت مخصوص تحلیل چند تایم‌فریمی
+// ⭐ MTF با ۴ تایم‌فریم
 const MULTI_TF_PROMPT = "شما یک تحلیل‌گر ارشد بازارهای مالی با ۱۵ سال تجربه در SMC، ICT و پرایس اکشن هستید.\n\n" +
-"**وظیفه: تحلیل همزمان سه تایم‌فریم (Multi-Timeframe Confluence)**\n\n" +
-"شما داده سه تایم‌فریم مختلف دریافت می‌کنید:\n" +
-"- HTF (تایم‌فریم بالا - معمولاً 4H): برای تشخیص روند اصلی\n" +
-"- MTF (تایم‌فریم میانی - معمولاً 1H): برای ساختار و سطوح\n" +
-"- LTF (تایم‌فریم پایین - معمولاً 15M): برای نقطه ورود دقیق\n\n" +
+"**وظیفه: تحلیل Multi-Timeframe با ۴ تایم‌فریم**\n\n" +
+"شما داده چهار تایم‌فریم دریافت می‌کنید:\n" +
+"- HTF (4H): روند اصلی — جهت‌گیری کلی\n" +
+"- MTF (1H): ساختار میانی — تأیید یا رد روند\n" +
+"- LTF (15M): ستاپ معاملاتی — نواحی ورود\n" +
+"- EntryTF (1M): نقطه ورود دقیق — تایمینگ نهایی\n\n" +
 "**روش کار:**\n" +
-"۱. تحلیل هر تایم‌فریم به صورت جداگانه (ساختار، OB، FVG، روند)\n" +
-"۲. بررسی هم‌جهت بودن هر سه تایم‌فریم\n" +
-"۳. محاسبه Confluence Score از 0 تا 10\n" +
-"۴. سیگنال نهایی فقط وقتی معتبر است که **حداقل ۲ از ۳ تایم‌فریم** هم‌جهت باشند\n" +
-"۵. اگر ۳ از ۳ هم‌جهت باشند، سیگنال با اطمینان بالا\n" +
-"۶. اگر تایم‌فریم‌ها متناقض باشند، Direction = WAIT\n\n" +
+"۱. جهت کلی از 4H استخراج شود\n" +
+"۲. 1H و 15M برای تأیید ساختار بررسی شوند\n" +
+"۳. نقطه ورود دقیق از 1M استخراج شود\n" +
+"۴. Confluence Score از 0 تا 10 محاسبه کن\n" +
+"۵. سیگنال معتبر فقط وقتی است که 3 از 4 تایم‌فریم هم‌جهت باشند\n" +
+"۶. حد ضرر ساختاری از 15M یا 1H، و Entry دقیق از 1M\n\n" +
 "**ساختار تحلیل:**\n" +
-"### 📊 تحلیل HTF (تایم‌فریم بالا)\n" +
-"- روند کلی\n" +
-"- ساختار (BOS/CHoCH)\n" +
-"- سطوح کلیدی\n\n" +
-"### 📊 تحلیل MTF (تایم‌فریم میانی)\n" +
-"- روند میانی\n" +
-"- Order Blocks و FVG مهم\n" +
-"- نقدینگی\n\n" +
-"### 📊 تحلیل LTF (تایم‌فریم پایین)\n" +
-"- روند کوتاه‌مدت\n" +
-"- نقطه ورود دقیق\n" +
-"- تاییدیه کندلی\n\n" +
+"### 📊 HTF (4H) — روند اصلی\n" +
+"### 📊 MTF (1H) — ساختار میانی\n" +
+"### 📊 LTF (15M) — ستاپ\n" +
+"### 🎯 EntryTF (1M) — نقطه ورود دقیق\n" +
 "### 🎯 هم‌گرایی (Confluence)\n" +
-"- آیا هر سه هم‌جهت هستند؟\n" +
-"- نقاط قوت و ضعف\n" +
-"- Confluence Score: [0-10]\n\n" +
 "### 💼 سناریو معاملاتی\n" +
-"- نقطه ورود دقیق\n" +
-"- حد ضرر ساختاری\n" +
-"- اهداف سود (3 سطح)\n" +
-"- نسبت R/R\n\n" +
-"### ⚠️ سناریوی مخالف\n" +
-"- چه چیزی این تحلیل را باطل می‌کند؟\n\n" +
-"**در انتهای پاسخ دقیقاً این فرمت را بنویس:**\n\n" +
+"### ⚠️ سناریوی مخالف\n\n" +
+"**در انتهای پاسخ دقیقاً این فرمت را بنویس:**\n" +
 "---\n" +
 "Direction: [BUY/SELL/WAIT]\n" +
 "ConfluenceScore: [0-10]\n" +
 "HTF4H: [BULLISH/BEARISH/RANGING]\n" +
 "MTF1H: [BULLISH/BEARISH/RANGING]\n" +
 "LTF15M: [BULLISH/BEARISH/RANGING]\n" +
+"EntryTF1M: [BULLISH/BEARISH/RANGING]\n" +
 "ConfidenceScore: [0-100]\n" +
 "Entry: [عدد یا N/A]\n" +
 "Stop Loss: [عدد یا N/A]\n" +
@@ -91,12 +77,45 @@ const MULTI_TF_PROMPT = "شما یک تحلیل‌گر ارشد بازارهای
 "R/R: [نسبت یا N/A]\n" +
 "---\n\n" +
 "**قوانین:**\n" +
-"1. اگر تنها ۱ تایم‌فریم هم‌جهت باشند → Direction = WAIT\n" +
-"2. اگر ۲ از ۳ هم‌جهت باشند → سیگنال با اطمینان متوسط\n" +
-"3. اگر ۳ از ۳ هم‌جهت باشند → سیگنال با اطمینان بالا\n" +
-"4. حد ضرر ساختاری در تایم‌فریم میانی تعیین شود\n" +
-"5. حداقل R/R قابل قبول: 1:2\n" +
-"6. تحلیل کامل بنویس — همه بخش‌ها را با جزئیات پر کن";
+"1. حداقل ۳ از ۴ تایم‌فریم باید هم‌جهت باشند\n" +
+"2. Entry باید از تایم‌فریم 1M استخراج شود\n" +
+"3. Stop Loss باید ساختاری باشد (از 15M یا 1H)\n" +
+"4. R/R حداقل 1:2\n" +
+"5. تحلیل کامل و مفصل بنویس";
+
+// ============================================
+// KV HELPERS
+// ============================================
+
+async function getJournal(env, chatId) {
+  try {
+    var data = await env.KV.get('journal:' + chatId, 'json');
+    return data || [];
+  } catch (e) {
+    return [];
+  }
+}
+
+async function saveJournal(env, chatId, journal) {
+  await env.KV.put('journal:' + chatId, JSON.stringify(journal));
+}
+
+async function getWatchlist(env, chatId) {
+  try {
+    var data = await env.KV.get('watch:' + chatId, 'json');
+    return data || [];
+  } catch (e) {
+    return [];
+  }
+}
+
+async function saveWatchlist(env, chatId, watchlist) {
+  await env.KV.put('watch:' + chatId, JSON.stringify(watchlist));
+}
+
+// ============================================
+// PARSING FUNCTIONS
+// ============================================
 
 function parseJsonBlock(text) {
   var match = text.match(/```json\s*([\s\S]*?)```/i);
@@ -165,7 +184,8 @@ function extractLevels(rawText) {
       confluenceScore: jsonData.confluenceScore || null,
       htf: jsonData.htf4h || null,
       mtf: jsonData.mtf1h || null,
-      ltf: jsonData.ltf15m || null
+      ltf: jsonData.ltf15m || null,
+      entryTf: jsonData.entrytf1m || null
     };
   }
   var blocks = rawText.match(/---\s*\n([\s\S]*?)\n\s*---/g);
@@ -179,6 +199,7 @@ function extractLevels(rawText) {
   var htfMatch = text.match(/HTF4H\s*[:=]\s*(BULLISH|BEARISH|RANGING)/i);
   var mtfMatch = text.match(/MTF1H\s*[:=]\s*(BULLISH|BEARISH|RANGING)/i);
   var ltfMatch = text.match(/LTF15M\s*[:=]\s*(BULLISH|BEARISH|RANGING)/i);
+  var etfMatch = text.match(/EntryTF1M\s*[:=]\s*(BULLISH|BEARISH|RANGING)/i);
   return {
     direction: detectDirection(rawText),
     regime: regimeMatch ? regimeMatch[1].toUpperCase() : null,
@@ -192,7 +213,8 @@ function extractLevels(rawText) {
     confluenceScore: confMatch ? parseFloat(confMatch[1]) : null,
     htf: htfMatch ? htfMatch[1].toUpperCase() : null,
     mtf: mtfMatch ? mtfMatch[1].toUpperCase() : null,
-    ltf: ltfMatch ? ltfMatch[1].toUpperCase() : null
+    ltf: ltfMatch ? ltfMatch[1].toUpperCase() : null,
+    entryTf: etfMatch ? etfMatch[1].toUpperCase() : null
   };
 }
 
@@ -331,26 +353,21 @@ function buildCaption(levels, symbol, timeframe) {
   return c;
 }
 
-// ⭐ کپشن مخصوص تحلیل چند تایم‌فریمی
 function buildMultiTFCaption(levels, symbol) {
   var c = '<b>🎯 تحلیل Multi-Timeframe</b>\n\n';
   c += '<b>نماد:</b> ' + symbol + '\n\n';
-
-  // جدول تایم‌فریم‌ها
-  if (levels.htf || levels.mtf || levels.ltf) {
+  if (levels.htf || levels.mtf || levels.ltf || levels.entryTf) {
     c += '<b>📊 تحلیل تایم‌فریم‌ها:</b>\n';
-    c += '• 4H: ' + directionEmoji(levels.htf) + '\n';
-    c += '• 1H: ' + directionEmoji(levels.mtf) + '\n';
-    c += '• 15M: ' + directionEmoji(levels.ltf) + '\n\n';
+    c += '• 4H (روند): ' + directionEmoji(levels.htf) + '\n';
+    c += '• 1H (ساختار): ' + directionEmoji(levels.mtf) + '\n';
+    c += '• 15M (ستاپ): ' + directionEmoji(levels.ltf) + '\n';
+    c += '• 1M (ورود): ' + directionEmoji(levels.entryTf) + '\n\n';
   }
-
-  // Confluence Score
   if (levels.confluenceScore !== null && levels.confluenceScore !== undefined) {
     var score = levels.confluenceScore;
     var scoreEmoji = score >= 8 ? '🔥' : score >= 6 ? '✅' : score >= 4 ? '⚠️' : '❌';
     c += '<b>هم‌گرایی:</b> ' + scoreEmoji + ' <b>' + score + '/10</b>\n\n';
   }
-
   var direction = levels.direction || 'WAIT';
   var dirText = direction === 'BUY' ? '🟢 خرید' : direction === 'SELL' ? '🔴 فروش' : '⏸️ انتظار';
   c += '<b>جهت نهایی:</b> ' + dirText + '\n';
@@ -358,9 +375,8 @@ function buildMultiTFCaption(levels, symbol) {
     c += '<b>اطمینان:</b> ' + levels.confidence + '%\n';
   }
   c += '\n';
-
   if (direction === 'WAIT') {
-    c += '<i>تایم‌فریم‌ها هم‌جهت نیستند — ستاپ معتبری شناسایی نشد.</i>\n';
+    c += '<i>تایم‌فریم‌ها هم‌جهت نیستند.</i>\n';
   } else {
     if (levels.entry) c += '<b>🎯 ورود:</b> <code>' + levels.entry + '</code>\n';
     if (levels.sl) c += '<b>🛑 SL:</b> <code>' + levels.sl + '</code>\n';
@@ -369,7 +385,6 @@ function buildMultiTFCaption(levels, symbol) {
     if (levels.tp3) c += '<b>✅ TP3:</b> <code>' + levels.tp3 + '</code>\n';
     if (levels.rr) c += '<b>⚖️ R/R:</b> <code>' + levels.rr + '</code>\n';
   }
-
   if (levels.validationIssues && levels.validationIssues.length) {
     c += '\n<b>⚠️ اعتبارسنجی:</b>\n';
     levels.validationIssues.slice(0, 3).forEach(function(iss) {
@@ -389,14 +404,15 @@ function tgFormat(text) {
   return h.trim();
 }
 
+// ============================================
+// CHART IMAGE
+// ============================================
+
 async function buildChartImage(symbol, timeframe, levels, env) {
-  if (!env.CHART_IMG_KEY) {
-    throw new Error('CHART_IMG_KEY تنظیم نشده');
-  }
+  if (!env.CHART_IMG_KEY) throw new Error('CHART_IMG_KEY تنظیم نشده');
 
   var symUpper = symbol.toUpperCase().replace('/', '');
   var exchange = 'OANDA';
-
   if (symUpper === 'BTCUSD' || symUpper === 'ETHUSD' || symUpper.includes('USDT')) {
     exchange = 'BINANCE';
   } else if (symUpper === 'AAPL' || symUpper === 'MSFT' || symUpper === 'TSLA' || symUpper === 'GOOGL') {
@@ -404,65 +420,19 @@ async function buildChartImage(symbol, timeframe, levels, env) {
   }
 
   var intervalMap = {
-    '1min': '1m',
-    '3min': '3m',
-    '5min': '5m',
-    '15min': '15m',
-    '1h': '1h',
-    '4h': '4h'
+    '1min': '1m', '3min': '3m', '5min': '5m',
+    '15min': '15m', '1h': '1h', '4h': '4h'
   };
   var chartInterval = intervalMap[timeframe] || '1h';
 
   var horizontalLines = [];
   if (levels && levels.direction !== 'WAIT') {
-    if (levels.entry) {
-      horizontalLines.push({
-        price: levels.entry,
-        color: '#00c6ff',
-        label: 'Entry',
-        lineWidth: 2,
-        lineStyle: 'solid'
-      });
-    }
-    if (levels.sl) {
-      horizontalLines.push({
-        price: levels.sl,
-        color: '#ff1744',
-        label: 'SL',
-        lineWidth: 2,
-        lineStyle: 'dashed'
-      });
-    }
-    if (levels.tp1) {
-      horizontalLines.push({
-        price: levels.tp1,
-        color: '#00c853',
-        label: 'TP1',
-        lineWidth: 2,
-        lineStyle: 'dashed'
-      });
-    }
-    if (levels.tp2) {
-      horizontalLines.push({
-        price: levels.tp2,
-        color: '#00c853',
-        label: 'TP2',
-        lineWidth: 2,
-        lineStyle: 'dashed'
-      });
-    }
-    if (levels.tp3) {
-      horizontalLines.push({
-        price: levels.tp3,
-        color: '#00c853',
-        label: 'TP3',
-        lineWidth: 2,
-        lineStyle: 'dashed'
-      });
-    }
+    if (levels.entry) horizontalLines.push({ price: levels.entry, color: '#00c6ff', label: 'Entry', lineWidth: 2, lineStyle: 'solid' });
+    if (levels.sl) horizontalLines.push({ price: levels.sl, color: '#ff1744', label: 'SL', lineWidth: 2, lineStyle: 'dashed' });
+    if (levels.tp1) horizontalLines.push({ price: levels.tp1, color: '#00c853', label: 'TP1', lineWidth: 2, lineStyle: 'dashed' });
+    if (levels.tp2) horizontalLines.push({ price: levels.tp2, color: '#00c853', label: 'TP2', lineWidth: 2, lineStyle: 'dashed' });
+    if (levels.tp3) horizontalLines.push({ price: levels.tp3, color: '#00c853', label: 'TP3', lineWidth: 2, lineStyle: 'dashed' });
   }
-
-  var apiUrl = 'https://api.chart-img.com/v2/tradingview/advanced-chart';
 
   var requestBody = {
     symbol: exchange + ':' + symUpper,
@@ -476,27 +446,23 @@ async function buildChartImage(symbol, timeframe, levels, env) {
       { name: 'Relative Strength Index' }
     ]
   };
+  if (horizontalLines.length > 0) requestBody.horizontalLines = horizontalLines;
 
-  if (horizontalLines.length > 0) {
-    requestBody.horizontalLines = horizontalLines;
-  }
-
-  var res = await fetch(apiUrl, {
+  var res = await fetch('https://api.chart-img.com/v2/tradingview/advanced-chart', {
     method: 'POST',
-    headers: {
-      'x-api-key': env.CHART_IMG_KEY,
-      'Content-Type': 'application/json'
-    },
+    headers: { 'x-api-key': env.CHART_IMG_KEY, 'Content-Type': 'application/json' },
     body: JSON.stringify(requestBody)
   });
-
   if (!res.ok) {
     var errText = await res.text();
     throw new Error('Chart-Img ' + res.status + ': ' + errText.slice(0, 200));
   }
-
   return await res.arrayBuffer();
 }
+
+// ============================================
+// TELEGRAM API
+// ============================================
 
 async function sendMessage(token, chatId, text, keyboard) {
   var url = 'https://api.telegram.org/bot' + token + '/sendMessage';
@@ -521,7 +487,6 @@ async function sendPhotoBytes(token, chatId, imageBuffer, caption) {
   formData.append('caption', (caption || '').slice(0, 1000));
   formData.append('parse_mode', 'HTML');
   formData.append('photo', new Blob([imageBuffer], { type: 'image/png' }), 'chart.png');
-
   var res = await fetch('https://api.telegram.org/bot' + token + '/sendPhoto', {
     method: 'POST',
     body: formData
@@ -530,13 +495,16 @@ async function sendPhotoBytes(token, chatId, imageBuffer, caption) {
 }
 
 async function answerCallback(token, callbackId) {
-  var url = 'https://api.telegram.org/bot' + token + '/answerCallbackQuery';
-  await fetch(url, {
+  await fetch('https://api.telegram.org/bot' + token + '/answerCallbackQuery', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ callback_query_id: callbackId })
   });
 }
+
+// ============================================
+// EXTERNAL APIs
+// ============================================
 
 async function fetchTwelveData(symbol, interval, apiKey, size) {
   var url = new URL('https://api.twelvedata.com/time_series');
@@ -546,25 +514,27 @@ async function fetchTwelveData(symbol, interval, apiKey, size) {
   url.searchParams.set('apikey', apiKey);
   var res = await fetch(url.toString());
   var data = await res.json();
-  if (data.status === 'error' || data.code) {
-    throw new Error(data.message || 'خطا در دریافت داده');
-  }
-  if (!data.values || !data.values.length) {
-    throw new Error('داده‌ای یافت نشد');
-  }
+  if (data.status === 'error' || data.code) throw new Error(data.message || 'خطا در دریافت داده');
+  if (!data.values || !data.values.length) throw new Error('داده‌ای یافت نشد');
   var result = [];
   for (var i = data.values.length - 1; i >= 0; i--) {
     var v = data.values[i];
     result.push({
       datetime: v.datetime || '',
-      open: parseFloat(v.open),
-      high: parseFloat(v.high),
-      low: parseFloat(v.low),
-      close: parseFloat(v.close),
+      open: parseFloat(v.open), high: parseFloat(v.high),
+      low: parseFloat(v.low), close: parseFloat(v.close),
       volume: parseFloat(v.volume || 0)
     });
   }
   return result;
+}
+
+async function getCurrentPrice(symbol, apiKey) {
+  var url = 'https://api.twelvedata.com/price?symbol=' + encodeURIComponent(symbol) + '&apikey=' + apiKey;
+  var res = await fetch(url);
+  var data = await res.json();
+  if (data.status === 'error' || data.code) throw new Error(data.message || 'خطا');
+  return parseFloat(data.price);
 }
 
 async function callGemini(apiKeys, prompt, model) {
@@ -581,11 +551,7 @@ async function callGemini(apiKeys, prompt, model) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: {
-            temperature: 0.2,
-            topP: 0.9,
-            maxOutputTokens: 12288
-          }
+          generationConfig: { temperature: 0.2, topP: 0.9, maxOutputTokens: 12288 }
         })
       });
       var data = await res.json();
@@ -594,12 +560,8 @@ async function callGemini(apiKeys, prompt, model) {
         if (text) return text;
       }
       lastError = (data.error && data.error.message) || ('HTTP ' + res.status);
-      if (res.status === 429 || res.status === 503 || res.status === 500) {
-        continue;
-      }
-      if (res.status === 401 || res.status === 403 || res.status === 400) {
-        continue;
-      }
+      if (res.status === 429 || res.status === 503 || res.status === 500) continue;
+      if (res.status === 401 || res.status === 403 || res.status === 400) continue;
       throw new Error(lastError);
     } catch (e) {
       lastError = e.message;
@@ -618,20 +580,339 @@ function getGeminiKeys(env) {
   return keys;
 }
 
-// ⭐ تحلیل تک تایم‌فریم (همون قبلی)
+// ============================================
+// JOURNAL COMMANDS
+// ============================================
+
+async function handleJournalCommand(token, chatId, args, env) {
+  var sub = (args[0] || '').toLowerCase();
+  var journal = await getJournal(env, chatId);
+
+  // /journal (بدون زیردستور)
+  if (!sub || sub === 'help') {
+    await sendMessage(token, chatId,
+      '<b>📓 ژورنال معاملات</b>\n\n' +
+      '<b>ثبت معامله جدید:</b>\n' +
+      '<code>/journal add XAUUSD BUY 2650 2642 2665</code>\n' +
+      '(نماد، جهت، ورود، SL، TP)\n\n' +
+      '<b>ثبت نتیجه:</b>\n' +
+      '<code>/journal win 1</code>\n' +
+      '<code>/journal loss 1</code>\n' +
+      '(شماره معامله از لیست)\n\n' +
+      '<b>مشاهده:</b>\n' +
+      '<code>/journal list</code> — لیست معاملات\n' +
+      '<code>/journal stats</code> — آمار عملکرد\n' +
+      '<code>/journal clear</code> — پاک کردن همه'
+    );
+    return;
+  }
+
+  if (sub === 'add') {
+    if (args.length < 6) {
+      await sendMessage(token, chatId, '❌ فرمت: <code>/journal add SYMBOL DIRECTION ENTRY SL TP</code>');
+      return;
+    }
+    var symbol = normalizeSymbol(args[1]);
+    var direction = args[2].toUpperCase();
+    var entry = parseFloat(args[3]);
+    var sl = parseFloat(args[4]);
+    var tp = parseFloat(args[5]);
+
+    if (direction !== 'BUY' && direction !== 'SELL') {
+      await sendMessage(token, chatId, '❌ جهت باید BUY یا SELL باشد');
+      return;
+    }
+    if (isNaN(entry) || isNaN(sl) || isNaN(tp)) {
+      await sendMessage(token, chatId, '❌ اعداد نامعتبر');
+      return;
+    }
+
+    journal.push({
+      id: journal.length + 1,
+      symbol: symbol,
+      direction: direction,
+      entry: entry,
+      sl: sl,
+      tp: tp,
+      ts: Date.now(),
+      result: null
+    });
+    await saveJournal(env, chatId, journal);
+
+    var rr = Math.abs(tp - entry) / Math.abs(entry - sl);
+    await sendMessage(token, chatId,
+      '✅ <b>معامله ثبت شد</b>\n\n' +
+      '📌 شماره: <b>#' + journal.length + '</b>\n' +
+      '🔹 نماد: ' + symbol + '\n' +
+      '🔹 جهت: ' + (direction === 'BUY' ? '🟢 خرید' : '🔴 فروش') + '\n' +
+      '🔹 ورود: <code>' + entry + '</code>\n' +
+      '🔹 SL: <code>' + sl + '</code>\n' +
+      '🔹 TP: <code>' + tp + '</code>\n' +
+      '🔹 R/R: 1:' + rr.toFixed(2)
+    );
+    return;
+  }
+
+  if (sub === 'win' || sub === 'loss') {
+    if (args.length < 2) {
+      await sendMessage(token, chatId, '❌ فرمت: <code>/journal ' + sub + ' ID</code>');
+      return;
+    }
+    var tradeId = parseInt(args[1]);
+    var found = null;
+    for (var i = 0; i < journal.length; i++) {
+      if (journal[i].id === tradeId) {
+        found = journal[i];
+        journal[i].result = sub;
+        break;
+      }
+    }
+    if (!found) {
+      await sendMessage(token, chatId, '❌ معامله با شماره ' + tradeId + ' پیدا نشد');
+      return;
+    }
+    await saveJournal(env, chatId, journal);
+    await sendMessage(token, chatId,
+      (sub === 'win' ? '🎉' : '😢') + ' <b>نتیجه ثبت شد</b>\n\n' +
+      'معامله #' + tradeId + ' → ' + (sub === 'win' ? 'سود ✅' : 'ضرر ❌')
+    );
+    return;
+  }
+
+  if (sub === 'list') {
+    if (!journal.length) {
+      await sendMessage(token, chatId, '📓 ژورنال خالی است');
+      return;
+    }
+    var text = '<b>📓 لیست معاملات</b>\n\n';
+    for (var j = 0; j < Math.min(journal.length, 20); j++) {
+      var t = journal[j];
+      var status = t.result === 'win' ? '✅' : t.result === 'loss' ? '❌' : '⏳';
+      text += status + ' <b>#' + t.id + '</b> ' + t.symbol + ' ' + t.direction + '\n';
+      text += '   E: <code>' + t.entry + '</code> SL: <code>' + t.sl + '</code> TP: <code>' + t.tp + '</code>\n\n';
+    }
+    if (journal.length > 20) text += '... (' + (journal.length - 20) + ' معامله دیگر)\n';
+    await sendMessage(token, chatId, text);
+    return;
+  }
+
+  if (sub === 'stats') {
+    if (!journal.length) {
+      await sendMessage(token, chatId, '📓 هنوز معامله‌ای ثبت نشده');
+      return;
+    }
+    var wins = 0, losses = 0, pending = 0;
+    var symbolStats = {};
+    var totalRR = 0, rrCount = 0;
+
+    for (var k = 0; k < journal.length; k++) {
+      var tr = journal[k];
+      if (tr.result === 'win') wins++;
+      else if (tr.result === 'loss') losses++;
+      else pending++;
+
+      if (tr.result === 'win' || tr.result === 'loss') {
+        if (!symbolStats[tr.symbol]) symbolStats[tr.symbol] = { win: 0, loss: 0 };
+        if (tr.result === 'win') symbolStats[tr.symbol].win++;
+        else symbolStats[tr.symbol].loss++;
+      }
+
+      var r = Math.abs(tr.tp - tr.entry) / Math.abs(tr.entry - tr.sl);
+      if (!isNaN(r) && isFinite(r)) { totalRR += r; rrCount++; }
+    }
+
+    var closed = wins + losses;
+    var winRate = closed > 0 ? (wins / closed * 100).toFixed(1) : '0';
+    var avgRR = rrCount > 0 ? (totalRR / rrCount).toFixed(2) : '0';
+
+    var text = '<b>📊 آمار عملکرد</b>\n\n';
+    text += '📈 کل معاملات: <b>' + journal.length + '</b>\n';
+    text += '✅ برد: <b>' + wins + '</b>\n';
+    text += '❌ باخت: <b>' + losses + '</b>\n';
+    text += '⏳ در انتظار: <b>' + pending + '</b>\n\n';
+    text += '🎯 نرخ برد: <b>' + winRate + '%</b>\n';
+    text += '⚖️ میانگین R/R: <b>1:' + avgRR + '</b>\n\n';
+
+    var bestSymbol = null, bestRate = -1;
+    for (var s in symbolStats) {
+      var total = symbolStats[s].win + symbolStats[s].loss;
+      var rate = total > 0 ? symbolStats[s].win / total : 0;
+      if (rate > bestRate && total >= 2) {
+        bestRate = rate;
+        bestSymbol = s + ' (' + (rate * 100).toFixed(0) + '%)';
+      }
+    }
+    if (bestSymbol) text += '🏆 بهترین نماد: <b>' + bestSymbol + '</b>\n';
+
+    await sendMessage(token, chatId, text);
+    return;
+  }
+
+  if (sub === 'clear') {
+    await saveJournal(env, chatId, []);
+    await sendMessage(token, chatId, '🗑️ ژورنال پاک شد');
+    return;
+  }
+
+  await sendMessage(token, chatId, '❓ زیردستور نامعتبر. /journal help را بزن');
+}
+
+// ============================================
+// WATCHLIST COMMANDS
+// ============================================
+
+async function handleWatchCommand(token, chatId, args, env) {
+  var sub = (args[0] || '').toLowerCase();
+  var watchlist = await getWatchlist(env, chatId);
+
+  if (!sub || sub === 'help') {
+    await sendMessage(token, chatId,
+      '<b>🔔 هشدار قیمتی</b>\n\n' +
+      '<b>تنظیم هشدار:</b>\n' +
+      '<code>/watch add XAUUSD above 2660</code>\n' +
+      '<code>/watch add EURUSD below 1.0800</code>\n' +
+      '(فقط above یا below)\n\n' +
+      '<b>مدیریت:</b>\n' +
+      '<code>/watch list</code> — لیست هشدارها\n' +
+      '<code>/watch remove ID</code> — حذف\n' +
+      '<code>/watch clear</code> — پاک کردن همه\n\n' +
+      '⏱️ بررسی خودکار هر ۵ دقیقه'
+    );
+    return;
+  }
+
+  if (sub === 'add') {
+    if (args.length < 4) {
+      await sendMessage(token, chatId, '❌ فرمت: <code>/watch add SYMBOL above/below PRICE</code>');
+      return;
+    }
+    var symbol = normalizeSymbol(args[1]);
+    var condition = args[2].toLowerCase();
+    var targetPrice = parseFloat(args[3]);
+
+    if (condition !== 'above' && condition !== 'below') {
+      await sendMessage(token, chatId, '❌ شرط باید above یا below باشد');
+      return;
+    }
+    if (isNaN(targetPrice)) {
+      await sendMessage(token, chatId, '❌ قیمت نامعتبر');
+      return;
+    }
+
+    watchlist.push({
+      id: watchlist.length > 0 ? Math.max.apply(null, watchlist.map(function(w) { return w.id; })) + 1 : 1,
+      symbol: symbol,
+      condition: condition,
+      price: targetPrice,
+      ts: Date.now()
+    });
+    await saveWatchlist(env, chatId, watchlist);
+
+    await sendMessage(token, chatId,
+      '🔔 <b>هشدار ثبت شد</b>\n\n' +
+      'نماد: ' + symbol + '\n' +
+      'شرط: ' + (condition === 'above' ? 'بالاتر از' : 'پایین‌تر از') + ' <code>' + targetPrice + '</code>'
+    );
+    return;
+  }
+
+  if (sub === 'list') {
+    if (!watchlist.length) {
+      await sendMessage(token, chatId, '🔔 هیچ هشداری تنظیم نشده');
+      return;
+    }
+    var text = '<b>🔔 لیست هشدارها</b>\n\n';
+    for (var i = 0; i < watchlist.length; i++) {
+      var w = watchlist[i];
+      text += '#' + w.id + ' ' + w.symbol + ' — ' +
+              (w.condition === 'above' ? '⬆️ بالای' : '⬇️ زیر') +
+              ' <code>' + w.price + '</code>\n';
+    }
+    await sendMessage(token, chatId, text);
+    return;
+  }
+
+  if (sub === 'remove') {
+    if (args.length < 2) {
+      await sendMessage(token, chatId, '❌ فرمت: <code>/watch remove ID</code>');
+      return;
+    }
+    var removeId = parseInt(args[1]);
+    var newList = watchlist.filter(function(w) { return w.id !== removeId; });
+    if (newList.length === watchlist.length) {
+      await sendMessage(token, chatId, '❌ هشدار با شماره ' + removeId + ' پیدا نشد');
+      return;
+    }
+    await saveWatchlist(env, chatId, newList);
+    await sendMessage(token, chatId, '✅ هشدار #' + removeId + ' حذف شد');
+    return;
+  }
+
+  if (sub === 'clear') {
+    await saveWatchlist(env, chatId, []);
+    await sendMessage(token, chatId, '🗑️ همه هشدارها پاک شدند');
+    return;
+  }
+
+  await sendMessage(token, chatId, '❓ زیردستور نامعتبر. /watch help را بزن');
+}
+
+// ============================================
+// WATCHLIST CHECKER (Cron)
+// ============================================
+
+async function checkWatchlist(env) {
+  try {
+    var token = env.TG_TOKEN;
+    var twelveKey = env.TWELVE_KEY;
+    var list = await env.KV.list({ prefix: 'watch:' });
+
+    for (var i = 0; i < list.keys.length; i++) {
+      var key = list.keys[i].name;
+      var chatId = key.replace('watch:', '');
+      var watchlist = await env.KV.get(key, 'json');
+      if (!watchlist || !watchlist.length) continue;
+
+      var remaining = [];
+      for (var j = 0; j < watchlist.length; j++) {
+        var w = watchlist[j];
+        try {
+          var price = await getCurrentPrice(w.symbol, twelveKey);
+          var triggered = false;
+          if (w.condition === 'above' && price >= w.price) triggered = true;
+          if (w.condition === 'below' && price <= w.price) triggered = true;
+
+          if (triggered) {
+            await sendMessage(token, chatId,
+              '🔔 <b>هشدار فعال شد!</b>\n\n' +
+              '📌 نماد: <b>' + w.symbol + '</b>\n' +
+              '🎯 شرط: ' + (w.condition === 'above' ? 'بالای' : 'زیر') + ' <code>' + w.price + '</code>\n' +
+              '💰 قیمت فعلی: <code>' + price + '</code>\n\n' +
+              '📊 برای تحلیل کامل: <code>' + w.symbol + '</code> را تایپ کنید'
+            );
+          } else {
+            remaining.push(w);
+          }
+        } catch (e) {
+          remaining.push(w);
+        }
+      }
+      await env.KV.put(key, JSON.stringify(remaining));
+    }
+  } catch (e) {
+    console.error('Watchlist check error: ' + e.message);
+  }
+}
+
+// ============================================
+// ANALYSIS FUNCTIONS
+// ============================================
+
 async function runAnalysis(token, chatId, symbol, twelveKey, geminiKeys, geminiModel, timeframe, env) {
   timeframe = timeframe || '1h';
   try {
     await sendMessage(token, chatId, '⏳ در حال تحلیل <b>' + symbol + '</b>...');
-
-    var intervalMap = {
-      '1min': '1min',
-      '3min': '5min',
-      '5min': '5min',
-      '15min': '15min',
-      '1h': '1h',
-      '4h': '4h'
-    };
+    var intervalMap = { '1min': '1min', '3min': '5min', '5min': '5min', '15min': '15min', '1h': '1h', '4h': '4h' };
     var interval = intervalMap[timeframe] || '1h';
     var klines = await fetchTwelveData(symbol, interval, twelveKey, 200);
 
@@ -645,7 +926,6 @@ async function runAnalysis(token, chatId, symbol, twelveKey, geminiKeys, geminiM
       await sendPhotoBytes(token, chatId, chartBuffer, '📊 ' + symbol + ' - ' + timeframeLabel(timeframe));
     } catch (chartErr) {
       console.error('Chart error: ' + chartErr.message);
-      await sendMessage(token, chatId, '⚠️ عکس چارت ارسال نشد: ' + chartErr.message);
     }
 
     var caption = buildCaption(levels, symbol, timeframe);
@@ -653,8 +933,7 @@ async function runAnalysis(token, chatId, symbol, twelveKey, geminiKeys, geminiM
     var fullText = tgFormat(analysisText);
     if (fullText.length > 100) {
       for (var i = 0; i < fullText.length; i += 3800) {
-        var chunk = fullText.slice(i, i + 3800);
-        await sendMessage(token, chatId, chunk);
+        await sendMessage(token, chatId, fullText.slice(i, i + 3800));
       }
     }
   } catch (e) {
@@ -662,52 +941,52 @@ async function runAnalysis(token, chatId, symbol, twelveKey, geminiKeys, geminiM
   }
 }
 
-// ⭐ تحلیل چند تایم‌فریمی
 async function runMultiTFAnalysis(token, chatId, symbol, twelveKey, geminiKeys, geminiModel, env) {
   try {
     await sendMessage(token, chatId,
-      '🎯 در حال تحلیل چند تایم‌فریمی <b>' + symbol + '</b>\n\n' +
-      '📊 تایم‌فریم‌ها: 4H + 1H + 15M\n' +
-      '⏳ این ممکنه کمی طول بکشه...'
+      '🎯 در حال تحلیل Multi-Timeframe <b>' + symbol + '</b>\n\n' +
+      '📊 4H + 1H + 15M + 1M\n' +
+      '⏳ کمی طول می‌کشه...'
     );
 
-    // دریافت داده ۳ تایم‌فریم
     var klines4H = await fetchTwelveData(symbol, '4h', twelveKey, 150);
     var klines1H = await fetchTwelveData(symbol, '1h', twelveKey, 150);
     var klines15M = await fetchTwelveData(symbol, '15min', twelveKey, 150);
+    var klines1M = await fetchTwelveData(symbol, '1min', twelveKey, 150);
 
     var fullPrompt = 'نماد: ' + symbol + '\n\n';
-    fullPrompt += '🔹 HTF (4H) — روند اصلی:\n' + klinesToText(klines4H, symbol, '4H') + '\n\n';
-    fullPrompt += '🔹 MTF (1H) — ساختار میانی:\n' + klinesToText(klines1H, symbol, '1H') + '\n\n';
-    fullPrompt += '🔹 LTF (15M) — نقطه ورود:\n' + klinesToText(klines15M, symbol, '15M') + '\n\n';
-    fullPrompt += 'لطفاً تحلیل هم‌گرایی چند تایم‌فریمی انجام بده.';
+    fullPrompt += '🔹 HTF (4H):\n' + klinesToText(klines4H, symbol, '4H') + '\n\n';
+    fullPrompt += '🔹 MTF (1H):\n' + klinesToText(klines1H, symbol, '1H') + '\n\n';
+    fullPrompt += '🔹 LTF (15M):\n' + klinesToText(klines15M, symbol, '15M') + '\n\n';
+    fullPrompt += '🔹 EntryTF (1M):\n' + klinesToText(klines1M, symbol, '1M') + '\n\n';
+    fullPrompt += 'لطفاً تحلیل MTF انجام بده.';
 
     var analysisText = await callGemini(geminiKeys, MULTI_TF_PROMPT + '\n\n' + fullPrompt, geminiModel);
     var levels = extractLevels(analysisText);
     levels = validateSignal(levels);
 
-    // چارت بر اساس تایم‌فریم 1H (میانی)
     try {
-      var chartBuffer = await buildChartImage(symbol, '1h', levels, env);
-      await sendPhotoBytes(token, chatId, chartBuffer, '📊 ' + symbol + ' - MTF (بر پایه 1H)');
+      var chartBuffer = await buildChartImage(symbol, '15min', levels, env);
+      await sendPhotoBytes(token, chatId, chartBuffer, '📊 ' + symbol + ' - MTF');
     } catch (chartErr) {
       console.error('Chart error: ' + chartErr.message);
     }
 
-    var caption = buildMultiTFCaption(levels, symbol);
-    await sendMessage(token, chatId, caption);
-
+    await sendMessage(token, chatId, buildMultiTFCaption(levels, symbol));
     var fullText = tgFormat(analysisText);
     if (fullText.length > 100) {
       for (var i = 0; i < fullText.length; i += 3800) {
-        var chunk = fullText.slice(i, i + 3800);
-        await sendMessage(token, chatId, chunk);
+        await sendMessage(token, chatId, fullText.slice(i, i + 3800));
       }
     }
   } catch (e) {
-    await sendMessage(token, chatId, '❌ خطا در تحلیل MTF: <code>' + e.message + '</code>');
+    await sendMessage(token, chatId, '❌ خطا MTF: <code>' + e.message + '</code>');
   }
 }
+
+// ============================================
+// MESSAGE HANDLER
+// ============================================
 
 async function handleUpdate(update, env) {
   var token = env.TG_TOKEN;
@@ -720,19 +999,26 @@ async function handleUpdate(update, env) {
     var text = (update.message.text || '').trim();
 
     if (text === '/start') {
-      await sendMessage(token, chatId, '🎯 <b>Everest AI Terminal</b>\n\n/analyze - تحلیل\n/status - وضعیت\n/help - راهنما\n\n💡 می‌توانید مستقیم نماد را تایپ کنید (مثل GBPJPY)');
+      await sendMessage(token, chatId,
+        '🎯 <b>Everest AI Terminal</b>\n\n' +
+        '<b>دستورات:</b>\n' +
+        '• /analyze — منوی تحلیل\n' +
+        '• /journal — ژورنال معاملات\n' +
+        '• /watch — هشدار قیمتی\n' +
+        '• /status — وضعیت\n' +
+        '• /help — راهنما\n\n' +
+        '💡 می‌توانید مستقیم نماد را تایپ کنید'
+      );
       return;
     }
     if (text === '/help') {
       await sendMessage(token, chatId,
         '📖 <b>راهنما</b>\n\n' +
-        '<b>دستورات:</b>\n' +
-        '• /analyze - منوی تحلیل\n' +
-        '• /status - وضعیت\n\n' +
-        '<b>روش‌های تحلیل:</b>\n' +
-        '• 🎯 <b>MTF</b> — تحلیل چند تایم‌فریمی (4H+1H+15M)\n' +
-        '• 📊 تحلیل تک تایم‌فریم\n\n' +
-        '<b>نمادها:</b> XAU/USD, EUR/USD, GBPJPY, BTC/USD, AAPL'
+        '<b>تحلیل:</b>\n' +
+        '• /analyze — منوی نماد\n' +
+        '• تایپ مستقیم نماد (مثل XAUUSD)\n\n' +
+        '<b>ژورنال:</b> /journal help\n' +
+        '<b>هشدار:</b> /watch help'
       );
       return;
     }
@@ -740,9 +1026,32 @@ async function handleUpdate(update, env) {
       var geminiOk = geminiKeys.length > 0 ? '✅ (' + geminiKeys.length + ')' : '❌';
       var twelveOk = twelveKey ? '✅' : '❌';
       var chartOk = env.CHART_IMG_KEY ? '✅' : '❌';
-      await sendMessage(token, chatId, '🤖 وضعیت:\n\nGemini: ' + geminiOk + '\nTwelveData: ' + twelveOk + '\nChart-Img: ' + chartOk + '\nTelegram: ✅');
+      var kvOk = env.KV ? '✅' : '❌';
+      await sendMessage(token, chatId,
+        '🤖 وضعیت:\n\n' +
+        '• Gemini: ' + geminiOk + '\n' +
+        '• TwelveData: ' + twelveOk + '\n' +
+        '• Chart-Img: ' + chartOk + '\n' +
+        '• KV (Storage): ' + kvOk + '\n' +
+        '• Telegram: ✅'
+      );
       return;
     }
+
+    // ژورنال
+    if (text.indexOf('/journal') === 0) {
+      var jArgs = text.split(/\s+/).slice(1);
+      await handleJournalCommand(token, chatId, jArgs, env);
+      return;
+    }
+
+    // Watchlist
+    if (text.indexOf('/watch') === 0) {
+      var wArgs = text.split(/\s+/).slice(1);
+      await handleWatchCommand(token, chatId, wArgs, env);
+      return;
+    }
+
     if (text === '/analyze') {
       var keyboard = {
         inline_keyboard: [
@@ -768,9 +1077,7 @@ async function handleUpdate(update, env) {
       var symbolRaw1 = sym1.replace('/', '');
       var keyboard1 = {
         inline_keyboard: [
-          [
-            { text: '🎯 تحلیل MTF', callback_data: 'mtf_' + symbolRaw1 }
-          ],
+          [{ text: '🎯 تحلیل MTF (4H+1H+15M+1M)', callback_data: 'mtf_' + symbolRaw1 }],
           [
             { text: '⏱️ 1 دقیقه', callback_data: 'tf_' + symbolRaw1 + '_1min' },
             { text: '⏱️ 3 دقیقه', callback_data: 'tf_' + symbolRaw1 + '_3min' }
@@ -793,9 +1100,7 @@ async function handleUpdate(update, env) {
       var symbolRaw2 = sym2.replace('/', '');
       var keyboard2 = {
         inline_keyboard: [
-          [
-            { text: '🎯 تحلیل MTF', callback_data: 'mtf_' + symbolRaw2 }
-          ],
+          [{ text: '🎯 تحلیل MTF (4H+1H+15M+1M)', callback_data: 'mtf_' + symbolRaw2 }],
           [
             { text: '⏱️ 1 دقیقه', callback_data: 'tf_' + symbolRaw2 + '_1min' },
             { text: '⏱️ 3 دقیقه', callback_data: 'tf_' + symbolRaw2 + '_3min' }
@@ -814,7 +1119,7 @@ async function handleUpdate(update, env) {
       return;
     }
     if (text) {
-      await sendMessage(token, chatId, '❓ متوجه نشدم.\n\n/analyze را بزنید یا نماد را تایپ کنید.\n\n/help');
+      await sendMessage(token, chatId, '❓ متوجه نشدم.\n\n/analyze یا /help');
       return;
     }
   }
@@ -826,18 +1131,15 @@ async function handleUpdate(update, env) {
     await answerCallback(token, callback.id);
 
     if (data === 'custom_symbol') {
-      await sendMessage(token, cbChatId, '✏️ نماد را تایپ کنید:\n\nمثال: GBPJPY, ETH/USD, AAPL, XAG/USD');
+      await sendMessage(token, cbChatId, '✏️ نماد را تایپ کنید:\n\nمثال: GBPJPY, ETH/USD, AAPL');
       return;
     }
-
     if (data.indexOf('symbol_') === 0) {
       var symbolRaw3 = data.replace('symbol_', '');
       var symbolDisplay = normalizeSymbol(symbolRaw3);
       var keyboard3 = {
         inline_keyboard: [
-          [
-            { text: '🎯 تحلیل MTF', callback_data: 'mtf_' + symbolRaw3 }
-          ],
+          [{ text: '🎯 تحلیل MTF (4H+1H+15M+1M)', callback_data: 'mtf_' + symbolRaw3 }],
           [
             { text: '⏱️ 1 دقیقه', callback_data: 'tf_' + symbolRaw3 + '_1min' },
             { text: '⏱️ 3 دقیقه', callback_data: 'tf_' + symbolRaw3 + '_3min' }
@@ -855,15 +1157,11 @@ async function handleUpdate(update, env) {
       await sendMessage(token, cbChatId, '⏰ روش تحلیل ' + symbolDisplay + ' را انتخاب کنید:', keyboard3);
       return;
     }
-
-    // ⭐ تحلیل MTF
     if (data.indexOf('mtf_') === 0) {
-      var symbolRawMTF = data.replace('mtf_', '');
-      var symbolMTF = normalizeSymbol(symbolRawMTF);
+      var symbolMTF = normalizeSymbol(data.replace('mtf_', ''));
       await runMultiTFAnalysis(token, cbChatId, symbolMTF, twelveKey, geminiKeys, geminiModel, env);
       return;
     }
-
     if (data.indexOf('tf_') === 0) {
       var rest = data.replace('tf_', '');
       var tfMatch = rest.match(/_([^_]+)$/);
@@ -876,6 +1174,10 @@ async function handleUpdate(update, env) {
     }
   }
 }
+
+// ============================================
+// EXPORT
+// ============================================
 
 export default {
   async fetch(request, env, ctx) {
@@ -893,5 +1195,9 @@ export default {
       return new Response('OK', { status: 200 });
     }
     return new Response('Not found', { status: 404 });
+  },
+
+  async scheduled(event, env, ctx) {
+    ctx.waitUntil(checkWatchlist(env));
   }
 };
