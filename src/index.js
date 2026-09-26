@@ -37,6 +37,67 @@ const SYSTEM_PROMPT = "شما یک تحلیل‌گر ارشد بازارهای �
 "4. R/R اعلامی با محاسبه واقعی مطابقت داشته باشد\n" +
 "5. تحلیل کامل و مفصل بنویس، حداقل ۵۰۰ کلمه";
 
+// ⭐ پرامپت مخصوص تحلیل چند تایم‌فریمی
+const MULTI_TF_PROMPT = "شما یک تحلیل‌گر ارشد بازارهای مالی با ۱۵ سال تجربه در SMC، ICT و پرایس اکشن هستید.\n\n" +
+"**وظیفه: تحلیل همزمان سه تایم‌فریم (Multi-Timeframe Confluence)**\n\n" +
+"شما داده سه تایم‌فریم مختلف دریافت می‌کنید:\n" +
+"- HTF (تایم‌فریم بالا - معمولاً 4H): برای تشخیص روند اصلی\n" +
+"- MTF (تایم‌فریم میانی - معمولاً 1H): برای ساختار و سطوح\n" +
+"- LTF (تایم‌فریم پایین - معمولاً 15M): برای نقطه ورود دقیق\n\n" +
+"**روش کار:**\n" +
+"۱. تحلیل هر تایم‌فریم به صورت جداگانه (ساختار، OB، FVG، روند)\n" +
+"۲. بررسی هم‌جهت بودن هر سه تایم‌فریم\n" +
+"۳. محاسبه Confluence Score از 0 تا 10\n" +
+"۴. سیگنال نهایی فقط وقتی معتبر است که **حداقل ۲ از ۳ تایم‌فریم** هم‌جهت باشند\n" +
+"۵. اگر ۳ از ۳ هم‌جهت باشند، سیگنال با اطمینان بالا\n" +
+"۶. اگر تایم‌فریم‌ها متناقض باشند، Direction = WAIT\n\n" +
+"**ساختار تحلیل:**\n" +
+"### 📊 تحلیل HTF (تایم‌فریم بالا)\n" +
+"- روند کلی\n" +
+"- ساختار (BOS/CHoCH)\n" +
+"- سطوح کلیدی\n\n" +
+"### 📊 تحلیل MTF (تایم‌فریم میانی)\n" +
+"- روند میانی\n" +
+"- Order Blocks و FVG مهم\n" +
+"- نقدینگی\n\n" +
+"### 📊 تحلیل LTF (تایم‌فریم پایین)\n" +
+"- روند کوتاه‌مدت\n" +
+"- نقطه ورود دقیق\n" +
+"- تاییدیه کندلی\n\n" +
+"### 🎯 هم‌گرایی (Confluence)\n" +
+"- آیا هر سه هم‌جهت هستند؟\n" +
+"- نقاط قوت و ضعف\n" +
+"- Confluence Score: [0-10]\n\n" +
+"### 💼 سناریو معاملاتی\n" +
+"- نقطه ورود دقیق\n" +
+"- حد ضرر ساختاری\n" +
+"- اهداف سود (3 سطح)\n" +
+"- نسبت R/R\n\n" +
+"### ⚠️ سناریوی مخالف\n" +
+"- چه چیزی این تحلیل را باطل می‌کند؟\n\n" +
+"**در انتهای پاسخ دقیقاً این فرمت را بنویس:**\n\n" +
+"---\n" +
+"Direction: [BUY/SELL/WAIT]\n" +
+"ConfluenceScore: [0-10]\n" +
+"HTF4H: [BULLISH/BEARISH/RANGING]\n" +
+"MTF1H: [BULLISH/BEARISH/RANGING]\n" +
+"LTF15M: [BULLISH/BEARISH/RANGING]\n" +
+"ConfidenceScore: [0-100]\n" +
+"Entry: [عدد یا N/A]\n" +
+"Stop Loss: [عدد یا N/A]\n" +
+"TP1: [عدد یا N/A]\n" +
+"TP2: [عدد یا N/A]\n" +
+"TP3: [عدد یا N/A]\n" +
+"R/R: [نسبت یا N/A]\n" +
+"---\n\n" +
+"**قوانین:**\n" +
+"1. اگر تنها ۱ تایم‌فریم هم‌جهت باشند → Direction = WAIT\n" +
+"2. اگر ۲ از ۳ هم‌جهت باشند → سیگنال با اطمینان متوسط\n" +
+"3. اگر ۳ از ۳ هم‌جهت باشند → سیگنال با اطمینان بالا\n" +
+"4. حد ضرر ساختاری در تایم‌فریم میانی تعیین شود\n" +
+"5. حداقل R/R قابل قبول: 1:2\n" +
+"6. تحلیل کامل بنویس — همه بخش‌ها را با جزئیات پر کن";
+
 function parseJsonBlock(text) {
   var match = text.match(/```json\s*([\s\S]*?)```/i);
   if (!match) return null;
@@ -100,7 +161,11 @@ function extractLevels(rawText) {
       tp1: jsonData.tp1 || null,
       tp2: jsonData.tp2 || null,
       tp3: jsonData.tp3 || null,
-      rr: jsonData.rr || null
+      rr: jsonData.rr || null,
+      confluenceScore: jsonData.confluenceScore || null,
+      htf: jsonData.htf4h || null,
+      mtf: jsonData.mtf1h || null,
+      ltf: jsonData.ltf15m || null
     };
   }
   var blocks = rawText.match(/---\s*\n([\s\S]*?)\n\s*---/g);
@@ -110,6 +175,10 @@ function extractLevels(rawText) {
   }
   var regimeMatch = text.match(/Regime\s*[:=]\s*(TRENDING_UP|TRENDING_DOWN|RANGING|TRANSITIONAL)/i);
   var rrMatch = text.match(/R\/R\s*[:=]\s*([\d\.:]+)/i);
+  var confMatch = text.match(/ConfluenceScore\s*[:=]\s*([\d\.]+)/i);
+  var htfMatch = text.match(/HTF4H\s*[:=]\s*(BULLISH|BEARISH|RANGING)/i);
+  var mtfMatch = text.match(/MTF1H\s*[:=]\s*(BULLISH|BEARISH|RANGING)/i);
+  var ltfMatch = text.match(/LTF15M\s*[:=]\s*(BULLISH|BEARISH|RANGING)/i);
   return {
     direction: detectDirection(rawText),
     regime: regimeMatch ? regimeMatch[1].toUpperCase() : null,
@@ -119,7 +188,11 @@ function extractLevels(rawText) {
     tp1: findValue(text, ['TP\\s*1']),
     tp2: findValue(text, ['TP\\s*2']),
     tp3: findValue(text, ['TP\\s*3']),
-    rr: rrMatch ? rrMatch[1] : null
+    rr: rrMatch ? rrMatch[1] : null,
+    confluenceScore: confMatch ? parseFloat(confMatch[1]) : null,
+    htf: htfMatch ? htfMatch[1].toUpperCase() : null,
+    mtf: mtfMatch ? mtfMatch[1].toUpperCase() : null,
+    ltf: ltfMatch ? ltfMatch[1].toUpperCase() : null
   };
 }
 
@@ -220,6 +293,13 @@ function regimeLabel(r) {
   return labels[r] || '';
 }
 
+function directionEmoji(d) {
+  if (d === 'BULLISH' || d === 'BUY' || d === 'LONG') return '🟢 صعودی';
+  if (d === 'BEARISH' || d === 'SELL' || d === 'SHORT') return '🔴 نزولی';
+  if (d === 'RANGING' || d === 'WAIT') return '⚪️ رنج';
+  return d || '—';
+}
+
 function buildCaption(levels, symbol, timeframe) {
   var c = '<b>📊 تحلیل چارت</b>\n\n';
   c += '<b>نماد:</b> ' + symbol + '\n';
@@ -251,6 +331,54 @@ function buildCaption(levels, symbol, timeframe) {
   return c;
 }
 
+// ⭐ کپشن مخصوص تحلیل چند تایم‌فریمی
+function buildMultiTFCaption(levels, symbol) {
+  var c = '<b>🎯 تحلیل Multi-Timeframe</b>\n\n';
+  c += '<b>نماد:</b> ' + symbol + '\n\n';
+
+  // جدول تایم‌فریم‌ها
+  if (levels.htf || levels.mtf || levels.ltf) {
+    c += '<b>📊 تحلیل تایم‌فریم‌ها:</b>\n';
+    c += '• 4H: ' + directionEmoji(levels.htf) + '\n';
+    c += '• 1H: ' + directionEmoji(levels.mtf) + '\n';
+    c += '• 15M: ' + directionEmoji(levels.ltf) + '\n\n';
+  }
+
+  // Confluence Score
+  if (levels.confluenceScore !== null && levels.confluenceScore !== undefined) {
+    var score = levels.confluenceScore;
+    var scoreEmoji = score >= 8 ? '🔥' : score >= 6 ? '✅' : score >= 4 ? '⚠️' : '❌';
+    c += '<b>هم‌گرایی:</b> ' + scoreEmoji + ' <b>' + score + '/10</b>\n\n';
+  }
+
+  var direction = levels.direction || 'WAIT';
+  var dirText = direction === 'BUY' ? '🟢 خرید' : direction === 'SELL' ? '🔴 فروش' : '⏸️ انتظار';
+  c += '<b>جهت نهایی:</b> ' + dirText + '\n';
+  if (levels.confidence !== null && levels.confidence !== undefined) {
+    c += '<b>اطمینان:</b> ' + levels.confidence + '%\n';
+  }
+  c += '\n';
+
+  if (direction === 'WAIT') {
+    c += '<i>تایم‌فریم‌ها هم‌جهت نیستند — ستاپ معتبری شناسایی نشد.</i>\n';
+  } else {
+    if (levels.entry) c += '<b>🎯 ورود:</b> <code>' + levels.entry + '</code>\n';
+    if (levels.sl) c += '<b>🛑 SL:</b> <code>' + levels.sl + '</code>\n';
+    if (levels.tp1) c += '<b>✅ TP1:</b> <code>' + levels.tp1 + '</code>\n';
+    if (levels.tp2) c += '<b>✅ TP2:</b> <code>' + levels.tp2 + '</code>\n';
+    if (levels.tp3) c += '<b>✅ TP3:</b> <code>' + levels.tp3 + '</code>\n';
+    if (levels.rr) c += '<b>⚖️ R/R:</b> <code>' + levels.rr + '</code>\n';
+  }
+
+  if (levels.validationIssues && levels.validationIssues.length) {
+    c += '\n<b>⚠️ اعتبارسنجی:</b>\n';
+    levels.validationIssues.slice(0, 3).forEach(function(iss) {
+      c += '• ' + iss + '\n';
+    });
+  }
+  return c;
+}
+
 function tgFormat(text) {
   var cleaned = text.replace(/```json[\s\S]*?```/gi, '');
   cleaned = cleaned.replace(/```[\s\S]*?```/g, '');
@@ -261,7 +389,6 @@ function tgFormat(text) {
   return h.trim();
 }
 
-// ⭐ دریافت عکس چارت با خطوط Entry/SL/TP
 async function buildChartImage(symbol, timeframe, levels, env) {
   if (!env.CHART_IMG_KEY) {
     throw new Error('CHART_IMG_KEY تنظیم نشده');
@@ -286,7 +413,6 @@ async function buildChartImage(symbol, timeframe, levels, env) {
   };
   var chartInterval = intervalMap[timeframe] || '1h';
 
-  // ساخت خطوط افقی از سطوح تحلیل
   var horizontalLines = [];
   if (levels && levels.direction !== 'WAIT') {
     if (levels.entry) {
@@ -492,7 +618,7 @@ function getGeminiKeys(env) {
   return keys;
 }
 
-// ⭐ runAnalysis: اول تحلیل، بعد چارت با خطوط
+// ⭐ تحلیل تک تایم‌فریم (همون قبلی)
 async function runAnalysis(token, chatId, symbol, twelveKey, geminiKeys, geminiModel, timeframe, env) {
   timeframe = timeframe || '1h';
   try {
@@ -509,13 +635,11 @@ async function runAnalysis(token, chatId, symbol, twelveKey, geminiKeys, geminiM
     var interval = intervalMap[timeframe] || '1h';
     var klines = await fetchTwelveData(symbol, interval, twelveKey, 200);
 
-    // ⭐ مرحله ۱: اول تحلیل با AI
     var fullPrompt = 'نماد: ' + symbol + '\nتایم‌فریم: ' + timeframeLabel(timeframe) + '\n\n' + klinesToText(klines, symbol, timeframeLabel(timeframe));
     var analysisText = await callGemini(geminiKeys, SYSTEM_PROMPT + '\n\n' + fullPrompt, geminiModel);
     var levels = extractLevels(analysisText);
     levels = validateSignal(levels);
 
-    // ⭐ مرحله ۲: حالا چارت با خطوط رسم می‌شه
     try {
       var chartBuffer = await buildChartImage(symbol, timeframe, levels, env);
       await sendPhotoBytes(token, chatId, chartBuffer, '📊 ' + symbol + ' - ' + timeframeLabel(timeframe));
@@ -524,7 +648,6 @@ async function runAnalysis(token, chatId, symbol, twelveKey, geminiKeys, geminiM
       await sendMessage(token, chatId, '⚠️ عکس چارت ارسال نشد: ' + chartErr.message);
     }
 
-    // ⭐ مرحله ۳: کپشن و تحلیل کامل
     var caption = buildCaption(levels, symbol, timeframe);
     await sendMessage(token, chatId, caption);
     var fullText = tgFormat(analysisText);
@@ -539,20 +662,78 @@ async function runAnalysis(token, chatId, symbol, twelveKey, geminiKeys, geminiM
   }
 }
 
+// ⭐ تحلیل چند تایم‌فریمی
+async function runMultiTFAnalysis(token, chatId, symbol, twelveKey, geminiKeys, geminiModel, env) {
+  try {
+    await sendMessage(token, chatId,
+      '🎯 در حال تحلیل چند تایم‌فریمی <b>' + symbol + '</b>\n\n' +
+      '📊 تایم‌فریم‌ها: 4H + 1H + 15M\n' +
+      '⏳ این ممکنه کمی طول بکشه...'
+    );
+
+    // دریافت داده ۳ تایم‌فریم
+    var klines4H = await fetchTwelveData(symbol, '4h', twelveKey, 150);
+    var klines1H = await fetchTwelveData(symbol, '1h', twelveKey, 150);
+    var klines15M = await fetchTwelveData(symbol, '15min', twelveKey, 150);
+
+    var fullPrompt = 'نماد: ' + symbol + '\n\n';
+    fullPrompt += '🔹 HTF (4H) — روند اصلی:\n' + klinesToText(klines4H, symbol, '4H') + '\n\n';
+    fullPrompt += '🔹 MTF (1H) — ساختار میانی:\n' + klinesToText(klines1H, symbol, '1H') + '\n\n';
+    fullPrompt += '🔹 LTF (15M) — نقطه ورود:\n' + klinesToText(klines15M, symbol, '15M') + '\n\n';
+    fullPrompt += 'لطفاً تحلیل هم‌گرایی چند تایم‌فریمی انجام بده.';
+
+    var analysisText = await callGemini(geminiKeys, MULTI_TF_PROMPT + '\n\n' + fullPrompt, geminiModel);
+    var levels = extractLevels(analysisText);
+    levels = validateSignal(levels);
+
+    // چارت بر اساس تایم‌فریم 1H (میانی)
+    try {
+      var chartBuffer = await buildChartImage(symbol, '1h', levels, env);
+      await sendPhotoBytes(token, chatId, chartBuffer, '📊 ' + symbol + ' - MTF (بر پایه 1H)');
+    } catch (chartErr) {
+      console.error('Chart error: ' + chartErr.message);
+    }
+
+    var caption = buildMultiTFCaption(levels, symbol);
+    await sendMessage(token, chatId, caption);
+
+    var fullText = tgFormat(analysisText);
+    if (fullText.length > 100) {
+      for (var i = 0; i < fullText.length; i += 3800) {
+        var chunk = fullText.slice(i, i + 3800);
+        await sendMessage(token, chatId, chunk);
+      }
+    }
+  } catch (e) {
+    await sendMessage(token, chatId, '❌ خطا در تحلیل MTF: <code>' + e.message + '</code>');
+  }
+}
+
 async function handleUpdate(update, env) {
   var token = env.TG_TOKEN;
   var twelveKey = env.TWELVE_KEY;
   var geminiKeys = getGeminiKeys(env);
   var geminiModel = env.GEMINI_MODEL || 'gemini-3.5-flash-lite';
+
   if (update.message) {
     var chatId = update.message.chat.id;
     var text = (update.message.text || '').trim();
+
     if (text === '/start') {
       await sendMessage(token, chatId, '🎯 <b>Everest AI Terminal</b>\n\n/analyze - تحلیل\n/status - وضعیت\n/help - راهنما\n\n💡 می‌توانید مستقیم نماد را تایپ کنید (مثل GBPJPY)');
       return;
     }
     if (text === '/help') {
-      await sendMessage(token, chatId, '📖 راهنما\n\nنمادها: XAU/USD, EUR/USD, BTC/USD, GBPJPY, AAPL, ETH/USD\n\nتایم‌فریم‌ها: 1، 3، 5، 15 دقیقه، 1 و 4 ساعت');
+      await sendMessage(token, chatId,
+        '📖 <b>راهنما</b>\n\n' +
+        '<b>دستورات:</b>\n' +
+        '• /analyze - منوی تحلیل\n' +
+        '• /status - وضعیت\n\n' +
+        '<b>روش‌های تحلیل:</b>\n' +
+        '• 🎯 <b>MTF</b> — تحلیل چند تایم‌فریمی (4H+1H+15M)\n' +
+        '• 📊 تحلیل تک تایم‌فریم\n\n' +
+        '<b>نمادها:</b> XAU/USD, EUR/USD, GBPJPY, BTC/USD, AAPL'
+      );
       return;
     }
     if (text === '/status') {
@@ -588,6 +769,9 @@ async function handleUpdate(update, env) {
       var keyboard1 = {
         inline_keyboard: [
           [
+            { text: '🎯 تحلیل MTF', callback_data: 'mtf_' + symbolRaw1 }
+          ],
+          [
             { text: '⏱️ 1 دقیقه', callback_data: 'tf_' + symbolRaw1 + '_1min' },
             { text: '⏱️ 3 دقیقه', callback_data: 'tf_' + symbolRaw1 + '_3min' }
           ],
@@ -601,7 +785,7 @@ async function handleUpdate(update, env) {
           ]
         ]
       };
-      await sendMessage(token, chatId, '⏰ تایم‌فریم ' + sym1 + ' را انتخاب کنید:', keyboard1);
+      await sendMessage(token, chatId, '⏰ روش تحلیل ' + sym1 + ' را انتخاب کنید:', keyboard1);
       return;
     }
     if (text && text.charAt(0) !== '/' && looksLikeSymbol(text)) {
@@ -609,6 +793,9 @@ async function handleUpdate(update, env) {
       var symbolRaw2 = sym2.replace('/', '');
       var keyboard2 = {
         inline_keyboard: [
+          [
+            { text: '🎯 تحلیل MTF', callback_data: 'mtf_' + symbolRaw2 }
+          ],
           [
             { text: '⏱️ 1 دقیقه', callback_data: 'tf_' + symbolRaw2 + '_1min' },
             { text: '⏱️ 3 دقیقه', callback_data: 'tf_' + symbolRaw2 + '_3min' }
@@ -623,7 +810,7 @@ async function handleUpdate(update, env) {
           ]
         ]
       };
-      await sendMessage(token, chatId, '✅ نماد: <b>' + sym2 + '</b>\n\n⏰ تایم‌فریم را انتخاب کنید:', keyboard2);
+      await sendMessage(token, chatId, '✅ نماد: <b>' + sym2 + '</b>\n\n⏰ روش تحلیل را انتخاب کنید:', keyboard2);
       return;
     }
     if (text) {
@@ -631,20 +818,26 @@ async function handleUpdate(update, env) {
       return;
     }
   }
+
   if (update.callback_query) {
     var callback = update.callback_query;
     var cbChatId = callback.message.chat.id;
     var data = callback.data;
     await answerCallback(token, callback.id);
+
     if (data === 'custom_symbol') {
       await sendMessage(token, cbChatId, '✏️ نماد را تایپ کنید:\n\nمثال: GBPJPY, ETH/USD, AAPL, XAG/USD');
       return;
     }
+
     if (data.indexOf('symbol_') === 0) {
       var symbolRaw3 = data.replace('symbol_', '');
       var symbolDisplay = normalizeSymbol(symbolRaw3);
       var keyboard3 = {
         inline_keyboard: [
+          [
+            { text: '🎯 تحلیل MTF', callback_data: 'mtf_' + symbolRaw3 }
+          ],
           [
             { text: '⏱️ 1 دقیقه', callback_data: 'tf_' + symbolRaw3 + '_1min' },
             { text: '⏱️ 3 دقیقه', callback_data: 'tf_' + symbolRaw3 + '_3min' }
@@ -659,9 +852,18 @@ async function handleUpdate(update, env) {
           ]
         ]
       };
-      await sendMessage(token, cbChatId, '⏰ تایم‌فریم ' + symbolDisplay + ' را انتخاب کنید:', keyboard3);
+      await sendMessage(token, cbChatId, '⏰ روش تحلیل ' + symbolDisplay + ' را انتخاب کنید:', keyboard3);
       return;
     }
+
+    // ⭐ تحلیل MTF
+    if (data.indexOf('mtf_') === 0) {
+      var symbolRawMTF = data.replace('mtf_', '');
+      var symbolMTF = normalizeSymbol(symbolRawMTF);
+      await runMultiTFAnalysis(token, cbChatId, symbolMTF, twelveKey, geminiKeys, geminiModel, env);
+      return;
+    }
+
     if (data.indexOf('tf_') === 0) {
       var rest = data.replace('tf_', '');
       var tfMatch = rest.match(/_([^_]+)$/);
