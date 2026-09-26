@@ -293,7 +293,7 @@ async function buildChartImage(symbol, timeframe, env) {
     symbol: exchange + ':' + symUpper,
     interval: chartInterval,
     theme: 'dark',
-    width: 1000,
+    width: 800,
     height: 600,
     studies: [
       { name: 'Volume', forceOverlay: true },
