@@ -4,7 +4,7 @@
 
 const SYSTEM_PROMPT = `شما یک تحلیل‌گر ارشد بازارهای مالی با ۱۵ سال تجربه در SMC، ICT و پرایس اکشن هستید.
 
-**روش کار: تحلیل مرحله‌به‌مرحله**
+روش کار:
 1. استخراج داده خام
 2. تشخیص رژیم بازار
 3. شناسایی BOS، CHoCH و نواحی نقدینگی
@@ -13,7 +13,7 @@ const SYSTEM_PROMPT = `شما یک تحلیل‌گر ارشد بازارهای �
 6. امتیازدهی ۶ لایه هم‌گرایی
 7. تصمیم نهایی
 
-**ساختار تحلیل:**
+ساختار تحلیل:
 ۰. رژیم بازار (Trending/Ranging/Transitional)
 ۱. ساختار بازار (BOS، CHoCH، Retest، نقدینگی)
 ۲. SMC (Order Blocks، FVG، Premium/Discount)
@@ -25,7 +25,7 @@ const SYSTEM_PROMPT = `شما یک تحلیل‌گر ارشد بازارهای �
 ۸. سناریوی مخالف
 ۹. خلاصه اجرایی
 
-**در انتهای پاسخ، دقیقاً این فرمت را بنویس:**
+در انتهای پاسخ، دقیقاً این فرمت را بنویس:
 
 ---
 Direction: [BUY/SELL/WAIT]
@@ -41,7 +41,7 @@ TP3: [عدد یا N/A]
 R/R: [نسبت مثل 1:2.5 یا N/A]
 ---
 
-**قوانین:**
+قوانین:
 1. اگر Confidence < 65 باشد، Direction = WAIT
 2. حد ضرر باید ساختاری باشد
 3. در BUY، SL زیر Entry و در SELL، SL بالای Entry
@@ -49,16 +49,12 @@ R/R: [نسبت مثل 1:2.5 یا N/A]
 
 const LIVE_PREFIX = "حالت ورودی: داده OHLCV از Twelve Data.\n\n";
 
-// ============================================
-// PARSING FUNCTIONS
-// ============================================
-
 function parseJsonBlock(text) {
   const match = text.match(/```json\s*([\s\S]*?)```/i);
   if (!match) return null;
   try {
     return JSON.parse(match[1].trim());
-  } catch {
+  } catch (e) {
     return null;
   }
 }
@@ -67,7 +63,8 @@ function parseRR(rrStr) {
   if (!rrStr) return null;
   const m = String(rrStr).match(/(\d+(?:\.\d+)?)\s*[:/]\s*(\d+(?:\.\d+)?)/);
   if (m) {
-    const a = parseFloat(m[1]), b = parseFloat(m[2]);
+    const a = parseFloat(m[1]);
+    const b = parseFloat(m[2]);
     return a > 0 ? b / a : null;
   }
   const n = parseFloat(rrStr);
@@ -75,8 +72,9 @@ function parseRR(rrStr) {
 }
 
 function findValue(text, labels) {
-  for (const label of labels) {
-    const pattern = new RegExp(`\\*{0,2}${label}\\*{0,2}\\s*[:=]\\s*\\*{0,2}\\s*([^\\n]+)`, 'i');
+  for (let i = 0; i < labels.length; i++) {
+    const label = labels[i];
+    const pattern = new RegExp("\\*{0,2}" + label + "\\*{0,2}\\s*[:=]\\s*\\*{0,2}\\s*([^\\n]+)", 'i');
     const m = text.match(pattern);
     if (m) {
       const val = m[1].trim();
@@ -143,13 +141,17 @@ function extractLevels(rawText) {
     };
   }
 
-  const blocks = [...rawText.matchAll(/---\s*\n([\s\S]*?)\n\s*---/g)];
+  const blocks = Array.from(rawText.matchAll(/---\s*\n([\s\S]*?)\n\s*---/g));
   const text = blocks.length ? blocks[blocks.length - 1][1] : rawText;
+
+  const regimeMatch = text.match(/Regime\s*[:=]\s*(TRENDING_UP|TRENDING_DOWN|RANGING|TRANSITIONAL)/i);
+  const playbookMatch = text.match(/PlaybookType\s*[:=]\s*(TREND_CONTINUATION|RANGE_FADE|NONE)/i);
+  const rrMatch = text.match(/R\/R\s*[:=]\s*([\d\.:]+)/i);
 
   return {
     direction: detectDirection(rawText),
-    regime: (text.match(/Regime\s*[:=]\s*(TRENDING_UP|TRENDING_DOWN|RANGING|TRANSITIONAL)/i) || [])[1]?.toUpperCase() || null,
-    playbookType: (text.match(/PlaybookType\s*[:=]\s*(TREND_CONTINUATION|RANGE_FADE|NONE)/i) || [])[1]?.toUpperCase() || null,
+    regime: regimeMatch ? regimeMatch[1].toUpperCase() : null,
+    playbookType: playbookMatch ? playbookMatch[1].toUpperCase() : null,
     confidence: findValue(text, ['ConfidenceScore', 'امتیاز\\s*اطمینان']),
     entry: findValue(text, ['Entry', 'نقطه\\s*ورود', 'ورود']),
     entryLow: null,
@@ -158,7 +160,7 @@ function extractLevels(rawText) {
     tp1: findValue(text, ['TP\\s*1', 'حد\\s*سود\\s*1']),
     tp2: findValue(text, ['TP\\s*2', 'حد\\s*سود\\s*2']),
     tp3: findValue(text, ['TP\\s*3', 'حد\\s*سود\\s*3']),
-    rr: (text.match(/R\/R\s*[:=]\s*([\d\.:]+)/i) || [])[1] || null,
+    rr: rrMatch ? rrMatch[1] : null,
     scores: {}
   };
 }
@@ -172,10 +174,10 @@ function validateSignal(levels, thresholds) {
   if (originalDir !== 'WAIT') {
     const conf = levels.confidence;
     if (conf === null || conf === undefined) {
-      issues.push('امتیاز اطمینان استخراج نشد - به WAIT تغییر یافت');
+      issues.push('امتیاز اطمینان استخراج نشد');
       levels.direction = 'WAIT';
     } else if (conf < minConf) {
-      issues.push(`اطمینان ${conf}% زیر آستانه ${minConf}% - به WAIT تغییر یافت`);
+      issues.push('اطمینان ' + conf + '% زیر آستانه ' + minConf + '%');
       levels.direction = 'WAIT';
     }
   }
@@ -185,18 +187,18 @@ function validateSignal(levels, thresholds) {
     const sl = levels.sl;
 
     if (entry === null) {
-      issues.push('Entry موجود نیست - نامعتبر');
+      issues.push('Entry موجود نیست');
       levels.direction = 'WAIT';
     } else if (sl === null) {
-      issues.push('Stop Loss موجود نیست - نامعتبر');
+      issues.push('Stop Loss موجود نیست');
       levels.direction = 'WAIT';
     } else {
       if (levels.direction === 'BUY' && sl >= entry) {
-        issues.push('SL بالاتر از Entry در BUY - نامعتبر');
+        issues.push('SL بالاتر از Entry در BUY');
         levels.direction = 'WAIT';
       }
       if (levels.direction === 'SELL' && sl <= entry) {
-        issues.push('SL پایین‌تر از Entry در SELL - نامعتبر');
+        issues.push('SL پایین‌تر از Entry در SELL');
         levels.direction = 'WAIT';
       }
     }
@@ -207,15 +209,15 @@ function validateSignal(levels, thresholds) {
       const actualRR = risk > 0 ? reward / risk : 0;
 
       if (actualRR < minRR) {
-        issues.push(`R/R محاسبه‌شده 1:${actualRR.toFixed(2)} کمتر از 1:${minRR} - رد شد`);
+        issues.push('R/R محاسبه‌شده ' + actualRR.toFixed(2) + ' کمتر از ' + minRR);
         levels.direction = 'WAIT';
       } else {
         const statedRR = parseRR(levels.rr);
         if (statedRR && Math.abs(statedRR - actualRR) / actualRR > 0.30) {
-          issues.push('R/R اعلامی با محاسبه واقعی اختلاف داشت - اصلاح شد');
-          levels.rr = `1:${actualRR.toFixed(2)}`;
+          issues.push('R/R اصلاح شد');
+          levels.rr = '1:' + actualRR.toFixed(2);
         } else if (!statedRR) {
-          levels.rr = `1:${actualRR.toFixed(2)}`;
+          levels.rr = '1:' + actualRR.toFixed(2);
         }
       }
     }
@@ -232,64 +234,47 @@ function klinesToText(klines, symbol, tfName) {
 
   const last = klines[klines.length - 1];
   const recent = klines.slice(-40);
-  const highs = klines.map(k => k.high);
-  const lows = klines.map(k => k.low);
-  const closes = klines.map(k => k.close);
+  const highs = klines.map(function(k) { return k.high; });
+  const lows = klines.map(function(k) { return k.low; });
+  const closes = klines.map(function(k) { return k.close; });
 
-  const maxH = Math.max(...highs);
-  const minL = Math.min(...lows);
+  const maxH = Math.max.apply(null, highs);
+  const minL = Math.min.apply(null, lows);
 
-  const a20 = closes.slice(-20).reduce((a, b) => a + b, 0) / 20;
-  const p20 = closes.slice(-40, -20).reduce((a, b) => a + b, 0) / 20;
+  const a20 = closes.slice(-20).reduce(function(a, b) { return a + b; }, 0) / 20;
+  const p20 = closes.slice(-40, -20).reduce(function(a, b) { return a + b; }, 0) / 20;
   const trend = a20 > p20 * 1.002 ? 'صعودی' : a20 < p20 * 0.998 ? 'نزولی' : 'خنثی';
 
-  const rows = recent.slice(-25).map(k => {
+  const rows = recent.slice(-25).map(function(k) {
     const t = k.datetime ? k.datetime.slice(-8, -3) : '';
-    return `  ${t} | O:${k.open} H:${k.high} L:${k.low} C:${k.close} V:${Math.round(k.volume || 0)}`;
+    return '  ' + t + ' | O:' + k.open + ' H:' + k.high + ' L:' + k.low + ' C:' + k.close + ' V:' + Math.round(k.volume || 0);
   }).join('\n');
 
-  return `=== ${tfName} (${symbol}) ===
-قیمت فعلی: ${last.close}
-High(200): ${maxH} | Low(200): ${minL}
-Trend(40): ${trend}
-
-${rows}`;
+  return '=== ' + tfName + ' (' + symbol + ') ===\n' +
+    'قیمت فعلی: ' + last.close + '\n' +
+    'High(200): ' + maxH + ' | Low(200): ' + minL + '\n' +
+    'Trend(40): ' + trend + '\n\n' +
+    rows;
 }
-
-// ============================================
-// SYMBOL NORMALIZATION
-// ============================================
 
 function normalizeSymbol(sym) {
   if (!sym) return '';
   const cleaned = sym.trim().toUpperCase();
-
-  // اگه قبلاً / داره، همون رو برگردون
-  if (cleaned.includes('/')) return cleaned;
-
-  // XAUUSD → XAU/USD
+  if (cleaned.indexOf('/') !== -1) return cleaned;
   const match = cleaned.match(/^([A-Z]+)(USD|EUR|GBP|JPY|CHF|AUD|CAD|NZD)$/);
-  if (match) return `${match[1]}/${match[2]}`;
-
+  if (match) return match[1] + '/' + match[2];
   return cleaned;
 }
 
-// تشخیص اینکه آیا متن ورودی شبیه نماد است
 function looksLikeSymbol(text) {
   if (!text) return false;
   const cleaned = text.trim();
-  // الگو: ۳ تا ۱۰ حرف بزرگ، اختیاری با / یا - یا بدون جداکننده
-  // مثل: XAUUSD، XAU/USD، EURUSD، BTCUSD، AAPL، ETH/USD
   return /^[A-Za-z]{2,10}(\/[A-Za-z]{2,10})?$/.test(cleaned) ||
-         /^[A-Za-z]{2,10}[-][A-Za-z]{2,10}$/.test(cleaned);
+         /^[A-Za-z]{2,10}-[A-Za-z]{2,10}$/.test(cleaned);
 }
 
-// ============================================
-// TELEGRAM API
-// ============================================
-
-async function sendMessage(token, chatId, text, keyboard = null) {
-  const url = `https://api.telegram.org/bot${token}/sendMessage`;
+async function sendMessage(token, chatId, text, keyboard) {
+  const url = 'https://api.telegram.org/bot' + token + '/sendMessage';
   const payload = {
     chat_id: chatId,
     text: text.slice(0, 4000),
@@ -306,12 +291,12 @@ async function sendMessage(token, chatId, text, keyboard = null) {
   return res.json();
 }
 
-async function sendPhoto(token, chatId, photoUrl, caption = '') {
-  const url = `https://api.telegram.org/bot${token}/sendPhoto`;
+async function sendPhoto(token, chatId, photoUrl, caption) {
+  const url = 'https://api.telegram.org/bot' + token + '/sendPhoto';
   const payload = {
     chat_id: chatId,
     photo: photoUrl,
-    caption: caption.slice(0, 1000),
+    caption: (caption || '').slice(0, 1000),
     parse_mode: 'HTML'
   };
 
@@ -323,20 +308,17 @@ async function sendPhoto(token, chatId, photoUrl, caption = '') {
   return res.json();
 }
 
-async function answerCallback(token, callbackId, text = '') {
-  const url = `https://api.telegram.org/bot${token}/answerCallbackQuery`;
+async function answerCallback(token, callbackId, text) {
+  const url = 'https://api.telegram.org/bot' + token + '/answerCallbackQuery';
   await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ callback_query_id: callbackId, text })
+    body: JSON.stringify({ callback_query_id: callbackId, text: text || '' })
   });
 }
 
-// ============================================
-// EXTERNAL APIs
-// ============================================
-
-async function fetchTwelveData(symbol, interval, apiKey, size = 200) {
+async function fetchTwelveData(symbol, interval, apiKey, size) {
+  size = size || 200;
   const url = new URL('https://api.twelvedata.com/time_series');
   url.searchParams.set('symbol', symbol);
   url.searchParams.set('interval', interval);
@@ -351,20 +333,23 @@ async function fetchTwelveData(symbol, interval, apiKey, size = 200) {
   }
 
   if (!data.values || !data.values.length) {
-    throw new Error(`داده‌ای برای ${symbol} در ${interval} یافت نشد`);
+    throw new Error('داده‌ای برای ' + symbol + ' در ' + interval + ' یافت نشد');
   }
 
-  return data.values.reverse().map(v => ({
-    datetime: v.datetime || '',
-    open: parseFloat(v.open),
-    high: parseFloat(v.high),
-    low: parseFloat(v.low),
-    close: parseFloat(v.close),
-    volume: parseFloat(v.volume || 0)
-  }));
+  return data.values.reverse().map(function(v) {
+    return {
+      datetime: v.datetime || '',
+      open: parseFloat(v.open),
+      high: parseFloat(v.high),
+      low: parseFloat(v.low),
+      close: parseFloat(v.close),
+      volume: parseFloat(v.volume || 0)
+    };
+  });
 }
 
-async function callGemini(apiKeys, prompt, model = 'gemini-3.5-flash-lite') {
+async function callGemini(apiKeys, prompt, model) {
+  model = model || 'gemini-3.5-flash-lite';
   const keys = Array.isArray(apiKeys) ? apiKeys.filter(Boolean) : [apiKeys].filter(Boolean);
 
   if (!keys.length) {
@@ -375,7 +360,7 @@ async function callGemini(apiKeys, prompt, model = 'gemini-3.5-flash-lite') {
 
   for (let i = 0; i < keys.length; i++) {
     const apiKey = keys[i];
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+    const url = 'https://generativelanguage.googleapis.com/v1beta/models/' + model + ':generateContent?key=' + apiKey;
 
     try {
       const res = await fetch(url, {
@@ -394,24 +379,24 @@ async function callGemini(apiKeys, prompt, model = 'gemini-3.5-flash-lite') {
       const data = await res.json();
 
       if (res.ok) {
-        const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+        const text = data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts && data.candidates[0].content.parts[0] && data.candidates[0].content.parts[0].text;
         if (text) {
-          console.log(`Gemini success with key ${i + 1}/${keys.length}`);
+          console.log('Gemini success with key ' + (i + 1) + '/' + keys.length);
           return text;
         }
       }
 
-      lastError = data.error?.message || `HTTP ${res.status}`;
+      lastError = (data.error && data.error.message) || ('HTTP ' + res.status);
 
       if (res.status === 429 || res.status === 503 || res.status === 500 ||
-          lastError.includes('quota') || lastError.includes('rate') ||
-          lastError.includes('demand') || lastError.includes('overloaded')) {
-        console.log(`Key ${i + 1} failed with ${res.status}, trying next...`);
+          lastError.indexOf('quota') !== -1 || lastError.indexOf('rate') !== -1 ||
+          lastError.indexOf('demand') !== -1 || lastError.indexOf('overloaded') !== -1) {
+        console.log('Key ' + (i + 1) + ' failed, trying next...');
         continue;
       }
 
       if (res.status === 401 || res.status === 403 || res.status === 400) {
-        console.log(`Key ${i + 1} invalid, trying next...`);
+        console.log('Key ' + (i + 1) + ' invalid, trying next...');
         continue;
       }
 
@@ -419,23 +404,18 @@ async function callGemini(apiKeys, prompt, model = 'gemini-3.5-flash-lite') {
 
     } catch (e) {
       lastError = e.message;
-      console.log(`Key ${i + 1} error: ${e.message}`);
+      console.log('Key ' + (i + 1) + ' error: ' + e.message);
       continue;
     }
   }
 
-  throw new Error(`همه کلیدهای Gemini خطا دادند. آخرین خطا: ${lastError}`);
+  throw new Error('همه کلیدهای Gemini خطا دادند. آخرین خطا: ' + lastError);
 }
 
-// ============================================
-// CHART IMAGE (QuickChart)
-// ============================================
-
-async function buildChartImageUrl(symbol, timeframe, klines) {
-  // فقط ۵۰ کندل آخر برای خوانایی
+function buildChartUrl(symbol, timeframe, klines) {
   const recent = klines.slice(-50);
-  const closes = recent.map(k => k.close);
-  const labels = recent.map(k => {
+  const closes = recent.map(function(k) { return k.close; });
+  const labels = recent.map(function(k) {
     if (!k.datetime) return '';
     return k.datetime.length > 11 ? k.datetime.slice(11, 16) : k.datetime;
   });
@@ -445,67 +425,20 @@ async function buildChartImageUrl(symbol, timeframe, klines) {
     data: {
       labels: labels,
       datasets: [{
-        label: `${symbol} - ${timeframeLabel(timeframe)}`,
+        label: symbol + ' - ' + timeframeLabel(timeframe),
         data: closes,
         borderColor: '#00c6ff',
         backgroundColor: 'rgba(0, 198, 255, 0.15)',
         borderWidth: 2,
         pointRadius: 0,
-        fill: true,
-        tension: 0.1
+        fill: true
       }]
-    },
-    options: {
-      title: {
-        display: true,
-        text: `${symbol} - ${timeframeLabel(timeframe)}`
-      },
-      legend: {
-        display: false
-      },
-      scales: {
-        yAxes: [{
-          ticks: { fontColor: '#aaaaaa' },
-          gridLines: { color: 'rgba(255,255,255,0.1)' }
-        }],
-        xAxes: [{
-          ticks: { fontColor: '#aaaaaa', maxTicksLimit: 8 },
-          gridLines: { color: 'rgba(255,255,255,0.05)' }
-        }]
-      }
     }
   };
 
-  // استفاده از POST برای دریافت URL کوتاه
-  try {
-    const res = await fetch('https://quickchart.io/chart/create', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        chart: chartConfig,
-        width: 900,
-        height: 450,
-        backgroundColor: '#1a1a3e',
-        format: 'png'
-      })
-    });
-
-    const data = await res.json();
-    if (data.success && data.url) {
-      return data.url;
-    }
-  } catch (e) {
-    console.error('QuickChart POST error:', e.message);
-  }
-
-  // fallback: استفاده از GET با URL-encoded
   const encoded = encodeURIComponent(JSON.stringify(chartConfig));
-  return `https://quickchart.io/chart?c=${encoded}&w=900&h=450&bkg=%231a1a3e&format=png`;
+  return 'https://quickchart.io/chart?c=' + encoded + '&w=900&h=450&bkg=%231a1a3e&format=png';
 }
-
-// ============================================
-// FORMATTING
-// ============================================
 
 function regimeLabel(r) {
   const labels = {
@@ -531,19 +464,19 @@ function timeframeLabel(tf) {
 
 function buildCaption(levels, symbol, timeframe) {
   let c = '<b>📊 تحلیل چارت</b>\n\n';
-  c += `<b>نماد:</b> ${symbol}\n`;
-  c += `<b>تایم‌فریم:</b> ${timeframeLabel(timeframe)}\n\n`;
+  c += '<b>نماد:</b> ' + symbol + '\n';
+  c += '<b>تایم‌فریم:</b> ' + timeframeLabel(timeframe) + '\n\n';
 
   const direction = levels.direction || 'WAIT';
   const dirText = direction === 'BUY' ? '🟢 خرید' : direction === 'SELL' ? '🔴 فروش' : '⏸️ انتظار';
-  c += `<b>جهت:</b> ${dirText}\n`;
+  c += '<b>جهت:</b> ' + dirText + '\n';
 
   if (levels.regime) {
-    c += `<b>رژیم:</b> ${regimeLabel(levels.regime)}\n`;
+    c += '<b>رژیم:</b> ' + regimeLabel(levels.regime) + '\n';
   }
 
   if (levels.confidence !== null && levels.confidence !== undefined) {
-    c += `<b>اطمینان:</b> ${levels.confidence}%\n`;
+    c += '<b>اطمینان:</b> ' + levels.confidence + '%\n';
   }
 
   c += '\n';
@@ -552,21 +485,21 @@ function buildCaption(levels, symbol, timeframe) {
     c += '<i>ستاپ معتبری شناسایی نشد.</i>\n';
   } else {
     if (levels.entryLow && levels.entryHigh) {
-      c += `<b>🎯 ورود:</b> <code>${levels.entryLow} - ${levels.entryHigh}</code>\n`;
+      c += '<b>🎯 ورود:</b> <code>' + levels.entryLow + ' - ' + levels.entryHigh + '</code>\n';
     } else if (levels.entry) {
-      c += `<b>🎯 ورود:</b> <code>${levels.entry}</code>\n`;
+      c += '<b>🎯 ورود:</b> <code>' + levels.entry + '</code>\n';
     }
-    if (levels.sl) c += `<b>🛑 SL:</b> <code>${levels.sl}</code>\n`;
-    if (levels.tp1) c += `<b>✅ TP1:</b> <code>${levels.tp1}</code>\n`;
-    if (levels.tp2) c += `<b>✅ TP2:</b> <code>${levels.tp2}</code>\n`;
-    if (levels.tp3) c += `<b>✅ TP3:</b> <code>${levels.tp3}</code>\n`;
-    if (levels.rr) c += `<b>⚖️ R/R:</b> <code>${levels.rr}</code>\n`;
+    if (levels.sl) c += '<b>🛑 SL:</b> <code>' + levels.sl + '</code>\n';
+    if (levels.tp1) c += '<b>✅ TP1:</b> <code>' + levels.tp1 + '</code>\n';
+    if (levels.tp2) c += '<b>✅ TP2:</b> <code>' + levels.tp2 + '</code>\n';
+    if (levels.tp3) c += '<b>✅ TP3:</b> <code>' + levels.tp3 + '</code>\n';
+    if (levels.rr) c += '<b>⚖️ R/R:</b> <code>' + levels.rr + '</code>\n';
   }
 
   if (levels.validationIssues && levels.validationIssues.length) {
-    c += '\n<b>⚠️ اعتبارسنجی خودکار:</b>\n';
-    levels.validationIssues.slice(0, 3).forEach(iss => {
-      c += `• ${iss}\n`;
+    c += '\n<b>⚠️ اعتبارسنجی:</b>\n';
+    levels.validationIssues.slice(0, 3).forEach(function(iss) {
+      c += '• ' + iss + '\n';
     });
   }
 
@@ -585,9 +518,15 @@ function tgFormat(text) {
   return h.trim();
 }
 
-// ============================================
-// MAIN WORKER
-// ============================================
+function getGeminiKeys(env) {
+  const keys = [];
+  if (env.GEMINI_KEY_1) keys.push(env.GEMINI_KEY_1);
+  if (env.GEMINI_KEY_2) keys.push(env.GEMINI_KEY_2);
+  if (env.GEMINI_KEY_3) keys.push(env.GEMINI_KEY_3);
+  if (env.GEMINI_KEY_4) keys.push(env.GEMINI_KEY_4);
+  if (env.GEMINI_KEY) keys.push(env.GEMINI_KEY);
+  return keys;
+}
 
 export default {
   async fetch(request, env, ctx) {
@@ -602,7 +541,7 @@ export default {
         const update = await request.json();
         ctx.waitUntil(handleUpdate(update, env));
       } catch (e) {
-        console.error('Error handling update:', e);
+        console.error('Error handling update: ' + e.message);
       }
       return new Response('OK', { status: 200 });
     }
@@ -610,16 +549,6 @@ export default {
     return new Response('Not found', { status: 404 });
   }
 };
-
-function getGeminiKeys(env) {
-  const keys = [];
-  if (env.GEMINI_KEY_1) keys.push(env.GEMINI_KEY_1);
-  if (env.GEMINI_KEY_2) keys.push(env.GEMINI_KEY_2);
-  if (env.GEMINI_KEY_3) keys.push(env.GEMINI_KEY_3);
-  if (env.GEMINI_KEY_4) keys.push(env.GEMINI_KEY_4);
-  if (env.GEMINI_KEY) keys.push(env.GEMINI_KEY);
-  return keys;
-}
 
 async function handleUpdate(update, env) {
   const token = env.TG_TOKEN;
@@ -631,7 +560,6 @@ async function handleUpdate(update, env) {
     const chatId = update.message.chat.id;
     const text = (update.message.text || '').trim();
 
-    // دستورات
     if (text === '/start') {
       await sendMessage(token, chatId,
         '🎯 <b>Everest AI Terminal</b>\n\n' +
@@ -639,7 +567,7 @@ async function handleUpdate(update, env) {
         '/analyze - منوی تحلیل\n' +
         '/status - وضعیت اتصالات\n' +
         '/help - راهنما\n\n' +
-        '💡 <b>می‌توانید مستقیم نماد مورد نظرتان را تایپ کنید</b>\n' +
+        '💡 <b>می‌توانید مستقیم نماد را تایپ کنید</b>\n' +
         'مثال: <code>GBPJPY</code> یا <code>ETH/USD</code> یا <code>AAPL</code>'
       );
       return;
@@ -663,13 +591,13 @@ async function handleUpdate(update, env) {
     }
 
     if (text === '/status') {
-      const geminiOk = geminiKeys.length > 0 ? `✅ (${geminiKeys.length} کلید)` : '❌';
+      const geminiOk = geminiKeys.length > 0 ? '✅ (' + geminiKeys.length + ' کلید)' : '❌';
       const twelveOk = twelveKey ? '✅' : '❌';
       await sendMessage(token, chatId,
-        `🤖 <b>وضعیت سیستم</b>\n\n` +
-        `• Gemini AI: ${geminiOk}\n` +
-        `• Twelve Data: ${twelveOk}\n` +
-        `• Telegram: ✅`
+        '🤖 <b>وضعیت سیستم</b>\n\n' +
+        '• Gemini AI: ' + geminiOk + '\n' +
+        '• Twelve Data: ' + twelveOk + '\n' +
+        '• Telegram: ✅'
       );
       return;
     }
@@ -694,64 +622,56 @@ async function handleUpdate(update, env) {
       return;
     }
 
-    // دستور /analyze با نماد دلخواه
-    if (text.startsWith('/analyze ')) {
+    if (text.indexOf('/analyze ') === 0) {
       const parts = text.replace('/analyze ', '').trim().split(/\s+/);
       const sym = normalizeSymbol(parts[0]);
-      const tf = parts[1] || '1h';
-
-      // نمایش منوی تایم‌فریم
       const symbolRaw = sym.replace('/', '');
       const keyboard = {
         inline_keyboard: [
           [
-            { text: '⏱️ 1 دقیقه', callback_data: `tf_${symbolRaw}_1min` },
-            { text: '⏱️ 3 دقیقه', callback_data: `tf_${symbolRaw}_3min` }
+            { text: '⏱️ 1 دقیقه', callback_data: 'tf_' + symbolRaw + '_1min' },
+            { text: '⏱️ 3 دقیقه', callback_data: 'tf_' + symbolRaw + '_3min' }
           ],
           [
-            { text: '⏱️ 5 دقیقه', callback_data: `tf_${symbolRaw}_5min` },
-            { text: '⏱️ 15 دقیقه', callback_data: `tf_${symbolRaw}_15min` }
+            { text: '⏱️ 5 دقیقه', callback_data: 'tf_' + symbolRaw + '_5min' },
+            { text: '⏱️ 15 دقیقه', callback_data: 'tf_' + symbolRaw + '_15min' }
           ],
           [
-            { text: '🕐 1 ساعت', callback_data: `tf_${symbolRaw}_1h` },
-            { text: '📅 4 ساعت', callback_data: `tf_${symbolRaw}_4h` }
+            { text: '🕐 1 ساعت', callback_data: 'tf_' + symbolRaw + '_1h' },
+            { text: '📅 4 ساعت', callback_data: 'tf_' + symbolRaw + '_4h' }
           ]
         ]
       };
-      await sendMessage(token, chatId, `⏰ <b>تایم‌فریم تحلیل ${sym} را انتخاب کنید:</b>`, keyboard);
+      await sendMessage(token, chatId, '⏰ <b>تایم‌فریم تحلیل ' + sym + ' را انتخاب کنید:</b>', keyboard);
       return;
     }
 
-    // ورودی متن آزاد: اگر شبیه نماد باشد
-    if (text && !text.startsWith('/') && looksLikeSymbol(text)) {
+    if (text && text.charAt(0) !== '/' && looksLikeSymbol(text)) {
       const sym = normalizeSymbol(text);
       const symbolRaw = sym.replace('/', '');
-
       const keyboard = {
         inline_keyboard: [
           [
-            { text: '⏱️ 1 دقیقه', callback_data: `tf_${symbolRaw}_1min` },
-            { text: '⏱️ 3 دقیقه', callback_data: `tf_${symbolRaw}_3min` }
+            { text: '⏱️ 1 دقیقه', callback_data: 'tf_' + symbolRaw + '_1min' },
+            { text: '⏱️ 3 دقیقه', callback_data: 'tf_' + symbolRaw + '_3min' }
           ],
           [
-            { text: '⏱️ 5 دقیقه', callback_data: `tf_${symbolRaw}_5min` },
-            { text: '⏱️ 15 دقیقه', callback_data: `tf_${symbolRaw}_15min` }
+            { text: '⏱️ 5 دقیقه', callback_data: 'tf_' + symbolRaw + '_5min' },
+            { text: '⏱️ 15 دقیقه', callback_data: 'tf_' + symbolRaw + '_15min' }
           ],
           [
-            { text: '🕐 1 ساعت', callback_data: `tf_${symbolRaw}_1h` },
-            { text: '📅 4 ساعت', callback_data: `tf_${symbolRaw}_4h` }
+            { text: '🕐 1 ساعت', callback_data: 'tf_' + symbolRaw + '_1h' },
+            { text: '📅 4 ساعت', callback_data: 'tf_' + symbolRaw + '_4h' }
           ]
         ]
       };
-
       await sendMessage(token, chatId,
-        `✅ نماد شناسایی شد: <b>${sym}</b>\n\n⏰ <b>تایم‌فریم را انتخاب کنید:</b>`,
+        '✅ نماد شناسایی شد: <b>' + sym + '</b>\n\n⏰ <b>تایم‌فریم را انتخاب کنید:</b>',
         keyboard
       );
       return;
     }
 
-    // اگر متن نه دستور بود و نه شبیه نماد، راهنما بفرست
     if (text) {
       await sendMessage(token, chatId,
         '❓ متوجه نشدم.\n\n' +
@@ -771,7 +691,6 @@ async function handleUpdate(update, env) {
 
     await answerCallback(token, callback.id);
 
-    // درخواست نماد سفارشی
     if (data === 'custom_symbol') {
       await sendMessage(token, chatId,
         '✏️ <b>نماد مورد نظر را تایپ کنید</b>\n\n' +
@@ -779,42 +698,38 @@ async function handleUpdate(update, env) {
         '• <code>GBPJPY</code>\n' +
         '• <code>ETH/USD</code>\n' +
         '• <code>AAPL</code>\n' +
-        '• <code>XAG/USD</code> (نقره)'
+        '• <code>XAG/USD</code>'
       );
       return;
     }
 
-    // مرحله ۱: انتخاب نماد → نمایش منوی تایم‌فریم
-    if (data.startsWith('symbol_')) {
+    if (data.indexOf('symbol_') === 0) {
       const symbolRaw = data.replace('symbol_', '');
       const symbolDisplay = normalizeSymbol(symbolRaw);
-
       const keyboard = {
         inline_keyboard: [
           [
-            { text: '⏱️ 1 دقیقه', callback_data: `tf_${symbolRaw}_1min` },
-            { text: '⏱️ 3 دقیقه', callback_data: `tf_${symbolRaw}_3min` }
+            { text: '⏱️ 1 دقیقه', callback_data: 'tf_' + symbolRaw + '_1min' },
+            { text: '⏱️ 3 دقیقه', callback_data: 'tf_' + symbolRaw + '_3min' }
           ],
           [
-            { text: '⏱️ 5 دقیقه', callback_data: `tf_${symbolRaw}_5min` },
-            { text: '⏱️ 15 دقیقه', callback_data: `tf_${symbolRaw}_15min` }
+            { text: '⏱️ 5 دقیقه', callback_data: 'tf_' + symbolRaw + '_5min' },
+            { text: '⏱️ 15 دقیقه', callback_data: 'tf_' + symbolRaw + '_15min' }
           ],
           [
-            { text: '🕐 1 ساعت', callback_data: `tf_${symbolRaw}_1h` },
-            { text: '📅 4 ساعت', callback_data: `tf_${symbolRaw}_4h` }
+            { text: '🕐 1 ساعت', callback_data: 'tf_' + symbolRaw + '_1h' },
+            { text: '📅 4 ساعت', callback_data: 'tf_' + symbolRaw + '_4h' }
           ]
         ]
       };
-
       await sendMessage(token, chatId,
-        `⏰ <b>تایم‌فریم تحلیل ${symbolDisplay} را انتخاب کنید:</b>`,
+        '⏰ <b>تایم‌فریم تحلیل ' + symbolDisplay + ' را انتخاب کنید:</b>',
         keyboard
       );
       return;
     }
 
-    // مرحله ۲: انتخاب تایم‌فریم → اجرای تحلیل
-    if (data.startsWith('tf_')) {
+    if (data.indexOf('tf_') === 0) {
       const rest = data.replace('tf_', '');
       const tfMatch = rest.match(/_([^_]+)$/);
       if (!tfMatch) return;
@@ -829,10 +744,11 @@ async function handleUpdate(update, env) {
   }
 }
 
-async function runAnalysis(token, chatId, symbol, twelveKey, geminiKeys, geminiModel, timeframe = '1h') {
+async function runAnalysis(token, chatId, symbol, twelveKey, geminiKeys, geminiModel, timeframe) {
+  timeframe = timeframe || '1h';
   try {
     await sendMessage(token, chatId,
-      `⏳ در حال تحلیل <b>${symbol}</b>\nتایم‌فریم: <b>${timeframeLabel(timeframe)}</b>...`
+      '⏳ در حال تحلیل <b>' + symbol + '</b>\nتایم‌فریم: <b>' + timeframeLabel(timeframe) + '</b>...'
     );
 
     const intervalMap = {
@@ -845,20 +761,18 @@ async function runAnalysis(token, chatId, symbol, twelveKey, geminiKeys, geminiM
     };
 
     const interval = intervalMap[timeframe] || '1h';
-
     const klines = await fetchTwelveData(symbol, interval, twelveKey, 200);
 
-    // ارسال عکس چارت
     try {
-      const chartUrl = await buildChartImageUrl(symbol, timeframe, klines);
-      await sendPhoto(token, chatId, chartUrl, `📊 چارت ${symbol} - ${timeframeLabel(timeframe)}`);
+      const chartUrl = buildChartUrl(symbol, timeframe, klines);
+      await sendPhoto(token, chatId, chartUrl, '📊 چارت ' + symbol + ' - ' + timeframeLabel(timeframe));
     } catch (chartErr) {
-      console.error('Chart error:', chartErr.message);
+      console.error('Chart error: ' + chartErr.message);
     }
 
     const fullPrompt = LIVE_PREFIX +
-      `نماد: ${symbol}\n` +
-      `تایم‌فریم: ${timeframeLabel(timeframe)}\n\n` +
+      'نماد: ' + symbol + '\n' +
+      'تایم‌فریم: ' + timeframeLabel(timeframe) + '\n\n' +
       klinesToText(klines, symbol, timeframeLabel(timeframe)) + '\n\n';
 
     const analysisText = await callGemini(
@@ -878,10 +792,10 @@ async function runAnalysis(token, chatId, symbol, twelveKey, geminiKeys, geminiM
       for (let i = 0; i < fullText.length; i += 3800) {
         const chunk = fullText.slice(i, i + 3800);
         await sendMessage(token, chatId, chunk);
-        await new Promise(r => setTimeout(r, 400));
+        await new Promise(function(r) { setTimeout(r, 400); });
       }
     }
   } catch (e) {
-    await sendMessage(token, chatId, `❌ خطا در تحلیل:\n\n<code>${e.message}</code>`);
+    await sendMessage(token, chatId, '❌ خطا در تحلیل:\n\n<code>' + e.message + '</code>');
   }
 }
