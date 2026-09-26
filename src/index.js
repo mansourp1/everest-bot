@@ -1,4 +1,41 @@
-const SYSTEM_PROMPT = "شما یک تحلیل‌گر ارشد بازارهای مالی هستید.\n\nتحلیل کن بر اساس SMC، ICT و پرایس اکشن.\n\nدر انتهای پاسخ دقیقاً این فرمت را بنویس:\n\n---\nDirection: [BUY/SELL/WAIT]\nRegime: [TRENDING_UP/TRENDING_DOWN/RANGING/TRANSITIONAL]\nConfidenceScore: [0-100]\nEntry: [عدد یا N/A]\nStop Loss: [عدد یا N/A]\nTP1: [عدد یا N/A]\nTP2: [عدد یا N/A]\nTP3: [عدد یا N/A]\nR/R: [نسبت یا N/A]\n---\n\nقوانین:\n1. اگر Confidence کمتر از 65 باشد، Direction باید WAIT باشد\n2. حد ضرر باید ساختاری باشد\n3. در BUY، SL زیر Entry و در SELL، SL بالای Entry";
+const SYSTEM_PROMPT = "شما یک تحلیل‌گر ارشد بازارهای مالی با ۱۵ سال تجربه در SMC، ICT و پرایس اکشن هستید.\n\n" +
+"**روش کار: تحلیل مرحله‌به‌مرحله**\n" +
+"۱. استخراج داده خام\n" +
+"۲. تشخیص رژیم بازار\n" +
+"۳. شناسایی BOS، CHoCH و نواحی نقدینگی\n" +
+"۴. کشف Order Blocks و FVG معتبر\n" +
+"۵. بررسی الگوهای کندلی\n" +
+"۶. امتیازدهی ۶ لایه هم‌گرایی\n" +
+"۷. تصمیم نهایی\n\n" +
+"**ساختار تحلیل — حتماً همه بخش‌ها را با جزئیات کامل بنویس:**\n\n" +
+"### ۰. رژیم بازار (Trending/Ranging/Transitional)\n" +
+"### ۱. ساختار بازار (BOS، CHoCH، Retest، نقدینگی)\n" +
+"### ۲. SMC (Order Blocks، FVG، Premium/Discount)\n" +
+"### ۳. ICT (ساختار داخلی، OTE)\n" +
+"### ۴. الگوهای کندلی\n" +
+"### ۵. سطوح کلیدی R1/R2/R3، S1/S2/S3\n" +
+"### ۶. سناریو معاملاتی با حد ضرر ساختاری\n" +
+"### ۷. امتیازدهی ۶ لایه (0-100)\n" +
+"### ۸. سناریوی مخالف\n" +
+"### ۹. خلاصه اجرایی\n\n" +
+"**در انتهای پاسخ دقیقاً این فرمت را بنویس:**\n\n" +
+"---\n" +
+"Direction: [BUY/SELL/WAIT]\n" +
+"Regime: [TRENDING_UP/TRENDING_DOWN/RANGING/TRANSITIONAL]\n" +
+"ConfidenceScore: [0-100]\n" +
+"Entry: [عدد یا N/A]\n" +
+"Stop Loss: [عدد یا N/A]\n" +
+"TP1: [عدد یا N/A]\n" +
+"TP2: [عدد یا N/A]\n" +
+"TP3: [عدد یا N/A]\n" +
+"R/R: [نسبت یا N/A]\n" +
+"---\n\n" +
+"**قوانین:**\n" +
+"1. اگر Confidence کمتر از 65 باشد، Direction باید WAIT باشد\n" +
+"2. حد ضرر باید ساختاری باشد\n" +
+"3. در BUY، SL زیر Entry و در SELL، SL بالای Entry\n" +
+"4. R/R اعلامی با محاسبه واقعی مطابقت داشته باشد\n" +
+"5. تحلیل کامل و مفصل بنویس، حداقل ۵۰۰ کلمه";
 
 function parseJsonBlock(text) {
   var match = text.match(/```json\s*([\s\S]*?)```/i);
@@ -224,39 +261,43 @@ function tgFormat(text) {
   return h.trim();
 }
 
-async function buildChartUrl(symbol, timeframe, klines) {
-  // تبدیل نماد به فرمت مورد نیاز Chart-Img (مثلاً XAU/USD -> OANDA:XAUUSD)
-  const chartSymbol = symbol.replace('/', '');
-  const chartInterval = timeframe.replace('min', '').replace('h', '') + (timeframe.includes('h') ? 'h' : 'min');
+// دریافت عکس چارت از Chart-Img (env به عنوان پارامتر)
+async function buildChartImage(symbol, timeframe, env) {
+  if (!env.CHART_IMG_KEY) {
+    throw new Error('CHART_IMG_KEY تنظیم نشده');
+  }
 
-  // ساخت URL درخواست به Chart-Img
-  const url = new URL('https://api.chart-img.com/v2/tradingview/advanced-chart');
-  url.searchParams.set('symbol', `OANDA:${chartSymbol}`);
+  var chartSymbol = symbol.replace('/', '').toUpperCase();
+  var intervalMap = {
+    '1min': '1',
+    '3min': '3',
+    '5min': '5',
+    '15min': '15',
+    '1h': '60',
+    '4h': '240'
+  };
+  var chartInterval = intervalMap[timeframe] || '60';
+
+  var url = new URL('https://api.chart-img.com/v2/tradingview/advanced-chart');
+  url.searchParams.set('symbol', 'OANDA:' + chartSymbol);
   url.searchParams.set('interval', chartInterval);
   url.searchParams.set('theme', 'dark');
   url.searchParams.set('width', '1000');
   url.searchParams.set('height', '600');
-  url.searchParams.set('studies', 'RSI@tv-basicstudies,MACD@tv-basicstudies'); // اضافه کردن اندیکاتورها
+  url.searchParams.set('studies', 'RSI@tv-basicstudies,MACD@tv-basicstudies');
 
-  // ارسال درخواست به Chart-Img
-  const res = await fetch(url.toString(), {
+  var res = await fetch(url.toString(), {
     headers: {
-      'x-api-key': env.CHART_IMG_KEY // خواندن کلید از Secrets
+      'x-api-key': env.CHART_IMG_KEY
     }
   });
 
   if (!res.ok) {
-    throw new Error(`Chart-Img API error: ${res.status} ${res.statusText}`);
+    var errText = await res.text();
+    throw new Error('Chart-Img ' + res.status + ': ' + errText.slice(0, 200));
   }
 
-  // دریافت تصویر به صورت Blob
-  const imageBlob = await res.blob();
-
-  // تبدیل Blob به Base64 برای ارسال به تلگرام
-  const buffer = await imageBlob.arrayBuffer();
-  const base64 = btoa(String.fromCharCode(...new Uint8Array(buffer)));
-
-  return `data:image/png;base64,${base64}`;
+  return await res.arrayBuffer();
 }
 
 async function sendMessage(token, chatId, text, keyboard) {
@@ -276,19 +317,17 @@ async function sendMessage(token, chatId, text, keyboard) {
   return res.json();
 }
 
-async function sendPhoto(token, chatId, photoBase64, caption) {
-  const url = `https://api.telegram.org/bot${token}/sendPhoto`;
-  const payload = {
-    chat_id: chatId,
-    photo: photoBase64, // مستقیماً Base64 را می‌فرستیم
-    caption: (caption || '').slice(0, 1000),
-    parse_mode: 'HTML'
-  };
+// ارسال عکس با FormData (نه Base64)
+async function sendPhotoBytes(token, chatId, imageBuffer, caption) {
+  var formData = new FormData();
+  formData.append('chat_id', String(chatId));
+  formData.append('caption', (caption || '').slice(0, 1000));
+  formData.append('parse_mode', 'HTML');
+  formData.append('photo', new Blob([imageBuffer], { type: 'image/png' }), 'chart.png');
 
-  const res = await fetch(url, {
+  var res = await fetch('https://api.telegram.org/bot' + token + '/sendPhoto', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload)
+    body: formData
   });
   return res.json();
 }
@@ -382,7 +421,8 @@ function getGeminiKeys(env) {
   return keys;
 }
 
-async function runAnalysis(token, chatId, symbol, twelveKey, geminiKeys, geminiModel, timeframe) {
+// runAnalysis حالا env هم می‌گیرد
+async function runAnalysis(token, chatId, symbol, twelveKey, geminiKeys, geminiModel, timeframe, env) {
   timeframe = timeframe || '1h';
   try {
     await sendMessage(token, chatId, '⏳ در حال تحلیل <b>' + symbol + '</b>...');
@@ -396,12 +436,16 @@ async function runAnalysis(token, chatId, symbol, twelveKey, geminiKeys, geminiM
     };
     var interval = intervalMap[timeframe] || '1h';
     var klines = await fetchTwelveData(symbol, interval, twelveKey, 200);
+
+    // ارسال عکس (با await درست و env)
     try {
-      var chartUrl = buildChartUrl(symbol, timeframe, klines);
-      await sendPhoto(token, chatId, chartUrl, '📊 ' + symbol + ' - ' + timeframeLabel(timeframe));
+      var chartBuffer = await buildChartImage(symbol, timeframe, env);
+      await sendPhotoBytes(token, chatId, chartBuffer, '📊 ' + symbol + ' - ' + timeframeLabel(timeframe));
     } catch (chartErr) {
       console.error('Chart error: ' + chartErr.message);
+      await sendMessage(token, chatId, '⚠️ عکس چارت ارسال نشد: ' + chartErr.message);
     }
+
     var fullPrompt = 'نماد: ' + symbol + '\nتایم‌فریم: ' + timeframeLabel(timeframe) + '\n\n' + klinesToText(klines, symbol, timeframeLabel(timeframe));
     var analysisText = await callGemini(geminiKeys, SYSTEM_PROMPT + '\n\n' + fullPrompt, geminiModel);
     var levels = extractLevels(analysisText);
@@ -439,7 +483,8 @@ async function handleUpdate(update, env) {
     if (text === '/status') {
       var geminiOk = geminiKeys.length > 0 ? '✅ (' + geminiKeys.length + ')' : '❌';
       var twelveOk = twelveKey ? '✅' : '❌';
-      await sendMessage(token, chatId, '🤖 وضعیت:\n\nGemini: ' + geminiOk + '\nTwelveData: ' + twelveOk + '\nTelegram: ✅');
+      var chartOk = env.CHART_IMG_KEY ? '✅' : '❌';
+      await sendMessage(token, chatId, '🤖 وضعیت:\n\nGemini: ' + geminiOk + '\nTwelveData: ' + twelveOk + '\nChart-Img: ' + chartOk + '\nTelegram: ✅');
       return;
     }
     if (text === '/analyze') {
@@ -549,7 +594,8 @@ async function handleUpdate(update, env) {
       var timeframe = tfMatch[1];
       var symbolRaw4 = rest.slice(0, -tfMatch[0].length);
       var symbol = normalizeSymbol(symbolRaw4);
-      await runAnalysis(token, cbChatId, symbol, twelveKey, geminiKeys, geminiModel, timeframe);
+      // env رو هم پاس می‌دیم
+      await runAnalysis(token, cbChatId, symbol, twelveKey, geminiKeys, geminiModel, timeframe, env);
       return;
     }
   }
