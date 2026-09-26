@@ -261,8 +261,8 @@ function tgFormat(text) {
   return h.trim();
 }
 
-// دریافت عکس چارت از Chart-Img (env به عنوان پارامتر)
-async function buildChartImage(symbol, timeframe, env) {
+// ⭐ دریافت عکس چارت با خطوط Entry/SL/TP
+async function buildChartImage(symbol, timeframe, levels, env) {
   if (!env.CHART_IMG_KEY) {
     throw new Error('CHART_IMG_KEY تنظیم نشده');
   }
@@ -276,7 +276,6 @@ async function buildChartImage(symbol, timeframe, env) {
     exchange = 'NASDAQ';
   }
 
-  // ✅ نگاشت صحیح تایم‌فریم به فرمت Chart-Img
   var intervalMap = {
     '1min': '1m',
     '3min': '3m',
@@ -286,6 +285,56 @@ async function buildChartImage(symbol, timeframe, env) {
     '4h': '4h'
   };
   var chartInterval = intervalMap[timeframe] || '1h';
+
+  // ساخت خطوط افقی از سطوح تحلیل
+  var horizontalLines = [];
+  if (levels && levels.direction !== 'WAIT') {
+    if (levels.entry) {
+      horizontalLines.push({
+        price: levels.entry,
+        color: '#00c6ff',
+        label: 'Entry',
+        lineWidth: 2,
+        lineStyle: 'solid'
+      });
+    }
+    if (levels.sl) {
+      horizontalLines.push({
+        price: levels.sl,
+        color: '#ff1744',
+        label: 'SL',
+        lineWidth: 2,
+        lineStyle: 'dashed'
+      });
+    }
+    if (levels.tp1) {
+      horizontalLines.push({
+        price: levels.tp1,
+        color: '#00c853',
+        label: 'TP1',
+        lineWidth: 2,
+        lineStyle: 'dashed'
+      });
+    }
+    if (levels.tp2) {
+      horizontalLines.push({
+        price: levels.tp2,
+        color: '#00c853',
+        label: 'TP2',
+        lineWidth: 2,
+        lineStyle: 'dashed'
+      });
+    }
+    if (levels.tp3) {
+      horizontalLines.push({
+        price: levels.tp3,
+        color: '#00c853',
+        label: 'TP3',
+        lineWidth: 2,
+        lineStyle: 'dashed'
+      });
+    }
+  }
 
   var apiUrl = 'https://api.chart-img.com/v2/tradingview/advanced-chart';
 
@@ -301,6 +350,10 @@ async function buildChartImage(symbol, timeframe, env) {
       { name: 'Relative Strength Index' }
     ]
   };
+
+  if (horizontalLines.length > 0) {
+    requestBody.horizontalLines = horizontalLines;
+  }
 
   var res = await fetch(apiUrl, {
     method: 'POST',
@@ -336,7 +389,6 @@ async function sendMessage(token, chatId, text, keyboard) {
   return res.json();
 }
 
-// ارسال عکس با FormData (نه Base64)
 async function sendPhotoBytes(token, chatId, imageBuffer, caption) {
   var formData = new FormData();
   formData.append('chat_id', String(chatId));
@@ -440,11 +492,12 @@ function getGeminiKeys(env) {
   return keys;
 }
 
-// runAnalysis حالا env هم می‌گیرد
+// ⭐ runAnalysis: اول تحلیل، بعد چارت با خطوط
 async function runAnalysis(token, chatId, symbol, twelveKey, geminiKeys, geminiModel, timeframe, env) {
   timeframe = timeframe || '1h';
   try {
     await sendMessage(token, chatId, '⏳ در حال تحلیل <b>' + symbol + '</b>...');
+
     var intervalMap = {
       '1min': '1min',
       '3min': '5min',
@@ -456,19 +509,22 @@ async function runAnalysis(token, chatId, symbol, twelveKey, geminiKeys, geminiM
     var interval = intervalMap[timeframe] || '1h';
     var klines = await fetchTwelveData(symbol, interval, twelveKey, 200);
 
-    // ارسال عکس (با await درست و env)
+    // ⭐ مرحله ۱: اول تحلیل با AI
+    var fullPrompt = 'نماد: ' + symbol + '\nتایم‌فریم: ' + timeframeLabel(timeframe) + '\n\n' + klinesToText(klines, symbol, timeframeLabel(timeframe));
+    var analysisText = await callGemini(geminiKeys, SYSTEM_PROMPT + '\n\n' + fullPrompt, geminiModel);
+    var levels = extractLevels(analysisText);
+    levels = validateSignal(levels);
+
+    // ⭐ مرحله ۲: حالا چارت با خطوط رسم می‌شه
     try {
-      var chartBuffer = await buildChartImage(symbol, timeframe, env);
+      var chartBuffer = await buildChartImage(symbol, timeframe, levels, env);
       await sendPhotoBytes(token, chatId, chartBuffer, '📊 ' + symbol + ' - ' + timeframeLabel(timeframe));
     } catch (chartErr) {
       console.error('Chart error: ' + chartErr.message);
       await sendMessage(token, chatId, '⚠️ عکس چارت ارسال نشد: ' + chartErr.message);
     }
 
-    var fullPrompt = 'نماد: ' + symbol + '\nتایم‌فریم: ' + timeframeLabel(timeframe) + '\n\n' + klinesToText(klines, symbol, timeframeLabel(timeframe));
-    var analysisText = await callGemini(geminiKeys, SYSTEM_PROMPT + '\n\n' + fullPrompt, geminiModel);
-    var levels = extractLevels(analysisText);
-    levels = validateSignal(levels);
+    // ⭐ مرحله ۳: کپشن و تحلیل کامل
     var caption = buildCaption(levels, symbol, timeframe);
     await sendMessage(token, chatId, caption);
     var fullText = tgFormat(analysisText);
@@ -613,7 +669,6 @@ async function handleUpdate(update, env) {
       var timeframe = tfMatch[1];
       var symbolRaw4 = rest.slice(0, -tfMatch[0].length);
       var symbol = normalizeSymbol(symbolRaw4);
-      // env رو هم پاس می‌دیم
       await runAnalysis(token, cbChatId, symbol, twelveKey, geminiKeys, geminiModel, timeframe, env);
       return;
     }
