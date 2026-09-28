@@ -43,7 +43,8 @@ const PROVIDER_NAMES = {
   llm7: 'LLM7.io',
   avalai: 'AvalAI',
   metis: 'Metis',
-  onexai: '1xAi'
+  onexai: '1xAi',
+  gapgpt: 'GapGPT'
 };
 
 function getKey(env, provider) {
@@ -60,7 +61,8 @@ function getKey(env, provider) {
     llm7: env.LLM7_KEY || 'unused',
     avalai: env.AVALAI_KEY,
     metis: env.METIS_KEY,
-    onexai: env.ONEXAI_KEY
+    onexai: env.ONEXAI_KEY,
+    gapgpt: env.GAPGPT_KEY
   };
   return map[provider] || '';
 }
@@ -75,7 +77,7 @@ function getGeminiKeys(env) {
 }
 
 function getAvailableProviders(env) {
-  var all = ['gemini', 'groq', 'openrouter', 'zhipu', 'mistral', 'huggingface', 'together', 'cloudflare', 'nvidia', 'llm7', 'avalai', 'metis', 'onexai'];
+  var all = ['gemini', 'groq', 'openrouter', 'zhipu', 'mistral', 'huggingface', 'together', 'cloudflare', 'nvidia', 'llm7', 'avalai', 'metis', 'onexai', 'gapgpt'];
   return all.filter(function(p) {
     if (p === 'gemini') return getGeminiKeys(env).length > 0;
     if (p === 'llm7') return true;
@@ -252,6 +254,35 @@ async function callGroqText(env, prompt, imageBase64, imageMime) {
   return data.choices?.[0]?.message?.content || '';
 }
 
+async function callGapGPTText(env, prompt, imageBase64, imageMime) {
+  var key = env.GAPGPT_KEY;
+  if (!key) throw new Error('no gapgpt key');
+  
+  // مدل مناسب را انتخاب کنید (مثلاً gpt-4o-mini)
+  var model = 'gpt-4o-mini';
+  
+  var content = imageBase64 
+    ? [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: 'data:' + imageMime + ';base64,' + imageBase64 } }] 
+    : prompt;
+  
+  var res = await fetch('https://api.gapgpt.app/v1/chat/completions', {
+    method: 'POST',
+    headers: { 
+      'Content-Type': 'application/json', 
+      'Authorization': 'Bearer ' + key 
+    },
+    body: JSON.stringify({ 
+      model: model, 
+      messages: [{ role: 'user', content: content }], 
+      temperature: 0.1, 
+      max_tokens: 8192 
+    })
+  });
+  
+  var data = await res.json();
+  if (!res.ok) throw new Error(data.error?.message || 'HTTP ' + res.status);
+  return data.choices?.[0]?.message?.content || '';
+}
 async function callOpenRouterText(env, prompt, imageBase64, imageMime) {
   var key = env.OPENROUTER_KEY;
   if (!key) throw new Error('no openrouter key');
@@ -442,7 +473,8 @@ var PROVIDER_FUNCS = {
   llm7: callLLM7Text,
   avalai: callAvalAIText,
   metis: callMetisText,
-  onexai: callOneXAiText
+  onexai: callOneXAiText,
+  gapgpt: callGapGPTText
 };
 
 async function callWithFallback(env, prompt, imageBase64, imageMime) {
@@ -644,7 +676,7 @@ async function showSettingsMenu(token, chatId, mid) {
 }
 
 async function showStatus(token, chatId, mid, env) {
-  var all = ['gemini', 'groq', 'openrouter', 'zhipu', 'mistral', 'huggingface', 'together', 'cloudflare', 'nvidia', 'llm7', 'avalai', 'metis', 'onexai'];
+  var all = ['gemini', 'groq', 'openrouter', 'zhipu', 'mistral', 'huggingface', 'together', 'cloudflare', 'nvidia', 'llm7', 'avalai', 'metis', 'onexai', 'gapgpt'];
   var text = '📈 <b>وضعیت سرویس‌ها</b>\n\n';
   var active = 0;
   for (var i = 0; i < all.length; i++) {
