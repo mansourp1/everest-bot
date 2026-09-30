@@ -506,20 +506,61 @@ var PROVIDER_FUNCS = {
   onexai: callOneXAiText
 };
 
-// ⭐⭐ Fallback - Gemini اول همیشه
+// ⭐⭐ Fallback با ترتیب هوشمند (عکس: Gemini اول / متن: Gemini آخر)
 async function callWithFallback(env, prompt, imageBase64, imageMime) {
   var providers = getAvailableProviders(env);
   if (!providers.length) throw new Error('هیچ سرویس AI فعال نیست');
 
-  // ⭐ Gemini همیشه اول (چه عکس چه متن)
-  providers.sort(function(a, b) {
-    if (a === 'gemini') return -1;
-    if (b === 'gemini') return 1;
-    return 0;
-  });
-
   var hasImage = !!imageBase64;
-  console.log('Mode: ' + (hasImage ? 'IMAGE' : 'TEXT') + ' | Order: ' + providers.join(' → '));
+
+  if (hasImage) {
+    // 🖼️ حالت تصویری: Gemini اولویت اول (Vision قوی)
+    var imgPriority = {
+      gemini: 1,        // ⭐ اول برای عکس
+      gapgpt: 2,
+      groq: 3,
+      openrouter: 4,
+      mistral: 5,
+      together: 6,
+      nvidia: 7,
+      huggingface: 8,
+      github: 9,
+      cloudflare: 10,
+      avalai: 11,
+      metis: 12,
+      onexai: 13,
+      llm7: 14
+    };
+    providers.sort(function(a, b) {
+      return (imgPriority[a] || 99) - (imgPriority[b] || 99);
+    });
+  } else {
+    // 📊 حالت متنی: Gemini آخر (سهمیه‌اش برای عکس نگه داشته بشه)
+    var txtPriority = {
+      // اولویت ۱: رایگان‌های قدرتمند
+      groq: 1,
+      openrouter: 2,
+      mistral: 3,
+      github: 4,
+      together: 5,
+      // اولویت ۲: سرویس‌های اقتصادی
+      llm7: 6,
+      avalai: 7,
+      metis: 8,
+      onexai: 9,
+      gapgpt: 10,
+      huggingface: 11,
+      nvidia: 12,
+      cloudflare: 13,
+      // ⭐ Gemini آخر — فقط اگه همه خطا دادن
+      gemini: 99
+    };
+    providers.sort(function(a, b) {
+      return (txtPriority[a] || 50) - (txtPriority[b] || 50);
+    });
+  }
+
+  console.log('Mode: ' + (hasImage ? '🖼️ IMAGE' : '📊 TEXT') + ' | Order: ' + providers.join(' → '));
 
   var errors = [];
   for (var i = 0; i < providers.length; i++) {
@@ -539,7 +580,6 @@ async function callWithFallback(env, prompt, imageBase64, imageMime) {
   }
   throw new Error('همه سرویس‌ها خطا دادند:\n' + errors.slice(0, 8).join('\n'));
 }
-
 // ============================================
 // HELPERS
 // ============================================
