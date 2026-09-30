@@ -27,12 +27,25 @@ function isSecurityEnabled(env) {
 }
 
 // ============================================
+// TIMEOUT HELPER
+// ============================================
+
+function withTimeout(promise, ms, label) {
+  return Promise.race([
+    promise,
+    new Promise(function(_, reject) {
+      setTimeout(function() { reject(new Error(label + ' timeout (' + ms + 'ms)')); }, ms);
+    })
+  ]);
+}
+
+// ============================================
 // PROVIDER NAMES
 // ============================================
 
 const PROVIDER_NAMES = {
   gemini: 'Google Gemini',
-  vercel: 'Vercel AI (Ling Fin)',
+  vercel: 'Vercel AI',
   github: 'GitHub Models',
   groq: 'Groq',
   together: 'Together AI',
@@ -100,18 +113,14 @@ function parseJsonBlock(text) {
 function parseRR(rrStr) {
   if (!rrStr) return null;
   var m = String(rrStr).match(/(\d+(?:\.\d+)?)\s*[:/]\s*(\d+(?:\.\d+)?)/);
-  if (m) {
-    var a = parseFloat(m[1]); var b = parseFloat(m[2]);
-    return a > 0 ? b / a : null;
-  }
+  if (m) { var a = parseFloat(m[1]), b = parseFloat(m[2]); return a > 0 ? b / a : null; }
   var n = parseFloat(rrStr);
   return isNaN(n) ? null : n;
 }
 
 function findValue(text, labels) {
   for (var i = 0; i < labels.length; i++) {
-    var label = labels[i];
-    var pattern = new RegExp("\\*{0,2}" + label + "\\*{0,2}\\s*[:=]\\s*\\*{0,2}\\s*([^\\n]+)", 'i');
+    var pattern = new RegExp("\\*{0,2}" + labels[i] + "\\*{0,2}\\s*[:=]\\s*\\*{0,2}\\s*([^\\n]+)", 'i');
     var m = text.match(pattern);
     if (m) {
       var val = m[1].trim();
@@ -212,7 +221,7 @@ function validateSignal(levels) {
 }
 
 // ============================================
-// AI PROVIDERS
+// AI PROVIDERS (با URLهای اصلاح‌شده)
 // ============================================
 
 // 1. Gemini
@@ -231,10 +240,7 @@ async function callGeminiText(env, prompt, imageBase64, imageMime) {
         body: JSON.stringify({ contents: [{ parts: parts }], generationConfig: { temperature: 0.1, topP: 0.85, maxOutputTokens: 8192 } })
       });
       var data = await res.json();
-      if (res.ok) {
-        var t = data.candidates?.[0]?.content?.parts?.[0]?.text;
-        if (t) return t;
-      }
+      if (res.ok) { var t = data.candidates?.[0]?.content?.parts?.[0]?.text; if (t) return t; }
       lastErr = data.error?.message || 'HTTP ' + res.status;
       if ([429, 503, 500, 401, 403, 400].indexOf(res.status) === -1) throw new Error(lastErr);
     } catch (e) { lastErr = e.message; }
@@ -242,58 +248,38 @@ async function callGeminiText(env, prompt, imageBase64, imageMime) {
   throw new Error('Gemini: ' + lastErr);
 }
 
-// 2. Vercel AI Gateway (مدل‌های Ling Fin - تخصصی مالی)
+// 2. Vercel AI Gateway — URL اصلاح‌شده
 async function callVercelText(env, prompt, imageBase64, imageMime) {
   var key = env.VERCEL_GATEWAY_KEY;
   if (!key) throw new Error('no vercel key');
-
-  // انتخاب مدل بر اساس وجود تصویر
   var model = imageBase64 ? 'google/gemini-2.5-flash' : 'inclusionai/ling-3.0-flash-fin';
-
   var content = imageBase64
     ? [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: 'data:' + imageMime + ';base64,' + imageBase64 } }]
     : prompt;
-
-  var res = await fetch('https://api.vercel.com/v1/ai/chat/completions', {
+  // ✅ URL اصلاح‌شده
+  var res = await fetch('https://ai-gateway.vercel.sh/v1/chat/completions', {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': 'Bearer ' + key
-    },
-    body: JSON.stringify({
-      model: model,
-      messages: [{ role: 'user', content: content }],
-      temperature: 0.1,
-      max_tokens: 8192
-    })
+    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + key },
+    body: JSON.stringify({ model: model, messages: [{ role: 'user', content: content }], temperature: 0.1, max_tokens: 8192 })
   });
   var data = await res.json();
   if (!res.ok) throw new Error(data.error?.message || 'HTTP ' + res.status);
   return data.choices?.[0]?.message?.content || '';
 }
 
-// 3. GitHub Models (رایگان - GPT-4o-mini)
+// 3. GitHub Models — URL اصلاح‌شده
 async function callGitHubText(env, prompt, imageBase64, imageMime) {
   var token = env.GITHUB_MODELS_TOKEN;
   if (!token) throw new Error('no github token');
   var model = env.GITHUB_MODELS_MODEL || 'gpt-4o-mini';
-
   var content = imageBase64
     ? [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: 'data:' + imageMime + ';base64,' + imageBase64 } }]
     : prompt;
-
-  var res = await fetch('https://models.github.ai/inference/chat/completions', {
+  // ✅ URL اصلاح‌شده
+  var res = await fetch('https://models.inference.ai.azure.com/chat/completions', {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': 'Bearer ' + token
-    },
-    body: JSON.stringify({
-      model: model,
-      messages: [{ role: 'user', content: content }],
-      temperature: 0.1,
-      max_tokens: 8192
-    })
+    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+    body: JSON.stringify({ model: model, messages: [{ role: 'user', content: content }], temperature: 0.1, max_tokens: 8192 })
   });
   var data = await res.json();
   if (!res.ok) throw new Error(data.error?.message || 'HTTP ' + res.status);
@@ -355,8 +341,8 @@ async function callOpenRouterText(env, prompt, imageBase64, imageMime) {
   var key = env.OPENROUTER_KEY;
   if (!key) throw new Error('no openrouter key');
   var models = imageBase64
-    ? ['google/gemini-2.0-flash-exp:free', 'qwen/qwen-2.5-vl-7b-instruct:free', 'meta-llama/llama-3.2-11b-vision-instruct:free']
-    : ['deepseek/deepseek-chat', 'meta-llama/llama-3.3-70b-instruct:free', 'google/gemini-2.0-flash-exp:free'];
+    ? ['google/gemini-2.0-flash-exp:free', 'qwen/qwen-2.5-vl-7b-instruct:free']
+    : ['deepseek/deepseek-chat', 'meta-llama/llama-3.3-70b-instruct:free'];
   var lastErr = '';
   for (var i = 0; i < models.length; i++) {
     var content = imageBase64 ? [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: 'data:' + imageMime + ';base64,' + imageBase64 } }] : prompt;
@@ -443,7 +429,7 @@ async function callNvidiaText(env, prompt, imageBase64, imageMime) {
 // 12. LLM7
 async function callLLM7Text(env, prompt, imageBase64, imageMime) {
   var key = env.LLM7_KEY || 'unused';
-  var models = imageBase64 ? ['pro', 'default'] : ['pro', 'default', 'fast'];
+  var models = imageBase64 ? ['pro'] : ['pro', 'default'];
   var lastErr = '';
   for (var i = 0; i < models.length; i++) {
     var content = imageBase64 ? [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: 'data:' + imageMime + ';base64,' + imageBase64 } }] : prompt;
@@ -524,61 +510,18 @@ var PROVIDER_FUNCS = {
   onexai: callOneXAiText
 };
 
-// ⭐⭐ سیستم Fallback با اولویت هوشمند
+// ⭐⭐ Fallback با Timeout
 async function callWithFallback(env, prompt, imageBase64, imageMime) {
   var providers = getAvailableProviders(env);
   if (!providers.length) throw new Error('هیچ سرویس AI فعال نیست');
 
   var hasImage = !!imageBase64;
-
   if (hasImage) {
-    // 🖼️ حالت تصویری: Gemini اولویت اول
-    var imgPriority = {
-      gemini: 1,      // اولویت اول برای عکس
-      gapgpt: 2,      // گزینه دوم
-      groq: 3,
-      openrouter: 4,
-      mistral: 5,
-      together: 6,
-      nvidia: 7,
-      huggingface: 8,
-      vercel: 9,
-      github: 10,
-      cloudflare: 11,
-      avalai: 12,
-      metis: 13,
-      onexai: 14,
-      llm7: 15
-    };
-    providers.sort(function(a, b) {
-      return (imgPriority[a] || 99) - (imgPriority[b] || 99);
-    });
+    var imgPriority = { gemini: 1, gapgpt: 2, groq: 3, openrouter: 4, mistral: 5, together: 6, nvidia: 7, huggingface: 8, vercel: 9, github: 10, cloudflare: 11, avalai: 12, metis: 13, onexai: 14, llm7: 15 };
+    providers.sort(function(a, b) { return (imgPriority[a] || 99) - (imgPriority[b] || 99); });
   } else {
-    // 📊 حالت متنی: اولویت به سرویس‌های رایگان/ارزان، Gemini آخر
-    var txtPriority = {
-      // اولویت ۱: رایگان‌های قدرتمند
-      vercel: 1,       // Ling Fin (تخصصی مالی)
-      github: 2,       // GPT-4o-mini رایگان
-      groq: 3,         // Llama 3.3 سریع و رایگان
-      together: 4,     // DeepSeek R1 رایگان
-      // اولویت ۲: سرویس‌های اقتصادی
-      gapgpt: 5,
-      openrouter: 6,
-      mistral: 7,
-      huggingface: 8,
-      nvidia: 9,
-      llm7: 10,
-      // اولویت ۳: ایرانی
-      avalai: 11,
-      metis: 12,
-      onexai: 13,
-      cloudflare: 14,
-      // ⭐ Gemini آخر — سهمیه‌اش برای عکس‌ها نگه داشته بشه
-      gemini: 99
-    };
-    providers.sort(function(a, b) {
-      return (txtPriority[a] || 50) - (txtPriority[b] || 50);
-    });
+    var txtPriority = { vercel: 1, github: 2, groq: 3, together: 4, gapgpt: 5, openrouter: 6, mistral: 7, huggingface: 8, nvidia: 9, avalai: 10, metis: 11, onexai: 12, cloudflare: 13, llm7: 14, gemini: 99 };
+    providers.sort(function(a, b) { return (txtPriority[a] || 50) - (txtPriority[b] || 50); });
   }
 
   console.log('Mode: ' + (hasImage ? 'IMAGE' : 'TEXT') + ' | Order: ' + providers.join(' → '));
@@ -588,11 +531,17 @@ async function callWithFallback(env, prompt, imageBase64, imageMime) {
     var p = providers[i];
     try {
       console.log('Trying ' + p + '...');
-      var result = await PROVIDER_FUNCS[p](env, prompt, imageBase64, imageMime);
-      if (result && result.length > 50) {
-        console.log('✅ OK ' + p);
+      // ⭐ Timeout 20 ثانیه‌ای
+      var result = await withTimeout(
+        PROVIDER_FUNCS[p](env, prompt, imageBase64, imageMime),
+        20000,
+        p
+      );
+      if (result && result.length > 10) {
+        console.log('✅ OK ' + p + ' (' + result.length + ' chars)');
         return { text: result, provider: PROVIDER_NAMES[p] };
       }
+      console.log('⚠️ ' + p + ': خروجی کوتاه (' + (result ? result.length : 0) + ')');
       errors.push(p + ': خروجی کوتاه');
     } catch (e) {
       console.log('❌ ' + p + ': ' + e.message);
@@ -719,37 +668,22 @@ function modeMenu() {
 // STATE / KV
 // ============================================
 
-async function setUserState(env, chatId, state) {
-  await env.KV.put('state:' + chatId, JSON.stringify(state), { expirationTtl: 600 });
-}
-async function getUserState(env, chatId) {
-  try { return await env.KV.get('state:' + chatId, 'json'); } catch (e) { return null; }
-}
+async function setUserState(env, chatId, state) { await env.KV.put('state:' + chatId, JSON.stringify(state), { expirationTtl: 600 }); }
+async function getUserState(env, chatId) { try { return await env.KV.get('state:' + chatId, 'json'); } catch (e) { return null; } }
 async function clearUserState(env, chatId) { await env.KV.delete('state:' + chatId); }
-
-async function getJournal(env, chatId) {
-  try { return await env.KV.get('journal:' + chatId, 'json') || []; } catch (e) { return []; }
-}
+async function getJournal(env, chatId) { try { return await env.KV.get('journal:' + chatId, 'json') || []; } catch (e) { return []; } }
 async function saveJournal(env, chatId, journal) { await env.KV.put('journal:' + chatId, JSON.stringify(journal)); }
-
-async function getWatchlist(env, chatId) {
-  try { return await env.KV.get('watch:' + chatId, 'json') || []; } catch (e) { return []; }
-}
+async function getWatchlist(env, chatId) { try { return await env.KV.get('watch:' + chatId, 'json') || []; } catch (e) { return []; } }
 async function saveWatchlist(env, chatId, list) { await env.KV.put('watch:' + chatId, JSON.stringify(list)); }
 
 // ============================================
 // MENU VIEWS
 // ============================================
 
-async function showMainMenu(token, chatId, mid) {
-  await sendOrEdit(token, chatId, mid, '🎯 <b>Everest AI Terminal</b>\n\nاز منو انتخاب کنید:', mainMenu());
-}
-async function showSymbolMenu(token, chatId, mid) {
-  await sendOrEdit(token, chatId, mid, '🎯 <b>نماد:</b>', symbolMenu());
-}
-async function showTimeframeMenu(token, chatId, mid, sr) {
-  await sendOrEdit(token, chatId, mid, '⏰ <b>روش تحلیل ' + normalizeSymbol(sr) + '</b>', timeframeMenu(sr));
-}
+async function showMainMenu(token, chatId, mid) { await sendOrEdit(token, chatId, mid, '🎯 <b>Everest AI Terminal</b>\n\nاز منو انتخاب کنید:', mainMenu()); }
+async function showSymbolMenu(token, chatId, mid) { await sendOrEdit(token, chatId, mid, '🎯 <b>نماد:</b>', symbolMenu()); }
+async function showTimeframeMenu(token, chatId, mid, sr) { await sendOrEdit(token, chatId, mid, '⏰ <b>روش تحلیل ' + normalizeSymbol(sr) + '</b>', timeframeMenu(sr)); }
+
 async function showJournalMenu(token, chatId, mid, env) {
   var j = await getJournal(env, chatId);
   var t = '📓 <b>ژورنال</b>\n\n';
@@ -760,6 +694,7 @@ async function showJournalMenu(token, chatId, mid, env) {
   } else t += '<i>خالی</i>\n\n';
   await sendOrEdit(token, chatId, mid, t, journalMenu());
 }
+
 async function showWatchMenu(token, chatId, mid, env) {
   var l = await getWatchlist(env, chatId);
   var t = '🔔 <b>هشدارها</b>\n\n';
@@ -767,6 +702,7 @@ async function showWatchMenu(token, chatId, mid, env) {
   else t += '<i>خالی</i>\n\n';
   await sendOrEdit(token, chatId, mid, t, watchMenu());
 }
+
 async function showSettingsMenu(token, chatId, mid) {
   await sendOrEdit(token, chatId, mid, '⚙️ <b>تنظیمات</b>', {
     inline_keyboard: [[{ text: '🎯 حالت تحلیل', callback_data: 'settings_mode' }], [{ text: '🏠 منو', callback_data: 'menu_main' }]]
@@ -796,20 +732,12 @@ async function showStatus(token, chatId, mid, env) {
 }
 
 async function showHelp(token, chatId, mid) {
-  var t = '📖 <b>راهنما</b>\n\n' +
-    '<b>📊 تحلیل:</b>\n• تک تایم‌فریم (Live)\n• MTF (۴ تایم‌فریم)\n• تصویر 📸\n\n' +
-    '<b>📓 ژورنال:</b> ثبت و آمار\n<b>🔔 هشدار:</b> بررسی هر ۵ دقیقه\n\n' +
-    '<b>🤖 سرویس‌ها:</b> ۱۵ سرویس AI\n' +
-    '• <b>عکس</b>: Gemini اول\n' +
-    '• <b>متن</b>: Vercel/GitHub/Groq اول، Gemini آخر\n\n' +
-    '<b>دستورات:</b>\n/menu /help /analyze /journal /watch /myid';
+  var t = '📖 <b>راهنما</b>\n\n📊 تحلیل:\n• تک تایم‌فریم\n• MTF (۴ تایم‌فریم)\n• تصویر 📸\n\n📓 ژورنال\n🔔 هشدار (هر ۵ دقیقه)\n\n🤖 ۱۵ سرویس AI\n• عکس: Gemini اول\n• متن: Vercel/GitHub اول، Gemini آخر\n\n<b>دستورات:</b>\n/menu /help /analyze /journal /watch /myid';
   await sendOrEdit(token, chatId, mid, t, { inline_keyboard: [[{ text: '🏠 منو', callback_data: 'menu_main' }]] });
 }
 
 async function showImageGuide(token, chatId, mid) {
-  var t = '📸 <b>تحلیل تصویر</b>\n\nفقط عکس چارت را بفرستید!\n\n' +
-    '<b>💡 نکات:</b>\n• محور Y واضح باشد\n• کیفیت خوب\n• چارت ساده بهتر\n\n' +
-    '<b>🎯 تحلیل شامل:</b>\n• ساختار بازار\n• OB و FVG\n• الگوهای کندلی\n• Entry/SL/TP';
+  var t = '📸 <b>تحلیل تصویر</b>\n\nفقط عکس چارت را بفرستید!\n\n💡 محور Y واضح باشد';
   await sendOrEdit(token, chatId, mid, t, { inline_keyboard: [[{ text: '🏠 منو', callback_data: 'menu_main' }]] });
 }
 
@@ -821,8 +749,7 @@ async function sendOrEdit(token, chatId, mid, text, keyboard) {
   if (mid) {
     try {
       var res = await fetch('https://api.telegram.org/bot' + token + '/editMessageText', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ chat_id: chatId, message_id: mid, text: text.slice(0, 4000), parse_mode: 'HTML', disable_web_page_preview: true, reply_markup: keyboard })
       });
       var data = await res.json();
@@ -836,9 +763,7 @@ async function sendMessage(token, chatId, text, keyboard) {
   var payload = { chat_id: chatId, text: text.slice(0, 4000), parse_mode: 'HTML', disable_web_page_preview: true };
   if (keyboard) payload.reply_markup = keyboard;
   var res = await fetch('https://api.telegram.org/bot' + token + '/sendMessage', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload)
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
   });
   return res.json();
 }
@@ -855,9 +780,7 @@ async function sendPhotoBytes(token, chatId, imageBuffer, caption) {
 
 async function answerCallback(token, cid) {
   await fetch('https://api.telegram.org/bot' + token + '/answerCallbackQuery', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ callback_query_id: cid })
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ callback_query_id: cid })
   });
 }
 
@@ -870,9 +793,7 @@ async function downloadTelegramPhoto(token, fileId) {
   var bytes = new Uint8Array(buf);
   var binary = '';
   var chunk = 8192;
-  for (var i = 0; i < bytes.length; i += chunk) {
-    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
-  }
+  for (var i = 0; i < bytes.length; i += chunk) { binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk)); }
   return { base64: btoa(binary), size: bytes.length };
 }
 
@@ -888,17 +809,12 @@ async function fetchTwelveData(symbol, interval, apiKey, size) {
   url.searchParams.set('apikey', apiKey);
   var res = await fetch(url.toString());
   var data = await res.json();
-  if (data.status === 'error' || data.code) throw new Error(data.message || 'خطا');
+  if (data.status === 'error' || data.code) throw new Error(data.message || 'خطا در دریافت داده');
   if (!data.values || !data.values.length) throw new Error('داده‌ای یافت نشد');
   var result = [];
   for (var i = data.values.length - 1; i >= 0; i--) {
     var v = data.values[i];
-    result.push({
-      datetime: v.datetime || '',
-      open: parseFloat(v.open), high: parseFloat(v.high),
-      low: parseFloat(v.low), close: parseFloat(v.close),
-      volume: parseFloat(v.volume || 0)
-    });
+    result.push({ datetime: v.datetime || '', open: parseFloat(v.open), high: parseFloat(v.high), low: parseFloat(v.low), close: parseFloat(v.close), volume: parseFloat(v.volume || 0) });
   }
   return result;
 }
@@ -926,15 +842,10 @@ async function buildChartImage(symbol, timeframe, levels, env) {
     if (levels.tp2) hl.push({ price: levels.tp2, color: '#00c853', label: 'TP2', lineWidth: 2, lineStyle: 'dashed' });
     if (levels.tp3) hl.push({ price: levels.tp3, color: '#00c853', label: 'TP3', lineWidth: 2, lineStyle: 'dashed' });
   }
-  var body = {
-    symbol: exchange + ':' + symUpper, interval: ci, theme: 'dark', width: 800, height: 600,
-    studies: [{ name: 'Volume', forceOverlay: true }, { name: 'MACD' }, { name: 'Relative Strength Index' }]
-  };
+  var body = { symbol: exchange + ':' + symUpper, interval: ci, theme: 'dark', width: 800, height: 600, studies: [{ name: 'Volume', forceOverlay: true }, { name: 'MACD' }, { name: 'Relative Strength Index' }] };
   if (hl.length > 0) body.horizontalLines = hl;
   var res = await fetch('https://api.chart-img.com/v2/tradingview/advanced-chart', {
-    method: 'POST',
-    headers: { 'x-api-key': env.CHART_IMG_KEY, 'Content-Type': 'application/json' },
-    body: JSON.stringify(body)
+    method: 'POST', headers: { 'x-api-key': env.CHART_IMG_KEY, 'Content-Type': 'application/json' }, body: JSON.stringify(body)
   });
   if (!res.ok) { var e = await res.text(); throw new Error('Chart-Img ' + res.status + ': ' + e.slice(0, 200)); }
   return await res.arrayBuffer();
@@ -1049,12 +960,15 @@ async function runAnalysis(token, chatId, symbol, twelveKey, env, timeframe) {
     } catch (ce) { console.error('Chart: ' + ce.message); }
     await sendMessage(token, chatId, buildCaption(levels, symbol, timeframe, result.provider));
     var ft = tgFormat(result.text);
-    if (ft.length > 100) {
+    // ⭐ اصلاح: ارسال حتی اگر کوتاه باشد
+    if (ft.length > 0) {
       for (var i = 0; i < ft.length; i += 3800) await sendMessage(token, chatId, ft.slice(i, i + 3800));
+    } else {
+      await sendMessage(token, chatId, '⚠️ پاسخ AI خالی بود');
     }
     await sendMessage(token, chatId, '🏠 بازگشت:', { inline_keyboard: [[{ text: '🏠 منو', callback_data: 'menu_main' }]] });
   } catch (e) {
-    await sendMessage(token, chatId, '❌ <code>' + e.message + '</code>');
+    await sendMessage(token, chatId, '❌ خطا: <code>' + e.message + '</code>');
   }
 }
 
@@ -1074,7 +988,7 @@ async function runMultiTFAnalysis(token, chatId, symbol, twelveKey, env) {
     } catch (ce) {}
     await sendMessage(token, chatId, buildMultiTFCaption(levels, symbol, result.provider));
     var ft = tgFormat(result.text);
-    if (ft.length > 100) {
+    if (ft.length > 0) {
       for (var i = 0; i < ft.length; i += 3800) await sendMessage(token, chatId, ft.slice(i, i + 3800));
     }
     await sendMessage(token, chatId, '🏠 بازگشت:', { inline_keyboard: [[{ text: '🏠 منو', callback_data: 'menu_main' }]] });
@@ -1087,17 +1001,17 @@ async function runImageAnalysis(token, chatId, photoFileId, env) {
   try {
     await sendMessage(token, chatId, '📸 دریافت تصویر...');
     var pd = await downloadTelegramPhoto(token, photoFileId);
-    if (pd.size > 5 * 1024 * 1024) {
-      await sendMessage(token, chatId, '❌ حجم > ۵ مگابایت');
-      return;
-    }
-    await sendMessage(token, chatId, '🧠 در حال تحلیل...\n⏳ ۳۰ ثانیه');
+    if (pd.size > 5 * 1024 * 1024) { await sendMessage(token, chatId, '❌ حجم > ۵ مگابایت'); return; }
+    await sendMessage(token, chatId, '🧠 در حال تحلیل...');
     var result = await callWithFallback(env, IMAGE_PROMPT, pd.base64, 'image/jpeg');
     var levels = validateSignal(extractLevels(result.text));
     await sendMessage(token, chatId, buildImageCaption(levels, result.provider));
     var ft = tgFormat(result.text);
-    if (ft.length > 100) {
+    // ⭐ اصلاح
+    if (ft.length > 0) {
       for (var i = 0; i < ft.length; i += 3800) await sendMessage(token, chatId, ft.slice(i, i + 3800));
+    } else {
+      await sendMessage(token, chatId, '⚠️ پاسخ AI فقط JSON بود');
     }
     await sendMessage(token, chatId, '🏠 بازگشت:', { inline_keyboard: [[{ text: '🏠 منو', callback_data: 'menu_main' }]] });
   } catch (e) {
@@ -1106,7 +1020,7 @@ async function runImageAnalysis(token, chatId, photoFileId, env) {
 }
 
 // ============================================
-// JOURNAL
+// JOURNAL / WATCH (بدون تغییر)
 // ============================================
 
 async function showJournalList(token, chatId, env) {
@@ -1125,14 +1039,9 @@ async function showJournalStats(token, chatId, env) {
   var j = await getJournal(env, chatId);
   if (!j.length) { await sendMessage(token, chatId, '📓 خالی', { inline_keyboard: [[{ text: '◀️', callback_data: 'menu_journal' }]] }); return; }
   var w = 0, l = 0, p = 0, tRR = 0, cRR = 0;
-  var ss = {};
   for (var i = 0; i < j.length; i++) {
     var x = j[i];
     if (x.result === 'win') w++; else if (x.result === 'loss') l++; else p++;
-    if (x.result === 'win' || x.result === 'loss') {
-      if (!ss[x.symbol]) ss[x.symbol] = { w: 0, l: 0 };
-      ss[x.symbol][x.result === 'win' ? 'w' : 'l']++;
-    }
     var r = Math.abs(x.tp - x.entry) / Math.abs(x.entry - x.sl);
     if (!isNaN(r) && isFinite(r)) { tRR += r; cRR++; }
   }
@@ -1147,9 +1056,7 @@ async function showWatchList(token, chatId, env) {
   var l = await getWatchlist(env, chatId);
   if (!l.length) { await sendMessage(token, chatId, '🔔 خالی', { inline_keyboard: [[{ text: '◀️', callback_data: 'menu_watch' }]] }); return; }
   var t = '<b>🔔 هشدارها</b>\n\n';
-  for (var i = 0; i < l.length; i++) {
-    t += '#' + l[i].id + ' ' + l[i].symbol + ' ' + (l[i].condition === 'above' ? '⬆️' : '⬇️') + ' ' + l[i].price + '\n';
-  }
+  for (var i = 0; i < l.length; i++) { t += '#' + l[i].id + ' ' + l[i].symbol + ' ' + (l[i].condition === 'above' ? '⬆️' : '⬇️') + ' ' + l[i].price + '\n'; }
   await sendMessage(token, chatId, t, { inline_keyboard: [[{ text: '◀️', callback_data: 'menu_watch' }]] });
 }
 
@@ -1163,9 +1070,7 @@ async function handleJournalWizard(token, chatId, text, env, state) {
   if (state.step === 'symbol') {
     d.symbol = normalizeSymbol(text); state.data = d; state.step = 'direction';
     await setUserState(env, chatId, state);
-    await sendMessage(token, chatId, '📝 ۲/۵ <b>جهت:</b>', {
-      inline_keyboard: [[{ text: '🟢 BUY', callback_data: 'wiz_dir_BUY' }, { text: '🔴 SELL', callback_data: 'wiz_dir_SELL' }], [{ text: '❌ لغو', callback_data: 'wizard_cancel' }]]
-    });
+    await sendMessage(token, chatId, '📝 ۲/۵ <b>جهت:</b>', { inline_keyboard: [[{ text: '🟢 BUY', callback_data: 'wiz_dir_BUY' }, { text: '🔴 SELL', callback_data: 'wiz_dir_SELL' }], [{ text: '❌ لغو', callback_data: 'wizard_cancel' }]] });
     return;
   }
   if (state.step === 'entry') {
@@ -1208,9 +1113,7 @@ async function handleWatchWizard(token, chatId, text, env, state) {
   if (state.step === 'symbol') {
     d.symbol = normalizeSymbol(text); state.data = d; state.step = 'condition';
     await setUserState(env, chatId, state);
-    await sendMessage(token, chatId, '🔔 ۲/۳ <b>شرط:</b>', {
-      inline_keyboard: [[{ text: '⬆️ بالاتر', callback_data: 'wiz_cond_above' }], [{ text: '⬇️ پایین‌تر', callback_data: 'wiz_cond_below' }], [{ text: '❌ لغو', callback_data: 'wizard_cancel' }]]
-    });
+    await sendMessage(token, chatId, '🔔 ۲/۳ <b>شرط:</b>', { inline_keyboard: [[{ text: '⬆️ بالاتر', callback_data: 'wiz_cond_above' }], [{ text: '⬇️ پایین‌تر', callback_data: 'wiz_cond_below' }], [{ text: '❌ لغو', callback_data: 'wizard_cancel' }]] });
     return;
   }
   if (state.step === 'price') {
@@ -1267,17 +1170,8 @@ async function handleCallback(token, chatId, mid, data, env) {
   if (data === 'menu_settings') { await showSettingsMenu(token, chatId, mid); return; }
   if (data === 'menu_status') { await showStatus(token, chatId, mid, env); return; }
   if (data === 'menu_help') { await showHelp(token, chatId, mid); return; }
-
-  if (data === 'wizard_cancel') {
-    await clearUserState(env, chatId);
-    await sendOrEdit(token, chatId, mid, '❌ لغو', { inline_keyboard: [[{ text: '🏠 منو', callback_data: 'menu_main' }]] });
-    return;
-  }
-  if (data === 'sym_custom') {
-    await setUserState(env, chatId, { action: 'custom_symbol', step: 'input', data: {} });
-    await sendOrEdit(token, chatId, mid, '✏️ نماد:', { inline_keyboard: [[{ text: '❌ لغو', callback_data: 'wizard_cancel' }]] });
-    return;
-  }
+  if (data === 'wizard_cancel') { await clearUserState(env, chatId); await sendOrEdit(token, chatId, mid, '❌ لغو', { inline_keyboard: [[{ text: '🏠 منو', callback_data: 'menu_main' }]] }); return; }
+  if (data === 'sym_custom') { await setUserState(env, chatId, { action: 'custom_symbol', step: 'input', data: {} }); await sendOrEdit(token, chatId, mid, '✏️ نماد:', { inline_keyboard: [[{ text: '❌ لغو', callback_data: 'wizard_cancel' }]] }); return; }
   if (data.indexOf('sym_') === 0) { await showTimeframeMenu(token, chatId, mid, data.replace('sym_', '')); return; }
   if (data.indexOf('mtf_') === 0) { await runMultiTFAnalysis(token, chatId, normalizeSymbol(data.replace('mtf_', '')), tk, env); return; }
   if (data.indexOf('tf_') === 0) {
@@ -1324,11 +1218,7 @@ async function handleCallback(token, chatId, mid, data, env) {
 // ============================================
 
 async function sendAccessDenied(token, chatId) {
-  var text = '🔒 <b>دسترسی محدود</b>\n\n' +
-    'این ربات خصوصی است.\n\n' +
-    '<b>Chat ID شما:</b>\n<code>' + chatId + '</code>\n\n' +
-    '📩 برای درخواست دسترسی، این ID را به مدیر ارسال کنید.';
-  await sendMessage(token, chatId, text);
+  await sendMessage(token, chatId, '🔒 <b>دسترسی محدود</b>\n\nاین ربات خصوصی است.\n\n<b>Chat ID شما:</b>\n<code>' + chatId + '</code>\n\n📩 برای درخواست دسترسی، این ID را به مدیر ارسال کنید.');
 }
 
 // ============================================
@@ -1342,15 +1232,9 @@ async function handleUpdate(update, env) {
     var chatId = update.message.chat.id;
     var text = (update.message.text || '').trim();
 
-    if (text === '/myid') {
-      await sendMessage(token, chatId, '🆔 Chat ID شما:\n\n<code>' + chatId + '</code>');
-      return;
-    }
+    if (text === '/myid') { await sendMessage(token, chatId, '🆔 Chat ID شما:\n\n<code>' + chatId + '</code>'); return; }
 
-    if (isSecurityEnabled(env) && !isAdmin(env, chatId)) {
-      await sendAccessDenied(token, chatId);
-      return;
-    }
+    if (isSecurityEnabled(env) && !isAdmin(env, chatId)) { await sendAccessDenied(token, chatId); return; }
 
     if (update.message.photo && update.message.photo.length > 0) {
       await runImageAnalysis(token, chatId, update.message.photo[update.message.photo.length - 1].file_id, env);
@@ -1392,13 +1276,7 @@ async function handleUpdate(update, env) {
   if (update.callback_query) {
     var cb = update.callback_query;
     var cbChatId = cb.message.chat.id;
-
-    if (isSecurityEnabled(env) && !isAdmin(env, cbChatId)) {
-      await answerCallback(token, cb.id);
-      await sendAccessDenied(token, cbChatId);
-      return;
-    }
-
+    if (isSecurityEnabled(env) && !isAdmin(env, cbChatId)) { await answerCallback(token, cb.id); await sendAccessDenied(token, cbChatId); return; }
     await answerCallback(token, cb.id);
     await handleCallback(token, cbChatId, cb.message.message_id, cb.data, env);
   }
