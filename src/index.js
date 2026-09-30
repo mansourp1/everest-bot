@@ -90,7 +90,6 @@ function getGeminiKeys(env) {
 }
 
 function getAvailableProviders(env) {
-  // ⭐ ترتیب مهم: Gemini حالا اوله چون تنها سرویس مطمئن
   var all = ['gemini', 'groq', 'github', 'together', 'gapgpt', 'openrouter', 'mistral', 'huggingface', 'cloudflare', 'nvidia', 'llm7', 'avalai', 'metis', 'onexai'];
   return all.filter(function(p) {
     if (p === 'gemini') return getGeminiKeys(env).length > 0;
@@ -223,7 +222,6 @@ function validateSignal(levels) {
 // AI PROVIDERS
 // ============================================
 
-// 1. Gemini
 async function callGeminiText(env, prompt, imageBase64, imageMime) {
   var keys = getGeminiKeys(env);
   if (!keys.length) throw new Error('no gemini key');
@@ -247,11 +245,9 @@ async function callGeminiText(env, prompt, imageBase64, imageMime) {
   throw new Error('Gemini: ' + lastErr);
 }
 
-// 2. Groq — مدل‌های جدید
 async function callGroqText(env, prompt, imageBase64, imageMime) {
   var key = env.GROQ_KEY;
   if (!key) throw new Error('no groq key');
-  // ⭐ مدل‌های جدید Groq
   var models = imageBase64 
     ? ['meta-llama/llama-4-scout-17b-16e-instruct', 'meta-llama/llama-4-maverick-17b-128e-instruct']
     : ['llama-3.1-8b-instant', 'llama-3.3-70b-versatile', 'gemma2-9b-it'];
@@ -269,13 +265,11 @@ async function callGroqText(env, prompt, imageBase64, imageMime) {
       var data = await res.json();
       if (res.ok) { var t = data.choices?.[0]?.message?.content; if (t) return t; }
       lastErr = data.error?.message || 'HTTP ' + res.status;
-      console.log('Groq ' + models[i] + ' failed: ' + lastErr);
     } catch (e) { lastErr = e.message; }
   }
   throw new Error('Groq: ' + lastErr);
 }
 
-// 3. GitHub Models — URL اصلاح‌شده
 async function callGitHubText(env, prompt, imageBase64, imageMime) {
   var token = env.GITHUB_MODELS_TOKEN;
   if (!token) throw new Error('no github token');
@@ -283,7 +277,6 @@ async function callGitHubText(env, prompt, imageBase64, imageMime) {
   var content = imageBase64
     ? [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: 'data:' + imageMime + ';base64,' + imageBase64 } }]
     : prompt;
-  // ⭐ URL اصلاح‌شده
   var res = await fetch('https://models.inference.ai.azure.com/chat/completions', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
@@ -299,7 +292,6 @@ async function callGitHubText(env, prompt, imageBase64, imageMime) {
   }
 }
 
-// 4. Together AI
 async function callTogetherText(env, prompt, imageBase64, imageMime) {
   var key = env.TOGETHER_KEY;
   if (!key) throw new Error('no together key');
@@ -315,7 +307,6 @@ async function callTogetherText(env, prompt, imageBase64, imageMime) {
   return data.choices?.[0]?.message?.content || '';
 }
 
-// 5. GapGPT
 async function callGapGPTText(env, prompt, imageBase64, imageMime) {
   var key = env.GAPGPT_KEY;
   if (!key) throw new Error('no gapgpt key');
@@ -333,7 +324,6 @@ async function callGapGPTText(env, prompt, imageBase64, imageMime) {
   return data.choices?.[0]?.message?.content || '';
 }
 
-// 6. OpenRouter
 async function callOpenRouterText(env, prompt, imageBase64, imageMime) {
   var key = env.OPENROUTER_KEY;
   if (!key) throw new Error('no openrouter key');
@@ -357,7 +347,6 @@ async function callOpenRouterText(env, prompt, imageBase64, imageMime) {
   throw new Error('OpenRouter: ' + lastErr);
 }
 
-// 7. Mistral
 async function callMistralText(env, prompt, imageBase64, imageMime) {
   var key = env.MISTRAL_KEY;
   if (!key) throw new Error('no mistral key');
@@ -373,7 +362,6 @@ async function callMistralText(env, prompt, imageBase64, imageMime) {
   return data.choices?.[0]?.message?.content || '';
 }
 
-// 8. HuggingFace
 async function callHuggingFaceText(env, prompt, imageBase64, imageMime) {
   var key = env.HUGGINGFACE_KEY;
   if (!key) throw new Error('no hf key');
@@ -389,7 +377,6 @@ async function callHuggingFaceText(env, prompt, imageBase64, imageMime) {
   return data.choices?.[0]?.message?.content || '';
 }
 
-// 9. Cloudflare
 async function callCloudflareText(env, prompt, imageBase64, imageMime) {
   var key = env.CLOUDFLARE_KEY;
   if (!key) throw new Error('no cf key');
@@ -407,7 +394,6 @@ async function callCloudflareText(env, prompt, imageBase64, imageMime) {
   return data.result?.response || '';
 }
 
-// 10. NVIDIA
 async function callNvidiaText(env, prompt, imageBase64, imageMime) {
   var key = env.NVIDIA_KEY;
   if (!key) throw new Error('no nvidia key');
@@ -423,7 +409,6 @@ async function callNvidiaText(env, prompt, imageBase64, imageMime) {
   return data.choices?.[0]?.message?.content || '';
 }
 
-// 11. LLM7
 async function callLLM7Text(env, prompt, imageBase64, imageMime) {
   var key = env.LLM7_KEY || 'unused';
   var models = ['pro', 'default'];
@@ -444,7 +429,6 @@ async function callLLM7Text(env, prompt, imageBase64, imageMime) {
   throw new Error('LLM7: ' + lastErr);
 }
 
-// 12. AvalAI
 async function callAvalAIText(env, prompt, imageBase64, imageMime) {
   var key = env.AVALAI_KEY;
   if (!key) throw new Error('no avalai key');
@@ -459,7 +443,6 @@ async function callAvalAIText(env, prompt, imageBase64, imageMime) {
   return data.choices?.[0]?.message?.content || '';
 }
 
-// 13. Metis
 async function callMetisText(env, prompt, imageBase64, imageMime) {
   var key = env.METIS_KEY;
   if (!key) throw new Error('no metis key');
@@ -474,7 +457,6 @@ async function callMetisText(env, prompt, imageBase64, imageMime) {
   return data.choices?.[0]?.message?.content || '';
 }
 
-// 14. 1xAi
 async function callOneXAiText(env, prompt, imageBase64, imageMime) {
   var key = env.ONEXAI_KEY;
   if (!key) throw new Error('no 1xai key');
@@ -506,7 +488,7 @@ var PROVIDER_FUNCS = {
   onexai: callOneXAiText
 };
 
-// ⭐⭐ Fallback با ترتیب هوشمند (عکس: Gemini اول / متن: Gemini آخر)
+// ⭐⭐ Fallback با ترتیب هوشمند
 async function callWithFallback(env, prompt, imageBase64, imageMime) {
   var providers = getAvailableProviders(env);
   if (!providers.length) throw new Error('هیچ سرویس AI فعال نیست');
@@ -514,50 +496,11 @@ async function callWithFallback(env, prompt, imageBase64, imageMime) {
   var hasImage = !!imageBase64;
 
   if (hasImage) {
-    // 🖼️ حالت تصویری: Gemini اولویت اول (Vision قوی)
-    var imgPriority = {
-      gemini: 1,        // ⭐ اول برای عکس
-      gapgpt: 2,
-      groq: 3,
-      openrouter: 4,
-      mistral: 5,
-      together: 6,
-      nvidia: 7,
-      huggingface: 8,
-      github: 9,
-      cloudflare: 10,
-      avalai: 11,
-      metis: 12,
-      onexai: 13,
-      llm7: 14
-    };
-    providers.sort(function(a, b) {
-      return (imgPriority[a] || 99) - (imgPriority[b] || 99);
-    });
+    var imgPriority = { gemini: 1, gapgpt: 2, groq: 3, openrouter: 4, mistral: 5, together: 6, nvidia: 7, huggingface: 8, github: 9, cloudflare: 10, avalai: 11, metis: 12, onexai: 13, llm7: 14 };
+    providers.sort(function(a, b) { return (imgPriority[a] || 99) - (imgPriority[b] || 99); });
   } else {
-    // 📊 حالت متنی: Gemini آخر (سهمیه‌اش برای عکس نگه داشته بشه)
-    var txtPriority = {
-      // اولویت ۱: رایگان‌های قدرتمند
-      groq: 1,
-      openrouter: 2,
-      mistral: 3,
-      github: 4,
-      together: 5,
-      // اولویت ۲: سرویس‌های اقتصادی
-      llm7: 6,
-      avalai: 7,
-      metis: 8,
-      onexai: 9,
-      gapgpt: 10,
-      huggingface: 11,
-      nvidia: 12,
-      cloudflare: 13,
-      // ⭐ Gemini آخر — فقط اگه همه خطا دادن
-      gemini: 99
-    };
-    providers.sort(function(a, b) {
-      return (txtPriority[a] || 50) - (txtPriority[b] || 50);
-    });
+    var txtPriority = { groq: 1, openrouter: 2, mistral: 3, github: 4, together: 5, gapgpt: 6, llm7: 7, avalai: 8, metis: 9, onexai: 10, huggingface: 11, nvidia: 12, cloudflare: 13, gemini: 99 };
+    providers.sort(function(a, b) { return (txtPriority[a] || 50) - (txtPriority[b] || 50); });
   }
 
   console.log('Mode: ' + (hasImage ? '🖼️ IMAGE' : '📊 TEXT') + ' | Order: ' + providers.join(' → '));
@@ -567,7 +510,8 @@ async function callWithFallback(env, prompt, imageBase64, imageMime) {
     var p = providers[i];
     try {
       console.log('Trying ' + p + '...');
-      var result = await withTimeout(PROVIDER_FUNCS[p](env, prompt, imageBase64, imageMime), 15000, p);
+      var timeout = (p === 'gapgpt') ? 22000 : 10000;
+      var result = await withTimeout(PROVIDER_FUNCS[p](env, prompt, imageBase64, imageMime), timeout, p);
       if (result && result.length > 10) {
         console.log('✅ OK ' + p + ' (' + result.length + ' chars)');
         return { text: result, provider: PROVIDER_NAMES[p] };
@@ -580,6 +524,7 @@ async function callWithFallback(env, prompt, imageBase64, imageMime) {
   }
   throw new Error('همه سرویس‌ها خطا دادند:\n' + errors.slice(0, 8).join('\n'));
 }
+
 // ============================================
 // HELPERS
 // ============================================
@@ -660,6 +605,27 @@ function timeframeMenu(symbolRaw) {
   };
 }
 
+// ⭐ منوی انتخاب سرویس
+function providerMenu(providerList, symbolRaw, timeframe, isMTF) {
+  var buttons = [];
+  var row = [];
+  for (var i = 0; i < providerList.length; i++) {
+    var p = providerList[i];
+    var icon = {
+      gemini: '🌟', groq: '⚡', openrouter: '🔀', mistral: '🌬️', github: '🐙',
+      together: '🤝', gapgpt: '💎', huggingface: '🤗', cloudflare: '☁️', nvidia: '🟢',
+      llm7: '🎁', avalai: '🇮🇷', metis: '🇮🇷', onexai: '🇮🇷'
+    }[p] || '🤖';
+    var label = icon + ' ' + (PROVIDER_NAMES[p] || p);
+    var cb = 'pvd_' + p + '_' + symbolRaw + '_' + (isMTF ? 'MTF' : timeframe);
+    row.push({ text: label, callback_data: cb });
+    if (row.length === 2) { buttons.push(row); row = []; }
+  }
+  if (row.length > 0) buttons.push(row);
+  buttons.push([{ text: '◀️ بازگشت', callback_data: isMTF ? 'menu_main' : 'menu_analyze' }]);
+  return { inline_keyboard: buttons };
+}
+
 function journalMenu() {
   return {
     inline_keyboard: [
@@ -713,6 +679,24 @@ async function showMainMenu(token, chatId, mid) { await sendOrEdit(token, chatId
 async function showSymbolMenu(token, chatId, mid) { await sendOrEdit(token, chatId, mid, '🎯 <b>نماد:</b>', symbolMenu()); }
 async function showTimeframeMenu(token, chatId, mid, sr) { await sendOrEdit(token, chatId, mid, '⏰ <b>روش تحلیل ' + normalizeSymbol(sr) + '</b>', timeframeMenu(sr)); }
 
+// ⭐ نمایش منوی انتخاب سرویس
+async function showProviderMenu(token, chatId, mid, symbolRaw, timeframe, isMTF, env) {
+  var available = getAvailableProviders(env);
+  if (!available.length) {
+    await sendOrEdit(token, chatId, mid, '❌ هیچ سرویس AI فعالی نیست', {
+      inline_keyboard: [[{ text: '🏠 منو', callback_data: 'menu_main' }]]
+    });
+    return;
+  }
+  var symbolDisplay = normalizeSymbol(symbolRaw);
+  var tfDisplay = isMTF ? 'تحلیل MTF (4H+1H+15M+1M)' : timeframeLabel(timeframe);
+  var text = '<b>🎯 انتخاب سرویس AI</b>\n\n' +
+    '<b>نماد:</b> ' + symbolDisplay + '\n' +
+    '<b>روش:</b> ' + tfDisplay + '\n\n' +
+    '<i>کدوم سرویس تحلیل رو انجام بده؟</i>';
+  await sendOrEdit(token, chatId, mid, text, providerMenu(available, symbolRaw, timeframe, isMTF));
+}
+
 async function showJournalMenu(token, chatId, mid, env) {
   var j = await getJournal(env, chatId);
   var t = '📓 <b>ژورنال</b>\n\n';
@@ -761,12 +745,12 @@ async function showStatus(token, chatId, mid, env) {
 }
 
 async function showHelp(token, chatId, mid) {
-  var t = '📖 <b>راهنما</b>\n\n📊 تحلیل:\n• تک تایم‌فریم\n• MTF (۴ تایم‌فریم)\n• تصویر 📸\n\n📓 ژورنال\n🔔 هشدار\n\n🤖 سرویس‌ها:\n• Gemini (اولویت اول)\n• Groq\n• GitHub\n• ...\n\n<b>دستورات:</b>\n/menu /help /analyze /journal /watch /myid';
+  var t = '📖 <b>راهنما</b>\n\n📊 تحلیل:\n• تک تایم‌فریم\n• MTF (۴ تایم‌فریم)\n• تصویر 📸\n\n📓 ژورنال\n🔔 هشدار\n\n🎯 در هر تحلیل، خودت سرویس AI رو انتخاب می‌کنی\n\n<b>دستورات:</b>\n/menu /help /analyze /journal /watch /myid';
   await sendOrEdit(token, chatId, mid, t, { inline_keyboard: [[{ text: '🏠 منو', callback_data: 'menu_main' }]] });
 }
 
 async function showImageGuide(token, chatId, mid) {
-  var t = '📸 <b>تحلیل تصویر</b>\n\nفقط عکس چارت را بفرستید!\n\n💡 محور Y واضح باشد';
+  var t = '📸 <b>تحلیل تصویر</b>\n\nفقط عکس چارت را بفرستید!\n\n💡 محور Y واضح باشد\n\n🤖 سرویس: Gemini اول (خودکار)';
   await sendOrEdit(token, chatId, mid, t, { inline_keyboard: [[{ text: '🏠 منو', callback_data: 'menu_main' }]] });
 }
 
@@ -974,19 +958,39 @@ function tgFormat(text) {
 // ANALYSIS
 // ============================================
 
-async function runAnalysis(token, chatId, symbol, twelveKey, env, timeframe) {
+async function runAnalysis(token, chatId, symbol, twelveKey, env, timeframe, forcedProvider) {
   try {
-    await sendMessage(token, chatId, '⏳ تحلیل <b>' + symbol + '</b>...');
+    var providerLabel = forcedProvider ? (PROVIDER_NAMES[forcedProvider] || forcedProvider) : 'خودکار';
+    await sendMessage(token, chatId, '⏳ تحلیل <b>' + symbol + '</b>\n🤖 سرویس: <b>' + providerLabel + '</b>');
     var im = { '1min': '1min', '3min': '5min', '5min': '5min', '15min': '15min', '1h': '1h', '4h': '4h' };
     var interval = im[timeframe] || '1h';
     var klines = await fetchTwelveData(symbol, interval, twelveKey, 200);
     var prompt = 'نماد: ' + symbol + '\nتایم‌فریم: ' + timeframeLabel(timeframe) + '\n\n' + klinesToText(klines, symbol, timeframeLabel(timeframe));
-    var result = await callWithFallback(env, SYSTEM_PROMPT + '\n\n' + prompt, null, null);
+
+    var result;
+    if (forcedProvider && PROVIDER_FUNCS[forcedProvider]) {
+      try {
+        console.log('Forced: ' + forcedProvider);
+        var text = await withTimeout(PROVIDER_FUNCS[forcedProvider](env, SYSTEM_PROMPT + '\n\n' + prompt, null, null), 25000, forcedProvider);
+        if (text && text.length > 10) {
+          result = { text: text, provider: PROVIDER_NAMES[forcedProvider] };
+        } else {
+          throw new Error('پاسخ کوتاه');
+        }
+      } catch (e) {
+        await sendMessage(token, chatId, '❌ <b>' + (PROVIDER_NAMES[forcedProvider] || forcedProvider) + '</b> خطا داد:\n<code>' + e.message + '</code>\n\n🔄 تلاش با بقیه سرویس‌ها...');
+        result = await callWithFallback(env, SYSTEM_PROMPT + '\n\n' + prompt, null, null);
+      }
+    } else {
+      result = await callWithFallback(env, SYSTEM_PROMPT + '\n\n' + prompt, null, null);
+    }
+
     var levels = validateSignal(extractLevels(result.text));
     try {
       var buf = await buildChartImage(symbol, timeframe, levels, env);
       await sendPhotoBytes(token, chatId, buf, '📊 ' + symbol + ' - ' + timeframeLabel(timeframe));
     } catch (ce) { console.error('Chart: ' + ce.message); }
+
     await sendMessage(token, chatId, buildCaption(levels, symbol, timeframe, result.provider));
     var ft = tgFormat(result.text);
     if (ft.length > 0) {
@@ -998,15 +1002,34 @@ async function runAnalysis(token, chatId, symbol, twelveKey, env, timeframe) {
   }
 }
 
-async function runMultiTFAnalysis(token, chatId, symbol, twelveKey, env) {
+async function runMultiTFAnalysis(token, chatId, symbol, twelveKey, env, forcedProvider) {
   try {
-    await sendMessage(token, chatId, '🎯 MTF <b>' + symbol + '</b>');
+    var providerLabel = forcedProvider ? (PROVIDER_NAMES[forcedProvider] || forcedProvider) : 'خودکار';
+    await sendMessage(token, chatId, '🎯 MTF <b>' + symbol + '</b>\n🤖 سرویس: <b>' + providerLabel + '</b>');
     var k4H = await fetchTwelveData(symbol, '4h', twelveKey, 150);
     var k1H = await fetchTwelveData(symbol, '1h', twelveKey, 150);
     var k15M = await fetchTwelveData(symbol, '15min', twelveKey, 150);
     var k1M = await fetchTwelveData(symbol, '1min', twelveKey, 150);
-    var p = 'نماد: ' + symbol + '\n\n4H:\n' + klinesToText(k4H, symbol, '4H') + '\n\n1H:\n' + klinesToText(k1H, symbol, '1H') + '\n\n15M:\n' + klinesToText(k15M, symbol, '15M') + '\n\n1M:\n' + klinesToText(k1M, symbol, '1M');
-    var result = await callWithFallback(env, MULTI_TF_PROMPT + '\n\n' + p, null, null);
+    var p = 'نماد: ' + symbol + '\n\n🔹 HTF (4H):\n' + klinesToText(k4H, symbol, '4H') + '\n\n🔹 MTF (1H):\n' + klinesToText(k1H, symbol, '1H') + '\n\n🔹 LTF (15M):\n' + klinesToText(k15M, symbol, '15M') + '\n\n🔹 EntryTF (1M):\n' + klinesToText(k1M, symbol, '1M');
+
+    var result;
+    if (forcedProvider && PROVIDER_FUNCS[forcedProvider]) {
+      try {
+        console.log('Forced MTF: ' + forcedProvider);
+        var text = await withTimeout(PROVIDER_FUNCS[forcedProvider](env, MULTI_TF_PROMPT + '\n\n' + p, null, null), 25000, forcedProvider);
+        if (text && text.length > 10) {
+          result = { text: text, provider: PROVIDER_NAMES[forcedProvider] };
+        } else {
+          throw new Error('پاسخ کوتاه');
+        }
+      } catch (e) {
+        await sendMessage(token, chatId, '❌ <b>' + (PROVIDER_NAMES[forcedProvider] || forcedProvider) + '</b> خطا داد:\n<code>' + e.message + '</code>\n\n🔄 تلاش با بقیه سرویس‌ها...');
+        result = await callWithFallback(env, MULTI_TF_PROMPT + '\n\n' + p, null, null);
+      }
+    } else {
+      result = await callWithFallback(env, MULTI_TF_PROMPT + '\n\n' + p, null, null);
+    }
+
     var levels = validateSignal(extractLevels(result.text));
     try {
       var buf = await buildChartImage(symbol, '15min', levels, env);
@@ -1196,14 +1219,54 @@ async function handleCallback(token, chatId, mid, data, env) {
   if (data === 'wizard_cancel') { await clearUserState(env, chatId); await sendOrEdit(token, chatId, mid, '❌ لغو', { inline_keyboard: [[{ text: '🏠 منو', callback_data: 'menu_main' }]] }); return; }
   if (data === 'sym_custom') { await setUserState(env, chatId, { action: 'custom_symbol', step: 'input', data: {} }); await sendOrEdit(token, chatId, mid, '✏️ نماد:', { inline_keyboard: [[{ text: '❌ لغو', callback_data: 'wizard_cancel' }]] }); return; }
   if (data.indexOf('sym_') === 0) { await showTimeframeMenu(token, chatId, mid, data.replace('sym_', '')); return; }
-  if (data.indexOf('mtf_') === 0) { await runMultiTFAnalysis(token, chatId, normalizeSymbol(data.replace('mtf_', '')), tk, env); return; }
+
+  // ⭐ MTF: نمایش منوی سرویس
+  if (data.indexOf('mtf_') === 0) {
+    var symMTF = data.replace('mtf_', '');
+    await showProviderMenu(token, chatId, mid, symMTF, 'MTF', true, env);
+    return;
+  }
+
+  // ⭐ تک تایم‌فریم: نمایش منوی سرویس
   if (data.indexOf('tf_') === 0) {
     var rest = data.replace('tf_', '');
     var tfm = rest.match(/_([^_]+)$/);
     if (!tfm) return;
-    await runAnalysis(token, chatId, normalizeSymbol(rest.slice(0, -tfm[0].length)), tk, env, tfm[1]);
+    var symRaw = rest.slice(0, -tfm[0].length);
+    var tf = tfm[1];
+    await showProviderMenu(token, chatId, mid, symRaw, tf, false, env);
     return;
   }
+
+  // ⭐ انتخاب سرویس و اجرای تحلیل
+  if (data.indexOf('pvd_') === 0) {
+    var rest2 = data.replace('pvd_', '');
+    // فرمت: provider_symbolRaw_timeframe
+    // مثال: groq_XAUUSD_15min  یا  gemini_XAUUSD_MTF
+    var parts = rest2.split('_');
+    if (parts.length < 3) return;
+    var provider = parts[0];
+    var timeframe = parts[parts.length - 1];
+    var symbolRaw = parts.slice(1, -1).join('_');
+    var symbol = normalizeSymbol(symbolRaw);
+
+    // حذف پیام منو
+    try {
+      await fetch('https://api.telegram.org/bot' + token + '/deleteMessage', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat_id: chatId, message_id: mid })
+      });
+    } catch (e) {}
+
+    if (timeframe === 'MTF') {
+      await runMultiTFAnalysis(token, chatId, symbol, tk, env, provider);
+    } else {
+      await runAnalysis(token, chatId, symbol, tk, env, timeframe, provider);
+    }
+    return;
+  }
+
   if (data === 'journal_add') { await startJournalWizard(token, chatId, env); return; }
   if (data === 'journal_list') { await showJournalList(token, chatId, env); return; }
   if (data === 'journal_stats') { await showJournalStats(token, chatId, env); return; }
