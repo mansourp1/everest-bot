@@ -27,14 +27,14 @@ function isSecurityEnabled(env) {
 }
 
 // ============================================
-// TIMEOUT HELPER
+// TIMEOUT
 // ============================================
 
 function withTimeout(promise, ms, label) {
   return Promise.race([
     promise,
     new Promise(function(_, reject) {
-      setTimeout(function() { reject(new Error(label + ' timeout (' + ms + 'ms)')); }, ms);
+      setTimeout(function() { reject(new Error(label + ' timeout')); }, ms);
     })
   ]);
 }
@@ -45,7 +45,6 @@ function withTimeout(promise, ms, label) {
 
 const PROVIDER_NAMES = {
   gemini: 'Google Gemini',
-  vercel: 'Vercel AI',
   github: 'GitHub Models',
   groq: 'Groq',
   together: 'Together AI',
@@ -64,7 +63,6 @@ const PROVIDER_NAMES = {
 function getKey(env, provider) {
   var map = {
     gemini: env.GEMINI_KEY_1 || env.GEMINI_KEY,
-    vercel: env.VERCEL_GATEWAY_KEY,
     github: env.GITHUB_MODELS_TOKEN,
     groq: env.GROQ_KEY,
     together: env.TOGETHER_KEY,
@@ -92,7 +90,8 @@ function getGeminiKeys(env) {
 }
 
 function getAvailableProviders(env) {
-  var all = ['gemini', 'vercel', 'github', 'groq', 'together', 'gapgpt', 'openrouter', 'mistral', 'huggingface', 'cloudflare', 'nvidia', 'llm7', 'avalai', 'metis', 'onexai'];
+  // ⭐ ترتیب مهم: Gemini حالا اوله چون تنها سرویس مطمئن
+  var all = ['gemini', 'groq', 'github', 'together', 'gapgpt', 'openrouter', 'mistral', 'huggingface', 'cloudflare', 'nvidia', 'llm7', 'avalai', 'metis', 'onexai'];
   return all.filter(function(p) {
     if (p === 'gemini') return getGeminiKeys(env).length > 0;
     if (p === 'llm7') return true;
@@ -221,7 +220,7 @@ function validateSignal(levels) {
 }
 
 // ============================================
-// AI PROVIDERS (با URLهای اصلاح‌شده)
+// AI PROVIDERS
 // ============================================
 
 // 1. Gemini
@@ -248,23 +247,32 @@ async function callGeminiText(env, prompt, imageBase64, imageMime) {
   throw new Error('Gemini: ' + lastErr);
 }
 
-// 2. Vercel AI Gateway — URL اصلاح‌شده
-async function callVercelText(env, prompt, imageBase64, imageMime) {
-  var key = env.VERCEL_GATEWAY_KEY;
-  if (!key) throw new Error('no vercel key');
-  var model = imageBase64 ? 'google/gemini-2.5-flash' : 'inclusionai/ling-3.0-flash-fin';
-  var content = imageBase64
-    ? [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: 'data:' + imageMime + ';base64,' + imageBase64 } }]
-    : prompt;
-  // ✅ URL اصلاح‌شده
-  var res = await fetch('https://ai-gateway.vercel.sh/v1/chat/completions', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + key },
-    body: JSON.stringify({ model: model, messages: [{ role: 'user', content: content }], temperature: 0.1, max_tokens: 8192 })
-  });
-  var data = await res.json();
-  if (!res.ok) throw new Error(data.error?.message || 'HTTP ' + res.status);
-  return data.choices?.[0]?.message?.content || '';
+// 2. Groq — مدل‌های جدید
+async function callGroqText(env, prompt, imageBase64, imageMime) {
+  var key = env.GROQ_KEY;
+  if (!key) throw new Error('no groq key');
+  // ⭐ مدل‌های جدید Groq
+  var models = imageBase64 
+    ? ['meta-llama/llama-4-scout-17b-16e-instruct', 'meta-llama/llama-4-maverick-17b-128e-instruct']
+    : ['llama-3.1-8b-instant', 'llama-3.3-70b-versatile', 'gemma2-9b-it'];
+  var lastErr = '';
+  for (var i = 0; i < models.length; i++) {
+    var content = imageBase64 
+      ? [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: 'data:' + imageMime + ';base64,' + imageBase64 } }] 
+      : prompt;
+    try {
+      var res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + key },
+        body: JSON.stringify({ model: models[i], messages: [{ role: 'user', content: content }], temperature: 0.1, max_tokens: 8192 })
+      });
+      var data = await res.json();
+      if (res.ok) { var t = data.choices?.[0]?.message?.content; if (t) return t; }
+      lastErr = data.error?.message || 'HTTP ' + res.status;
+      console.log('Groq ' + models[i] + ' failed: ' + lastErr);
+    } catch (e) { lastErr = e.message; }
+  }
+  throw new Error('Groq: ' + lastErr);
 }
 
 // 3. GitHub Models — URL اصلاح‌شده
@@ -275,38 +283,27 @@ async function callGitHubText(env, prompt, imageBase64, imageMime) {
   var content = imageBase64
     ? [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: 'data:' + imageMime + ';base64,' + imageBase64 } }]
     : prompt;
-  // ✅ URL اصلاح‌شده
+  // ⭐ URL اصلاح‌شده
   var res = await fetch('https://models.inference.ai.azure.com/chat/completions', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
     body: JSON.stringify({ model: model, messages: [{ role: 'user', content: content }], temperature: 0.1, max_tokens: 8192 })
   });
-  var data = await res.json();
-  if (!res.ok) throw new Error(data.error?.message || 'HTTP ' + res.status);
-  return data.choices?.[0]?.message?.content || '';
+  var text = await res.text();
+  if (!res.ok) throw new Error('GitHub ' + res.status + ': ' + text.slice(0, 150));
+  try {
+    var data = JSON.parse(text);
+    return data.choices?.[0]?.message?.content || '';
+  } catch (e) {
+    throw new Error('GitHub JSON error: ' + text.slice(0, 150));
+  }
 }
 
-// 4. Groq
-async function callGroqText(env, prompt, imageBase64, imageMime) {
-  var key = env.GROQ_KEY;
-  if (!key) throw new Error('no groq key');
-  var model = imageBase64 ? 'meta-llama/llama-4-scout-17b-16e-instruct' : 'llama-3.3-70b-versatile';
-  var content = imageBase64 ? [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: 'data:' + imageMime + ';base64,' + imageBase64 } }] : prompt;
-  var res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + key },
-    body: JSON.stringify({ model: model, messages: [{ role: 'user', content: content }], temperature: 0.1, max_tokens: 8192 })
-  });
-  var data = await res.json();
-  if (!res.ok) throw new Error(data.error?.message || 'HTTP ' + res.status);
-  return data.choices?.[0]?.message?.content || '';
-}
-
-// 5. Together AI
+// 4. Together AI
 async function callTogetherText(env, prompt, imageBase64, imageMime) {
   var key = env.TOGETHER_KEY;
   if (!key) throw new Error('no together key');
-  var model = imageBase64 ? 'meta-llama/Llama-3.2-11B-Vision-Instruct-Turbo' : 'deepseek-ai/DeepSeek-R1-Distill-Llama-70B-free';
+  var model = imageBase64 ? 'meta-llama/Llama-3.2-11B-Vision-Instruct-Turbo' : 'meta-llama/Llama-3.3-70B-Instruct-Turbo';
   var content = imageBase64 ? [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: 'data:' + imageMime + ';base64,' + imageBase64 } }] : prompt;
   var res = await fetch('https://api.together.xyz/v1/chat/completions', {
     method: 'POST',
@@ -318,7 +315,7 @@ async function callTogetherText(env, prompt, imageBase64, imageMime) {
   return data.choices?.[0]?.message?.content || '';
 }
 
-// 6. GapGPT
+// 5. GapGPT
 async function callGapGPTText(env, prompt, imageBase64, imageMime) {
   var key = env.GAPGPT_KEY;
   if (!key) throw new Error('no gapgpt key');
@@ -336,12 +333,12 @@ async function callGapGPTText(env, prompt, imageBase64, imageMime) {
   return data.choices?.[0]?.message?.content || '';
 }
 
-// 7. OpenRouter
+// 6. OpenRouter
 async function callOpenRouterText(env, prompt, imageBase64, imageMime) {
   var key = env.OPENROUTER_KEY;
   if (!key) throw new Error('no openrouter key');
   var models = imageBase64
-    ? ['google/gemini-2.0-flash-exp:free', 'qwen/qwen-2.5-vl-7b-instruct:free']
+    ? ['google/gemini-2.0-flash-exp:free']
     : ['deepseek/deepseek-chat', 'meta-llama/llama-3.3-70b-instruct:free'];
   var lastErr = '';
   for (var i = 0; i < models.length; i++) {
@@ -360,7 +357,7 @@ async function callOpenRouterText(env, prompt, imageBase64, imageMime) {
   throw new Error('OpenRouter: ' + lastErr);
 }
 
-// 8. Mistral
+// 7. Mistral
 async function callMistralText(env, prompt, imageBase64, imageMime) {
   var key = env.MISTRAL_KEY;
   if (!key) throw new Error('no mistral key');
@@ -376,7 +373,7 @@ async function callMistralText(env, prompt, imageBase64, imageMime) {
   return data.choices?.[0]?.message?.content || '';
 }
 
-// 9. HuggingFace
+// 8. HuggingFace
 async function callHuggingFaceText(env, prompt, imageBase64, imageMime) {
   var key = env.HUGGINGFACE_KEY;
   if (!key) throw new Error('no hf key');
@@ -392,7 +389,7 @@ async function callHuggingFaceText(env, prompt, imageBase64, imageMime) {
   return data.choices?.[0]?.message?.content || '';
 }
 
-// 10. Cloudflare
+// 9. Cloudflare
 async function callCloudflareText(env, prompt, imageBase64, imageMime) {
   var key = env.CLOUDFLARE_KEY;
   if (!key) throw new Error('no cf key');
@@ -410,7 +407,7 @@ async function callCloudflareText(env, prompt, imageBase64, imageMime) {
   return data.result?.response || '';
 }
 
-// 11. NVIDIA NIM
+// 10. NVIDIA
 async function callNvidiaText(env, prompt, imageBase64, imageMime) {
   var key = env.NVIDIA_KEY;
   if (!key) throw new Error('no nvidia key');
@@ -426,10 +423,10 @@ async function callNvidiaText(env, prompt, imageBase64, imageMime) {
   return data.choices?.[0]?.message?.content || '';
 }
 
-// 12. LLM7
+// 11. LLM7
 async function callLLM7Text(env, prompt, imageBase64, imageMime) {
   var key = env.LLM7_KEY || 'unused';
-  var models = imageBase64 ? ['pro'] : ['pro', 'default'];
+  var models = ['pro', 'default'];
   var lastErr = '';
   for (var i = 0; i < models.length; i++) {
     var content = imageBase64 ? [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: 'data:' + imageMime + ';base64,' + imageBase64 } }] : prompt;
@@ -447,7 +444,7 @@ async function callLLM7Text(env, prompt, imageBase64, imageMime) {
   throw new Error('LLM7: ' + lastErr);
 }
 
-// 13. AvalAI
+// 12. AvalAI
 async function callAvalAIText(env, prompt, imageBase64, imageMime) {
   var key = env.AVALAI_KEY;
   if (!key) throw new Error('no avalai key');
@@ -462,7 +459,7 @@ async function callAvalAIText(env, prompt, imageBase64, imageMime) {
   return data.choices?.[0]?.message?.content || '';
 }
 
-// 14. Metis
+// 13. Metis
 async function callMetisText(env, prompt, imageBase64, imageMime) {
   var key = env.METIS_KEY;
   if (!key) throw new Error('no metis key');
@@ -477,7 +474,7 @@ async function callMetisText(env, prompt, imageBase64, imageMime) {
   return data.choices?.[0]?.message?.content || '';
 }
 
-// 15. 1xAi
+// 14. 1xAi
 async function callOneXAiText(env, prompt, imageBase64, imageMime) {
   var key = env.ONEXAI_KEY;
   if (!key) throw new Error('no 1xai key');
@@ -494,9 +491,8 @@ async function callOneXAiText(env, prompt, imageBase64, imageMime) {
 
 var PROVIDER_FUNCS = {
   gemini: callGeminiText,
-  vercel: callVercelText,
-  github: callGitHubText,
   groq: callGroqText,
+  github: callGitHubText,
   together: callTogetherText,
   gapgpt: callGapGPTText,
   openrouter: callOpenRouterText,
@@ -510,20 +506,19 @@ var PROVIDER_FUNCS = {
   onexai: callOneXAiText
 };
 
-// ⭐⭐ Fallback با Timeout
+// ⭐⭐ Fallback - Gemini اول همیشه
 async function callWithFallback(env, prompt, imageBase64, imageMime) {
   var providers = getAvailableProviders(env);
   if (!providers.length) throw new Error('هیچ سرویس AI فعال نیست');
 
-  var hasImage = !!imageBase64;
-  if (hasImage) {
-    var imgPriority = { gemini: 1, gapgpt: 2, groq: 3, openrouter: 4, mistral: 5, together: 6, nvidia: 7, huggingface: 8, vercel: 9, github: 10, cloudflare: 11, avalai: 12, metis: 13, onexai: 14, llm7: 15 };
-    providers.sort(function(a, b) { return (imgPriority[a] || 99) - (imgPriority[b] || 99); });
-  } else {
-    var txtPriority = { vercel: 1, github: 2, groq: 3, together: 4, gapgpt: 5, openrouter: 6, mistral: 7, huggingface: 8, nvidia: 9, avalai: 10, metis: 11, onexai: 12, cloudflare: 13, llm7: 14, gemini: 99 };
-    providers.sort(function(a, b) { return (txtPriority[a] || 50) - (txtPriority[b] || 50); });
-  }
+  // ⭐ Gemini همیشه اول (چه عکس چه متن)
+  providers.sort(function(a, b) {
+    if (a === 'gemini') return -1;
+    if (b === 'gemini') return 1;
+    return 0;
+  });
 
+  var hasImage = !!imageBase64;
   console.log('Mode: ' + (hasImage ? 'IMAGE' : 'TEXT') + ' | Order: ' + providers.join(' → '));
 
   var errors = [];
@@ -531,18 +526,12 @@ async function callWithFallback(env, prompt, imageBase64, imageMime) {
     var p = providers[i];
     try {
       console.log('Trying ' + p + '...');
-      // ⭐ Timeout 20 ثانیه‌ای
-      var result = await withTimeout(
-        PROVIDER_FUNCS[p](env, prompt, imageBase64, imageMime),
-        20000,
-        p
-      );
+      var result = await withTimeout(PROVIDER_FUNCS[p](env, prompt, imageBase64, imageMime), 15000, p);
       if (result && result.length > 10) {
         console.log('✅ OK ' + p + ' (' + result.length + ' chars)');
         return { text: result, provider: PROVIDER_NAMES[p] };
       }
-      console.log('⚠️ ' + p + ': خروجی کوتاه (' + (result ? result.length : 0) + ')');
-      errors.push(p + ': خروجی کوتاه');
+      errors.push(p + ': کوتاه');
     } catch (e) {
       console.log('❌ ' + p + ': ' + e.message);
       errors.push(p + ': ' + e.message);
@@ -710,7 +699,7 @@ async function showSettingsMenu(token, chatId, mid) {
 }
 
 async function showStatus(token, chatId, mid, env) {
-  var all = ['gemini', 'vercel', 'github', 'groq', 'together', 'gapgpt', 'openrouter', 'mistral', 'huggingface', 'cloudflare', 'nvidia', 'llm7', 'avalai', 'metis', 'onexai'];
+  var all = ['gemini', 'groq', 'github', 'together', 'gapgpt', 'openrouter', 'mistral', 'huggingface', 'cloudflare', 'nvidia', 'llm7', 'avalai', 'metis', 'onexai'];
   var text = '📈 <b>وضعیت سرویس‌ها</b>\n\n';
   var active = 0;
   for (var i = 0; i < all.length; i++) {
@@ -732,7 +721,7 @@ async function showStatus(token, chatId, mid, env) {
 }
 
 async function showHelp(token, chatId, mid) {
-  var t = '📖 <b>راهنما</b>\n\n📊 تحلیل:\n• تک تایم‌فریم\n• MTF (۴ تایم‌فریم)\n• تصویر 📸\n\n📓 ژورنال\n🔔 هشدار (هر ۵ دقیقه)\n\n🤖 ۱۵ سرویس AI\n• عکس: Gemini اول\n• متن: Vercel/GitHub اول، Gemini آخر\n\n<b>دستورات:</b>\n/menu /help /analyze /journal /watch /myid';
+  var t = '📖 <b>راهنما</b>\n\n📊 تحلیل:\n• تک تایم‌فریم\n• MTF (۴ تایم‌فریم)\n• تصویر 📸\n\n📓 ژورنال\n🔔 هشدار\n\n🤖 سرویس‌ها:\n• Gemini (اولویت اول)\n• Groq\n• GitHub\n• ...\n\n<b>دستورات:</b>\n/menu /help /analyze /journal /watch /myid';
   await sendOrEdit(token, chatId, mid, t, { inline_keyboard: [[{ text: '🏠 منو', callback_data: 'menu_main' }]] });
 }
 
@@ -960,11 +949,8 @@ async function runAnalysis(token, chatId, symbol, twelveKey, env, timeframe) {
     } catch (ce) { console.error('Chart: ' + ce.message); }
     await sendMessage(token, chatId, buildCaption(levels, symbol, timeframe, result.provider));
     var ft = tgFormat(result.text);
-    // ⭐ اصلاح: ارسال حتی اگر کوتاه باشد
     if (ft.length > 0) {
       for (var i = 0; i < ft.length; i += 3800) await sendMessage(token, chatId, ft.slice(i, i + 3800));
-    } else {
-      await sendMessage(token, chatId, '⚠️ پاسخ AI خالی بود');
     }
     await sendMessage(token, chatId, '🏠 بازگشت:', { inline_keyboard: [[{ text: '🏠 منو', callback_data: 'menu_main' }]] });
   } catch (e) {
@@ -974,12 +960,12 @@ async function runAnalysis(token, chatId, symbol, twelveKey, env, timeframe) {
 
 async function runMultiTFAnalysis(token, chatId, symbol, twelveKey, env) {
   try {
-    await sendMessage(token, chatId, '🎯 MTF <b>' + symbol + '</b>\n📊 4H+1H+15M+1M');
+    await sendMessage(token, chatId, '🎯 MTF <b>' + symbol + '</b>');
     var k4H = await fetchTwelveData(symbol, '4h', twelveKey, 150);
     var k1H = await fetchTwelveData(symbol, '1h', twelveKey, 150);
     var k15M = await fetchTwelveData(symbol, '15min', twelveKey, 150);
     var k1M = await fetchTwelveData(symbol, '1min', twelveKey, 150);
-    var p = 'نماد: ' + symbol + '\n\n🔹 HTF (4H):\n' + klinesToText(k4H, symbol, '4H') + '\n\n🔹 MTF (1H):\n' + klinesToText(k1H, symbol, '1H') + '\n\n🔹 LTF (15M):\n' + klinesToText(k15M, symbol, '15M') + '\n\n🔹 EntryTF (1M):\n' + klinesToText(k1M, symbol, '1M');
+    var p = 'نماد: ' + symbol + '\n\n4H:\n' + klinesToText(k4H, symbol, '4H') + '\n\n1H:\n' + klinesToText(k1H, symbol, '1H') + '\n\n15M:\n' + klinesToText(k15M, symbol, '15M') + '\n\n1M:\n' + klinesToText(k1M, symbol, '1M');
     var result = await callWithFallback(env, MULTI_TF_PROMPT + '\n\n' + p, null, null);
     var levels = validateSignal(extractLevels(result.text));
     try {
@@ -1007,11 +993,8 @@ async function runImageAnalysis(token, chatId, photoFileId, env) {
     var levels = validateSignal(extractLevels(result.text));
     await sendMessage(token, chatId, buildImageCaption(levels, result.provider));
     var ft = tgFormat(result.text);
-    // ⭐ اصلاح
     if (ft.length > 0) {
       for (var i = 0; i < ft.length; i += 3800) await sendMessage(token, chatId, ft.slice(i, i + 3800));
-    } else {
-      await sendMessage(token, chatId, '⚠️ پاسخ AI فقط JSON بود');
     }
     await sendMessage(token, chatId, '🏠 بازگشت:', { inline_keyboard: [[{ text: '🏠 منو', callback_data: 'menu_main' }]] });
   } catch (e) {
@@ -1020,7 +1003,7 @@ async function runImageAnalysis(token, chatId, photoFileId, env) {
 }
 
 // ============================================
-// JOURNAL / WATCH (بدون تغییر)
+// JOURNAL / WATCH
 // ============================================
 
 async function showJournalList(token, chatId, env) {
@@ -1030,7 +1013,7 @@ async function showJournalList(token, chatId, env) {
   for (var i = 0; i < Math.min(j.length, 15); i++) {
     var x = j[i];
     var s = x.result === 'win' ? '✅' : x.result === 'loss' ? '❌' : '⏳';
-    t += s + ' #' + x.id + ' ' + x.symbol + ' ' + x.direction + '\n   E:' + x.entry + ' SL:' + x.sl + ' TP:' + x.tp + '\n\n';
+    t += s + ' #' + x.id + ' ' + x.symbol + ' ' + x.direction + '\n';
   }
   await sendMessage(token, chatId, t, { inline_keyboard: [[{ text: '◀️', callback_data: 'menu_journal' }]] });
 }
@@ -1048,7 +1031,7 @@ async function showJournalStats(token, chatId, env) {
   var cl = w + l;
   var wr = cl > 0 ? (w / cl * 100).toFixed(1) : '0';
   var ar = cRR > 0 ? (tRR / cRR).toFixed(2) : '0';
-  var t = '<b>📊 آمار</b>\n\n📈 کل: <b>' + j.length + '</b>\n✅ برد: <b>' + w + '</b>\n❌ باخت: <b>' + l + '</b>\n⏳ در انتظار: <b>' + p + '</b>\n\n🎯 نرخ برد: <b>' + wr + '%</b>\n⚖️ R/R میانگین: <b>1:' + ar + '</b>';
+  var t = '<b>📊 آمار</b>\n\n📈 کل: <b>' + j.length + '</b>\n✅ برد: <b>' + w + '</b>\n❌ باخت: <b>' + l + '</b>\n⏳ در انتظار: <b>' + p + '</b>\n\n🎯 نرخ برد: <b>' + wr + '%</b>\n⚖️ R/R: <b>1:' + ar + '</b>';
   await sendMessage(token, chatId, t, { inline_keyboard: [[{ text: '◀️', callback_data: 'menu_journal' }]] });
 }
 
@@ -1125,7 +1108,7 @@ async function handleWatchWizard(token, chatId, text, env, state) {
     l.push({ id: nid, symbol: d.symbol, condition: d.condition, price: d.price, ts: Date.now() });
     await saveWatchlist(env, chatId, l);
     await clearUserState(env, chatId);
-    await sendMessage(token, chatId, '✅ <b>ثبت شد</b>\n#' + nid + ' ' + d.symbol + ' ' + (d.condition === 'above' ? '⬆️' : '⬇️') + ' ' + d.price, { inline_keyboard: [[{ text: '🔔 هشدارها', callback_data: 'menu_watch' }]] });
+    await sendMessage(token, chatId, '✅ <b>ثبت شد</b>\n#' + nid + ' ' + d.symbol, { inline_keyboard: [[{ text: '🔔 هشدارها', callback_data: 'menu_watch' }]] });
     return;
   }
 }
@@ -1146,7 +1129,7 @@ async function checkWatchlist(env) {
           var price = await getCurrentPrice(w.symbol, tk);
           var tg = (w.condition === 'above' && price >= w.price) || (w.condition === 'below' && price <= w.price);
           if (tg) {
-            await sendMessage(token, cid, '🔔 <b>هشدار فعال شد!</b>\n\n📌 ' + w.symbol + '\n' + (w.condition === 'above' ? '⬆️' : '⬇️') + ' ' + w.price + '\n💰 ' + price, { inline_keyboard: [[{ text: '📊 تحلیل', callback_data: 'sym_' + w.symbol.replace('/', '') }]] });
+            await sendMessage(token, cid, '🔔 <b>هشدار!</b>\n\n📌 ' + w.symbol + '\n💰 ' + price, { inline_keyboard: [[{ text: '📊 تحلیل', callback_data: 'sym_' + w.symbol.replace('/', '') }]] });
           } else rem.push(w);
         } catch (e) { rem.push(w); }
       }
@@ -1218,7 +1201,7 @@ async function handleCallback(token, chatId, mid, data, env) {
 // ============================================
 
 async function sendAccessDenied(token, chatId) {
-  await sendMessage(token, chatId, '🔒 <b>دسترسی محدود</b>\n\nاین ربات خصوصی است.\n\n<b>Chat ID شما:</b>\n<code>' + chatId + '</code>\n\n📩 برای درخواست دسترسی، این ID را به مدیر ارسال کنید.');
+  await sendMessage(token, chatId, '🔒 <b>دسترسی محدود</b>\n\n<b>Chat ID شما:</b>\n<code>' + chatId + '</code>');
 }
 
 // ============================================
@@ -1232,7 +1215,7 @@ async function handleUpdate(update, env) {
     var chatId = update.message.chat.id;
     var text = (update.message.text || '').trim();
 
-    if (text === '/myid') { await sendMessage(token, chatId, '🆔 Chat ID شما:\n\n<code>' + chatId + '</code>'); return; }
+    if (text === '/myid') { await sendMessage(token, chatId, '🆔 Chat ID:\n\n<code>' + chatId + '</code>'); return; }
 
     if (isSecurityEnabled(env) && !isAdmin(env, chatId)) { await sendAccessDenied(token, chatId); return; }
 
@@ -1270,7 +1253,7 @@ async function handleUpdate(update, env) {
       return;
     }
 
-    await sendMessage(token, chatId, '❓ متوجه نشدم\n\n💡 عکس چارت هم می‌تونی بفرستی!', mainMenu());
+    await sendMessage(token, chatId, '❓ متوجه نشدم', mainMenu());
   }
 
   if (update.callback_query) {
