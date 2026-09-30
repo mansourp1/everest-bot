@@ -49,6 +49,7 @@ const PROVIDER_NAMES = {
   groq: 'Groq',
   together: 'Together AI',
   gapgpt: 'GapGPT',
+  aiprime: 'AIPrime',           // ⭐ سرویس جدید
   openrouter: 'OpenRouter',
   mistral: 'Mistral AI',
   huggingface: 'HuggingFace',
@@ -67,6 +68,7 @@ function getKey(env, provider) {
     groq: env.GROQ_KEY,
     together: env.TOGETHER_KEY,
     gapgpt: env.GAPGPT_KEY,
+    aiprime: env.AIPRIME_KEY,    // ⭐ کلید AIPrime
     openrouter: env.OPENROUTER_KEY,
     mistral: env.MISTRAL_KEY,
     huggingface: env.HUGGINGFACE_KEY,
@@ -90,7 +92,7 @@ function getGeminiKeys(env) {
 }
 
 function getAvailableProviders(env) {
-  var all = ['gemini', 'groq', 'github', 'together', 'gapgpt', 'openrouter', 'mistral', 'huggingface', 'cloudflare', 'nvidia', 'llm7', 'avalai', 'metis', 'onexai'];
+  var all = ['gemini', 'groq', 'github', 'together', 'gapgpt', 'aiprime', 'openrouter', 'mistral', 'huggingface', 'cloudflare', 'nvidia', 'llm7', 'avalai', 'metis', 'onexai'];
   return all.filter(function(p) {
     if (p === 'gemini') return getGeminiKeys(env).length > 0;
     if (p === 'llm7') return true;
@@ -324,6 +326,42 @@ async function callGapGPTText(env, prompt, imageBase64, imageMime) {
   return data.choices?.[0]?.message?.content || '';
 }
 
+// ⭐⭐⭐ AIPrime — سرویس جدید
+async function callAIPrimeText(env, prompt, imageBase64, imageMime) {
+  var key = env.AIPRIME_KEY;
+  if (!key) throw new Error('no aiprime key');
+
+  // ⚠️ اگه مدل‌های AIPrime متفاوته، این خطوط رو تغییر بده
+  var model = imageBase64 ? 'gpt-4o' : 'gpt-4o-mini';
+
+  var content = imageBase64
+    ? [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: 'data:' + imageMime + ';base64,' + imageBase64 } }]
+    : prompt;
+
+  var res = await fetch('https://api.aiprime.shop/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': 'Bearer ' + key
+    },
+    body: JSON.stringify({
+      model: model,
+      messages: [{ role: 'user', content: content }],
+      temperature: 0.1,
+      max_tokens: 8192
+    })
+  });
+
+  var text = await res.text();
+  if (!res.ok) throw new Error('AIPrime ' + res.status + ': ' + text.slice(0, 150));
+  try {
+    var data = JSON.parse(text);
+    return data.choices?.[0]?.message?.content || '';
+  } catch (e) {
+    throw new Error('AIPrime JSON error: ' + text.slice(0, 150));
+  }
+}
+
 async function callOpenRouterText(env, prompt, imageBase64, imageMime) {
   var key = env.OPENROUTER_KEY;
   if (!key) throw new Error('no openrouter key');
@@ -477,6 +515,7 @@ var PROVIDER_FUNCS = {
   github: callGitHubText,
   together: callTogetherText,
   gapgpt: callGapGPTText,
+  aiprime: callAIPrimeText,     // ⭐ AIPrime
   openrouter: callOpenRouterText,
   mistral: callMistralText,
   huggingface: callHuggingFaceText,
@@ -496,10 +535,10 @@ async function callWithFallback(env, prompt, imageBase64, imageMime) {
   var hasImage = !!imageBase64;
 
   if (hasImage) {
-    var imgPriority = { gemini: 1, gapgpt: 2, groq: 3, openrouter: 4, mistral: 5, together: 6, nvidia: 7, huggingface: 8, github: 9, cloudflare: 10, avalai: 11, metis: 12, onexai: 13, llm7: 14 };
+    var imgPriority = { gemini: 1, gapgpt: 2, aiprime: 3, groq: 4, openrouter: 5, mistral: 6, together: 7, nvidia: 8, huggingface: 9, github: 10, cloudflare: 11, avalai: 12, metis: 13, onexai: 14, llm7: 15 };
     providers.sort(function(a, b) { return (imgPriority[a] || 99) - (imgPriority[b] || 99); });
   } else {
-    var txtPriority = { groq: 1, openrouter: 2, mistral: 3, github: 4, together: 5, gapgpt: 6, llm7: 7, avalai: 8, metis: 9, onexai: 10, huggingface: 11, nvidia: 12, cloudflare: 13, gemini: 99 };
+    var txtPriority = { groq: 1, openrouter: 2, mistral: 3, github: 4, together: 5, gapgpt: 6, aiprime: 7, llm7: 8, avalai: 9, metis: 10, onexai: 11, huggingface: 12, nvidia: 13, cloudflare: 14, gemini: 99 };
     providers.sort(function(a, b) { return (txtPriority[a] || 50) - (txtPriority[b] || 50); });
   }
 
@@ -510,7 +549,7 @@ async function callWithFallback(env, prompt, imageBase64, imageMime) {
     var p = providers[i];
     try {
       console.log('Trying ' + p + '...');
-      var timeout = (p === 'gapgpt') ? 22000 : 10000;
+      var timeout = (p === 'gapgpt' || p === 'aiprime') ? 22000 : 10000;
       var result = await withTimeout(PROVIDER_FUNCS[p](env, prompt, imageBase64, imageMime), timeout, p);
       if (result && result.length > 10) {
         console.log('✅ OK ' + p + ' (' + result.length + ' chars)');
@@ -613,7 +652,7 @@ function providerMenu(providerList, symbolRaw, timeframe, isMTF) {
     var p = providerList[i];
     var icon = {
       gemini: '🌟', groq: '⚡', openrouter: '🔀', mistral: '🌬️', github: '🐙',
-      together: '🤝', gapgpt: '💎', huggingface: '🤗', cloudflare: '☁️', nvidia: '🟢',
+      together: '🤝', gapgpt: '💎', aiprime: '🅰️', huggingface: '🤗', cloudflare: '☁️', nvidia: '🟢',
       llm7: '🎁', avalai: '🇮🇷', metis: '🇮🇷', onexai: '🇮🇷'
     }[p] || '🤖';
     var label = icon + ' ' + (PROVIDER_NAMES[p] || p);
@@ -679,7 +718,6 @@ async function showMainMenu(token, chatId, mid) { await sendOrEdit(token, chatId
 async function showSymbolMenu(token, chatId, mid) { await sendOrEdit(token, chatId, mid, '🎯 <b>نماد:</b>', symbolMenu()); }
 async function showTimeframeMenu(token, chatId, mid, sr) { await sendOrEdit(token, chatId, mid, '⏰ <b>روش تحلیل ' + normalizeSymbol(sr) + '</b>', timeframeMenu(sr)); }
 
-// ⭐ نمایش منوی انتخاب سرویس
 async function showProviderMenu(token, chatId, mid, symbolRaw, timeframe, isMTF, env) {
   var available = getAvailableProviders(env);
   if (!available.length) {
@@ -723,7 +761,7 @@ async function showSettingsMenu(token, chatId, mid) {
 }
 
 async function showStatus(token, chatId, mid, env) {
-  var all = ['gemini', 'groq', 'github', 'together', 'gapgpt', 'openrouter', 'mistral', 'huggingface', 'cloudflare', 'nvidia', 'llm7', 'avalai', 'metis', 'onexai'];
+  var all = ['gemini', 'groq', 'github', 'together', 'gapgpt', 'aiprime', 'openrouter', 'mistral', 'huggingface', 'cloudflare', 'nvidia', 'llm7', 'avalai', 'metis', 'onexai'];
   var text = '📈 <b>وضعیت سرویس‌ها</b>\n\n';
   var active = 0;
   for (var i = 0; i < all.length; i++) {
@@ -1220,14 +1258,14 @@ async function handleCallback(token, chatId, mid, data, env) {
   if (data === 'sym_custom') { await setUserState(env, chatId, { action: 'custom_symbol', step: 'input', data: {} }); await sendOrEdit(token, chatId, mid, '✏️ نماد:', { inline_keyboard: [[{ text: '❌ لغو', callback_data: 'wizard_cancel' }]] }); return; }
   if (data.indexOf('sym_') === 0) { await showTimeframeMenu(token, chatId, mid, data.replace('sym_', '')); return; }
 
-  // ⭐ MTF: نمایش منوی سرویس
+  // MTF: نمایش منوی سرویس
   if (data.indexOf('mtf_') === 0) {
     var symMTF = data.replace('mtf_', '');
     await showProviderMenu(token, chatId, mid, symMTF, 'MTF', true, env);
     return;
   }
 
-  // ⭐ تک تایم‌فریم: نمایش منوی سرویس
+  // تک تایم‌فریم: نمایش منوی سرویس
   if (data.indexOf('tf_') === 0) {
     var rest = data.replace('tf_', '');
     var tfm = rest.match(/_([^_]+)$/);
@@ -1238,11 +1276,9 @@ async function handleCallback(token, chatId, mid, data, env) {
     return;
   }
 
-  // ⭐ انتخاب سرویس و اجرای تحلیل
+  // انتخاب سرویس و اجرای تحلیل
   if (data.indexOf('pvd_') === 0) {
     var rest2 = data.replace('pvd_', '');
-    // فرمت: provider_symbolRaw_timeframe
-    // مثال: groq_XAUUSD_15min  یا  gemini_XAUUSD_MTF
     var parts = rest2.split('_');
     if (parts.length < 3) return;
     var provider = parts[0];
@@ -1250,7 +1286,6 @@ async function handleCallback(token, chatId, mid, data, env) {
     var symbolRaw = parts.slice(1, -1).join('_');
     var symbol = normalizeSymbol(symbolRaw);
 
-    // حذف پیام منو
     try {
       await fetch('https://api.telegram.org/bot' + token + '/deleteMessage', {
         method: 'POST',
