@@ -8,10 +8,59 @@ const MULTI_TF_PROMPT = "شما یک تحلیل‌گر ارشد بازارهای
 "**قوانین:**\n1. جهت نهایی = جهت 4H\n2. 1M فقط تایمینگ\n3. 4H رنج بود → WAIT\n\n" +
 "**فرمت:**\n---\nDirection: [BUY/SELL/WAIT]\nConfluenceScore: [0-10]\nHTF4H: [BULLISH/BEARISH/RANGING]\nMTF1H: [BULLISH/BEARISH/RANGING]\nLTF15M: [BULLISH/BEARISH/RANGING]\nEntryTF1M: [BULLISH/BEARISH/RANGING]\nConfidenceScore: [0-100]\nEntry: [عدد یا N/A]\nStop Loss: [عدد یا N/A]\nTP1: [عدد یا N/A]\nTP2: [عدد یا N/A]\nTP3: [عدد یا N/A]\nR/R: [نسبت یا N/A]\n---";
 
-const IMAGE_PROMPT = "شما یک تحلیل‌گر ارشد بازارهای مالی هستید.\n\n" +
-"**تحلیل چارت از روی تصویر**\n1. تشخیص نماد و تایم‌فریم\n2. کالیبراسیون محور Y\n3. رژیم بازار\n4. ساختار (BOS/CHoCH)\n5. Order Blocks و FVG\n6. الگوهای کندلی\n7. سطوح کلیدی\n8. سناریو معاملاتی\n\n" +
-"**فرمت:**\n---\nDirection: [BUY/SELL/WAIT]\nSymbol: [نماد یا UNKNOWN]\nTimeframe: [تایم‌فریم یا UNKNOWN]\nRegime: [TRENDING_UP/TRENDING_DOWN/RANGING/TRANSITIONAL]\nConfidenceScore: [0-100]\nEntry: [عدد یا N/A]\nStop Loss: [عدد یا N/A]\nTP1: [عدد یا N/A]\nTP2: [عدد یا N/A]\nTP3: [عدد یا N/A]\nR/R: [نسبت یا N/A]\n---\n\n" +
-"**قوانین:**\n1. Confidence < 65 → WAIT\n2. اگر نماد/تایم‌فریم نامعلوم → UNKNOWN\n3. حد ضرر ساختاری";
+// ⭐ IMAGE_PROMPT اصلاح‌شده — با تحلیل کامل و مفصل
+const IMAGE_PROMPT = "شما یک تحلیل‌گر ارشد بازارهای مالی با ۱۵ سال تجربه در SMC، ICT و پرایس اکشن هستید.\n\n" +
+"**تحلیل چارت از روی تصویر**\n\n" +
+"**مرحله ۱: تحلیل کامل و مفصل (این بخش را حتماً بنویس)**\n" +
+"### ۰. اطلاعات تصویر\n" +
+"- تشخیص نماد و تایم‌فریم (اگه قابل خواندن است)\n" +
+"- کالیبراسیون محور Y (بالاترین و پایین‌ترین قیمت)\n\n" +
+"### ۱. رژیم بازار\n" +
+"- Trending / Ranging / Transitional\n" +
+"- دلایل تشخیص\n\n" +
+"### ۲. ساختار بازار\n" +
+"- BOS و CHoCH\n" +
+"- سطوح نقدینگی\n" +
+"- Retestها\n\n" +
+"### ۳. SMC و Order Blocks\n" +
+"- Order Blocks معتبر\n" +
+"- FVG ها\n" +
+"- Premium/Discount zones\n\n" +
+"### ۴. الگوهای کندلی\n" +
+"- الگوهای مهم در تصویر\n" +
+"- کندل‌های تأییدی\n\n" +
+"### ۵. سطوح کلیدی\n" +
+"- حمایت و مقاومت مهم\n" +
+"- سطوح R1/R2/R3 و S1/S2/S3\n\n" +
+"### ۶. سناریو معاملاتی\n" +
+"- سناریوی اصلی\n" +
+"- سناریوی جایگزین\n" +
+"- نقطه ورود دقیق\n" +
+"- حد ضرر ساختاری\n" +
+"- ۳ هدف سود\n\n" +
+"### ۷. خلاصه اجرایی\n" +
+"- جمع‌بندی نهایی\n" +
+"- توصیه معاملاتی\n\n" +
+"**مرحله ۲: در انتهای پاسخ دقیقاً این فرمت را بنویس:**\n\n" +
+"---\n" +
+"Direction: [BUY/SELL/WAIT]\n" +
+"Symbol: [نماد یا UNKNOWN]\n" +
+"Timeframe: [تایم‌فریم یا UNKNOWN]\n" +
+"Regime: [TRENDING_UP/TRENDING_DOWN/RANGING/TRANSITIONAL]\n" +
+"ConfidenceScore: [0-100]\n" +
+"Entry: [عدد یا N/A]\n" +
+"Stop Loss: [عدد یا N/A]\n" +
+"TP1: [عدد یا N/A]\n" +
+"TP2: [عدد یا N/A]\n" +
+"TP3: [عدد یا N/A]\n" +
+"R/R: [نسبت یا N/A]\n" +
+"---\n\n" +
+"**قوانین:**\n" +
+"1. تحلیل کامل و مفصل بنویس — حداقل ۵۰۰ کلمه\n" +
+"2. Confidence < 65 → WAIT\n" +
+"3. اگر نماد/تایم‌فریم نامعلوم → UNKNOWN\n" +
+"4. حد ضرر ساختاری\n" +
+"5. از JSON استفاده نکن، فقط فرمت بالا";
 
 // ============================================
 // ACCESS CONTROL
@@ -49,7 +98,7 @@ const PROVIDER_NAMES = {
   groq: 'Groq',
   together: 'Together AI',
   gapgpt: 'GapGPT',
-  aiprime: 'AIPrime',           // ⭐ سرویس جدید
+  aiprime: 'AIPrime',
   openrouter: 'OpenRouter',
   mistral: 'Mistral AI',
   huggingface: 'HuggingFace',
@@ -68,7 +117,7 @@ function getKey(env, provider) {
     groq: env.GROQ_KEY,
     together: env.TOGETHER_KEY,
     gapgpt: env.GAPGPT_KEY,
-    aiprime: env.AIPRIME_KEY,    // ⭐ کلید AIPrime
+    aiprime: env.AIPRIME_KEY,
     openrouter: env.OPENROUTER_KEY,
     mistral: env.MISTRAL_KEY,
     huggingface: env.HUGGINGFACE_KEY,
@@ -236,7 +285,7 @@ async function callGeminiText(env, prompt, imageBase64, imageMime) {
       var res = await fetch('https://generativelanguage.googleapis.com/v1beta/models/' + model + ':generateContent?key=' + keys[i], {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ contents: [{ parts: parts }], generationConfig: { temperature: 0.1, topP: 0.85, maxOutputTokens: 8192 } })
+        body: JSON.stringify({ contents: [{ parts: parts }], generationConfig: { temperature: 0.1, topP: 0.85, maxOutputTokens: 12288 } })
       });
       var data = await res.json();
       if (res.ok) { var t = data.candidates?.[0]?.content?.parts?.[0]?.text; if (t) return t; }
@@ -326,32 +375,18 @@ async function callGapGPTText(env, prompt, imageBase64, imageMime) {
   return data.choices?.[0]?.message?.content || '';
 }
 
-// ⭐⭐⭐ AIPrime — سرویس جدید
 async function callAIPrimeText(env, prompt, imageBase64, imageMime) {
   var key = env.AIPRIME_KEY;
   if (!key) throw new Error('no aiprime key');
-
-  // ⚠️ اگه مدل‌های AIPrime متفاوته، این خطوط رو تغییر بده
   var model = imageBase64 ? 'gpt-4o' : 'gpt-4o-mini';
-
   var content = imageBase64
     ? [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: 'data:' + imageMime + ';base64,' + imageBase64 } }]
     : prompt;
-
   var res = await fetch('https://api.aiprime.shop/v1/chat/completions', {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': 'Bearer ' + key
-    },
-    body: JSON.stringify({
-      model: model,
-      messages: [{ role: 'user', content: content }],
-      temperature: 0.1,
-      max_tokens: 8192
-    })
+    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + key },
+    body: JSON.stringify({ model: model, messages: [{ role: 'user', content: content }], temperature: 0.1, max_tokens: 8192 })
   });
-
   var text = await res.text();
   if (!res.ok) throw new Error('AIPrime ' + res.status + ': ' + text.slice(0, 150));
   try {
@@ -515,7 +550,7 @@ var PROVIDER_FUNCS = {
   github: callGitHubText,
   together: callTogetherText,
   gapgpt: callGapGPTText,
-  aiprime: callAIPrimeText,     // ⭐ AIPrime
+  aiprime: callAIPrimeText,
   openrouter: callOpenRouterText,
   mistral: callMistralText,
   huggingface: callHuggingFaceText,
@@ -527,7 +562,6 @@ var PROVIDER_FUNCS = {
   onexai: callOneXAiText
 };
 
-// ⭐⭐ Fallback با ترتیب هوشمند
 async function callWithFallback(env, prompt, imageBase64, imageMime) {
   var providers = getAvailableProviders(env);
   if (!providers.length) throw new Error('هیچ سرویس AI فعال نیست');
@@ -549,7 +583,7 @@ async function callWithFallback(env, prompt, imageBase64, imageMime) {
     var p = providers[i];
     try {
       console.log('Trying ' + p + '...');
-      var timeout = (p === 'gapgpt' || p === 'aiprime') ? 22000 : 10000;
+      var timeout = (p === 'gapgpt' || p === 'aiprime') ? 25000 : 15000;
       var result = await withTimeout(PROVIDER_FUNCS[p](env, prompt, imageBase64, imageMime), timeout, p);
       if (result && result.length > 10) {
         console.log('✅ OK ' + p + ' (' + result.length + ' chars)');
@@ -644,7 +678,6 @@ function timeframeMenu(symbolRaw) {
   };
 }
 
-// ⭐ منوی انتخاب سرویس
 function providerMenu(providerList, symbolRaw, timeframe, isMTF) {
   var buttons = [];
   var row = [];
@@ -1009,7 +1042,7 @@ async function runAnalysis(token, chatId, symbol, twelveKey, env, timeframe, for
     if (forcedProvider && PROVIDER_FUNCS[forcedProvider]) {
       try {
         console.log('Forced: ' + forcedProvider);
-        var text = await withTimeout(PROVIDER_FUNCS[forcedProvider](env, SYSTEM_PROMPT + '\n\n' + prompt, null, null), 25000, forcedProvider);
+        var text = await withTimeout(PROVIDER_FUNCS[forcedProvider](env, SYSTEM_PROMPT + '\n\n' + prompt, null, null), 30000, forcedProvider);
         if (text && text.length > 10) {
           result = { text: text, provider: PROVIDER_NAMES[forcedProvider] };
         } else {
@@ -1054,7 +1087,7 @@ async function runMultiTFAnalysis(token, chatId, symbol, twelveKey, env, forcedP
     if (forcedProvider && PROVIDER_FUNCS[forcedProvider]) {
       try {
         console.log('Forced MTF: ' + forcedProvider);
-        var text = await withTimeout(PROVIDER_FUNCS[forcedProvider](env, MULTI_TF_PROMPT + '\n\n' + p, null, null), 25000, forcedProvider);
+        var text = await withTimeout(PROVIDER_FUNCS[forcedProvider](env, MULTI_TF_PROMPT + '\n\n' + p, null, null), 30000, forcedProvider);
         if (text && text.length > 10) {
           result = { text: text, provider: PROVIDER_NAMES[forcedProvider] };
         } else {
@@ -1084,19 +1117,44 @@ async function runMultiTFAnalysis(token, chatId, symbol, twelveKey, env, forcedP
   }
 }
 
+// ⭐ runImageAnalysis اصلاح‌شده — ارسال تحلیل کامل
 async function runImageAnalysis(token, chatId, photoFileId, env) {
   try {
     await sendMessage(token, chatId, '📸 دریافت تصویر...');
     var pd = await downloadTelegramPhoto(token, photoFileId);
     if (pd.size > 5 * 1024 * 1024) { await sendMessage(token, chatId, '❌ حجم > ۵ مگابایت'); return; }
-    await sendMessage(token, chatId, '🧠 در حال تحلیل...');
+    await sendMessage(token, chatId, '🧠 در حال تحلیل...\n⏳ ممکنه ۳۰-۶۰ ثانیه طول بکشه');
+    
     var result = await callWithFallback(env, IMAGE_PROMPT, pd.base64, 'image/jpeg');
     var levels = validateSignal(extractLevels(result.text));
+    
+    // کپشن (خلاصه سطوح)
     await sendMessage(token, chatId, buildImageCaption(levels, result.provider));
-    var ft = tgFormat(result.text);
-    if (ft.length > 0) {
-      for (var i = 0; i < ft.length; i += 3800) await sendMessage(token, chatId, ft.slice(i, i + 3800));
+    
+    // ارسال تحلیل کامل
+    var fullText = result.text;
+    fullText = fullText.replace(/```json[\s\S]*?```/gi, '');
+    fullText = fullText.replace(/```[\s\S]*?```/g, '');
+    
+    var ft = tgFormat(fullText);
+    
+    if (ft.length > 20) {
+      for (var i = 0; i < ft.length; i += 3800) {
+        await sendMessage(token, chatId, ft.slice(i, i + 3800));
+        await sleep(400);
+      }
+    } else {
+      var raw = fullText.trim();
+      if (raw.length > 20) {
+        for (var j = 0; j < raw.length; j += 3800) {
+          await sendMessage(token, chatId, raw.slice(j, j + 3800));
+          await sleep(400);
+        }
+      } else {
+        await sendMessage(token, chatId, '⚠️ پاسخ AI فقط JSON بود. لطفاً دوباره تلاش کن.');
+      }
     }
+    
     await sendMessage(token, chatId, '🏠 بازگشت:', { inline_keyboard: [[{ text: '🏠 منو', callback_data: 'menu_main' }]] });
   } catch (e) {
     await sendMessage(token, chatId, '❌ تصویر: <code>' + e.message + '</code>');
@@ -1258,14 +1316,12 @@ async function handleCallback(token, chatId, mid, data, env) {
   if (data === 'sym_custom') { await setUserState(env, chatId, { action: 'custom_symbol', step: 'input', data: {} }); await sendOrEdit(token, chatId, mid, '✏️ نماد:', { inline_keyboard: [[{ text: '❌ لغو', callback_data: 'wizard_cancel' }]] }); return; }
   if (data.indexOf('sym_') === 0) { await showTimeframeMenu(token, chatId, mid, data.replace('sym_', '')); return; }
 
-  // MTF: نمایش منوی سرویس
   if (data.indexOf('mtf_') === 0) {
     var symMTF = data.replace('mtf_', '');
     await showProviderMenu(token, chatId, mid, symMTF, 'MTF', true, env);
     return;
   }
 
-  // تک تایم‌فریم: نمایش منوی سرویس
   if (data.indexOf('tf_') === 0) {
     var rest = data.replace('tf_', '');
     var tfm = rest.match(/_([^_]+)$/);
@@ -1276,7 +1332,6 @@ async function handleCallback(token, chatId, mid, data, env) {
     return;
   }
 
-  // انتخاب سرویس و اجرای تحلیل
   if (data.indexOf('pvd_') === 0) {
     var rest2 = data.replace('pvd_', '');
     var parts = rest2.split('_');
