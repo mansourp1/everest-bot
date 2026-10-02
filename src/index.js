@@ -8,7 +8,6 @@ const MULTI_TF_PROMPT = "شما یک تحلیل‌گر ارشد بازارهای
 "**قوانین:**\n1. جهت نهایی = جهت 4H\n2. 1M فقط تایمینگ\n3. 4H رنج بود → WAIT\n\n" +
 "**فرمت:**\n---\nDirection: [BUY/SELL/WAIT]\nConfluenceScore: [0-10]\nHTF4H: [BULLISH/BEARISH/RANGING]\nMTF1H: [BULLISH/BEARISH/RANGING]\nLTF15M: [BULLISH/BEARISH/RANGING]\nEntryTF1M: [BULLISH/BEARISH/RANGING]\nConfidenceScore: [0-100]\nEntry: [عدد یا N/A]\nStop Loss: [عدد یا N/A]\nTP1: [عدد یا N/A]\nTP2: [عدد یا N/A]\nTP3: [عدد یا N/A]\nR/R: [نسبت یا N/A]\n---";
 
-// ⭐ IMAGE_PROMPT اصلاح‌شده — با تحلیل کامل و مفصل
 const IMAGE_PROMPT = "شما یک تحلیل‌گر ارشد بازارهای مالی با ۱۵ سال تجربه در SMC، ICT و پرایس اکشن هستید.\n\n" +
 "**تحلیل چارت از روی تصویر**\n\n" +
 "**مرحله ۱: تحلیل کامل و مفصل (این بخش را حتماً بنویس)**\n" +
@@ -97,8 +96,10 @@ const PROVIDER_NAMES = {
   github: 'GitHub Models',
   groq: 'Groq',
   together: 'Together AI',
-  gapgpt: 'GapGPT',
-  aiprime: 'AIPrime',
+  gapgpt: 'GapGPT • GPT-4o-mini',
+  'gapgpt-ds': 'GapGPT • DeepSeek V4',
+  aiprime: 'AIPrime • GPT-4o-mini',
+  'aiprime-ds': 'AIPrime • DeepSeek V4',
   openrouter: 'OpenRouter',
   mistral: 'Mistral AI',
   huggingface: 'HuggingFace',
@@ -117,7 +118,9 @@ function getKey(env, provider) {
     groq: env.GROQ_KEY,
     together: env.TOGETHER_KEY,
     gapgpt: env.GAPGPT_KEY,
+    'gapgpt-ds': env.GAPGPT_KEY,
     aiprime: env.AIPRIME_KEY,
+    'aiprime-ds': env.AIPRIME_KEY,
     openrouter: env.OPENROUTER_KEY,
     mistral: env.MISTRAL_KEY,
     huggingface: env.HUGGINGFACE_KEY,
@@ -141,7 +144,13 @@ function getGeminiKeys(env) {
 }
 
 function getAvailableProviders(env) {
-  var all = ['gemini', 'groq', 'github', 'together', 'gapgpt', 'aiprime', 'openrouter', 'mistral', 'huggingface', 'cloudflare', 'nvidia', 'llm7', 'avalai', 'metis', 'onexai'];
+  var all = [
+    'gemini', 'groq', 'github', 'together',
+    'gapgpt', 'gapgpt-ds',
+    'aiprime', 'aiprime-ds',
+    'openrouter', 'mistral', 'huggingface', 'cloudflare', 'nvidia',
+    'llm7', 'avalai', 'metis', 'onexai'
+  ];
   return all.filter(function(p) {
     if (p === 'gemini') return getGeminiKeys(env).length > 0;
     if (p === 'llm7') return true;
@@ -358,10 +367,11 @@ async function callTogetherText(env, prompt, imageBase64, imageMime) {
   return data.choices?.[0]?.message?.content || '';
 }
 
-async function callGapGPTText(env, prompt, imageBase64, imageMime) {
+// ⭐ GapGPT — با انتخاب مدل (GPT-4o-mini یا DeepSeek V4 Pro)
+async function callGapGPTWithModel(env, prompt, imageBase64, imageMime, textModel) {
   var key = env.GAPGPT_KEY;
   if (!key) throw new Error('no gapgpt key');
-  var model = imageBase64 ? 'gemini-3.5-flash-lite' : 'gpt-4o-mini';
+  var model = imageBase64 ? 'gemini-3.5-flash-lite' : textModel;
   var content = imageBase64
     ? [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: 'data:' + imageMime + ';base64,' + imageBase64 } }]
     : prompt;
@@ -375,10 +385,19 @@ async function callGapGPTText(env, prompt, imageBase64, imageMime) {
   return data.choices?.[0]?.message?.content || '';
 }
 
-async function callAIPrimeText(env, prompt, imageBase64, imageMime) {
+async function callGapGPTText(env, prompt, imageBase64, imageMime) {
+  return callGapGPTWithModel(env, prompt, imageBase64, imageMime, 'gpt-4o-mini');
+}
+
+async function callGapGPTDSText(env, prompt, imageBase64, imageMime) {
+  return callGapGPTWithModel(env, prompt, imageBase64, imageMime, 'deepseek-v4-pro');
+}
+
+// ⭐ AIPrime — با انتخاب مدل (GPT-4o-mini یا DeepSeek V4 Pro)
+async function callAIPrimeWithModel(env, prompt, imageBase64, imageMime, textModel) {
   var key = env.AIPRIME_KEY;
   if (!key) throw new Error('no aiprime key');
-  var model = imageBase64 ? 'gpt-4o' : 'gpt-4o-mini';
+  var model = imageBase64 ? 'gpt-4o' : textModel;
   var content = imageBase64
     ? [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: 'data:' + imageMime + ';base64,' + imageBase64 } }]
     : prompt;
@@ -395,6 +414,14 @@ async function callAIPrimeText(env, prompt, imageBase64, imageMime) {
   } catch (e) {
     throw new Error('AIPrime JSON error: ' + text.slice(0, 150));
   }
+}
+
+async function callAIPrimeText(env, prompt, imageBase64, imageMime) {
+  return callAIPrimeWithModel(env, prompt, imageBase64, imageMime, 'gpt-4o-mini');
+}
+
+async function callAIPrimeDSText(env, prompt, imageBase64, imageMime) {
+  return callAIPrimeWithModel(env, prompt, imageBase64, imageMime, 'deepseek-v4-pro');
 }
 
 async function callOpenRouterText(env, prompt, imageBase64, imageMime) {
@@ -550,7 +577,9 @@ var PROVIDER_FUNCS = {
   github: callGitHubText,
   together: callTogetherText,
   gapgpt: callGapGPTText,
+  'gapgpt-ds': callGapGPTDSText,
   aiprime: callAIPrimeText,
+  'aiprime-ds': callAIPrimeDSText,
   openrouter: callOpenRouterText,
   mistral: callMistralText,
   huggingface: callHuggingFaceText,
@@ -569,10 +598,24 @@ async function callWithFallback(env, prompt, imageBase64, imageMime) {
   var hasImage = !!imageBase64;
 
   if (hasImage) {
-    var imgPriority = { gemini: 1, gapgpt: 2, aiprime: 3, groq: 4, openrouter: 5, mistral: 6, together: 7, nvidia: 8, huggingface: 9, github: 10, cloudflare: 11, avalai: 12, metis: 13, onexai: 14, llm7: 15 };
+    var imgPriority = {
+      gemini: 1,
+      'gapgpt': 2, 'gapgpt-ds': 2,
+      'aiprime': 3, 'aiprime-ds': 3,
+      groq: 4, openrouter: 5, mistral: 6, together: 7, nvidia: 8,
+      huggingface: 9, github: 10, cloudflare: 11,
+      avalai: 12, metis: 13, onexai: 14, llm7: 15
+    };
     providers.sort(function(a, b) { return (imgPriority[a] || 99) - (imgPriority[b] || 99); });
   } else {
-    var txtPriority = { groq: 1, openrouter: 2, mistral: 3, github: 4, together: 5, gapgpt: 6, aiprime: 7, llm7: 8, avalai: 9, metis: 10, onexai: 11, huggingface: 12, nvidia: 13, cloudflare: 14, gemini: 99 };
+    var txtPriority = {
+      groq: 1, openrouter: 2, mistral: 3, github: 4, together: 5,
+      'gapgpt-ds': 6, 'aiprime-ds': 7,
+      gapgpt: 8, aiprime: 9,
+      llm7: 10, avalai: 11, metis: 12, onexai: 13,
+      huggingface: 14, nvidia: 15, cloudflare: 16,
+      gemini: 99
+    };
     providers.sort(function(a, b) { return (txtPriority[a] || 50) - (txtPriority[b] || 50); });
   }
 
@@ -583,7 +626,7 @@ async function callWithFallback(env, prompt, imageBase64, imageMime) {
     var p = providers[i];
     try {
       console.log('Trying ' + p + '...');
-      var timeout = (p === 'gapgpt' || p === 'aiprime') ? 25000 : 15000;
+      var timeout = (p.indexOf('gapgpt') === 0 || p.indexOf('aiprime') === 0) ? 30000 : 15000;
       var result = await withTimeout(PROVIDER_FUNCS[p](env, prompt, imageBase64, imageMime), timeout, p);
       if (result && result.length > 10) {
         console.log('✅ OK ' + p + ' (' + result.length + ' chars)');
@@ -683,17 +726,32 @@ function providerMenu(providerList, symbolRaw, timeframe, isMTF) {
   var row = [];
   for (var i = 0; i < providerList.length; i++) {
     var p = providerList[i];
-    var icon = {
-      gemini: '🌟', groq: '⚡', openrouter: '🔀', mistral: '🌬️', github: '🐙',
-      together: '🤝', gapgpt: '💎', aiprime: '🅰️', huggingface: '🤗', cloudflare: '☁️', nvidia: '🟢',
-      llm7: '🎁', avalai: '🇮🇷', metis: '🇮🇷', onexai: '🇮🇷'
-    }[p] || '🤖';
-    var label = icon + ' ' + (PROVIDER_NAMES[p] || p);
+    var icon = '🤖';
+    var label = PROVIDER_NAMES[p] || p;
+
+    if (p === 'gemini') { icon = '🌟'; }
+    else if (p === 'groq') { icon = '⚡'; }
+    else if (p === 'gapgpt') { icon = '🅰️'; label = 'GapGPT • GPT-4o-mini'; }
+    else if (p === 'gapgpt-ds') { icon = '💰'; label = 'GapGPT • DeepSeek V4'; }
+    else if (p === 'aiprime') { icon = '🅰️'; label = 'AIPrime • GPT-4o-mini'; }
+    else if (p === 'aiprime-ds') { icon = '💰'; label = 'AIPrime • DeepSeek V4'; }
+    else if (p === 'openrouter') { icon = '🔀'; }
+    else if (p === 'mistral') { icon = '🌬️'; }
+    else if (p === 'github') { icon = '🐙'; }
+    else if (p === 'together') { icon = '🤝'; }
+    else if (p === 'huggingface') { icon = '🤗'; }
+    else if (p === 'cloudflare') { icon = '☁️'; }
+    else if (p === 'nvidia') { icon = '🟢'; }
+    else if (p === 'llm7') { icon = '🎁'; }
+    else if (p === 'avalai') { icon = '🇮🇷'; }
+    else if (p === 'metis') { icon = '🇮🇷'; }
+    else if (p === 'onexai') { icon = '🇮🇷'; }
+
     var cb = 'pvd_' + p + '_' + symbolRaw + '_' + (isMTF ? 'MTF' : timeframe);
-    row.push({ text: label, callback_data: cb });
-    if (row.length === 2) { buttons.push(row); row = []; }
+    row.push({ text: icon + ' ' + label, callback_data: cb });
+    buttons.push(row);
+    row = [];
   }
-  if (row.length > 0) buttons.push(row);
   buttons.push([{ text: '◀️ بازگشت', callback_data: isMTF ? 'menu_main' : 'menu_analyze' }]);
   return { inline_keyboard: buttons };
 }
@@ -764,6 +822,8 @@ async function showProviderMenu(token, chatId, mid, symbolRaw, timeframe, isMTF,
   var text = '<b>🎯 انتخاب سرویس AI</b>\n\n' +
     '<b>نماد:</b> ' + symbolDisplay + '\n' +
     '<b>روش:</b> ' + tfDisplay + '\n\n' +
+    '🅰️ = GPT-4o-mini (ارزان و سریع)\n' +
+    '💰 = DeepSeek V4 Pro (اقتصادی و دقیق)\n\n' +
     '<i>کدوم سرویس تحلیل رو انجام بده؟</i>';
   await sendOrEdit(token, chatId, mid, text, providerMenu(available, symbolRaw, timeframe, isMTF));
 }
@@ -794,7 +854,13 @@ async function showSettingsMenu(token, chatId, mid) {
 }
 
 async function showStatus(token, chatId, mid, env) {
-  var all = ['gemini', 'groq', 'github', 'together', 'gapgpt', 'aiprime', 'openrouter', 'mistral', 'huggingface', 'cloudflare', 'nvidia', 'llm7', 'avalai', 'metis', 'onexai'];
+  var all = [
+    'gemini', 'groq', 'github', 'together',
+    'gapgpt', 'gapgpt-ds',
+    'aiprime', 'aiprime-ds',
+    'openrouter', 'mistral', 'huggingface', 'cloudflare', 'nvidia',
+    'llm7', 'avalai', 'metis', 'onexai'
+  ];
   var text = '📈 <b>وضعیت سرویس‌ها</b>\n\n';
   var active = 0;
   for (var i = 0; i < all.length; i++) {
@@ -816,7 +882,20 @@ async function showStatus(token, chatId, mid, env) {
 }
 
 async function showHelp(token, chatId, mid) {
-  var t = '📖 <b>راهنما</b>\n\n📊 تحلیل:\n• تک تایم‌فریم\n• MTF (۴ تایم‌فریم)\n• تصویر 📸\n\n📓 ژورنال\n🔔 هشدار\n\n🎯 در هر تحلیل، خودت سرویس AI رو انتخاب می‌کنی\n\n<b>دستورات:</b>\n/menu /help /analyze /journal /watch /myid';
+  var t = '📖 <b>راهنما</b>\n\n' +
+    '📊 تحلیل:\n' +
+    '• تک تایم‌فریم\n' +
+    '• MTF (۴ تایم‌فریم)\n' +
+    '• تصویر 📸\n\n' +
+    '📓 ژورنال\n🔔 هشدار\n\n' +
+    '🎯 در هر تحلیل، خودت سرویس AI رو انتخاب می‌کنی:\n\n' +
+    '🅰️ <b>GPT-4o-mini:</b>\n' +
+    '• GapGPT • GPT-4o-mini\n' +
+    '• AIPrime • GPT-4o-mini\n\n' +
+    '💰 <b>DeepSeek V4 Pro:</b>\n' +
+    '• GapGPT • DeepSeek V4\n' +
+    '• AIPrime • DeepSeek V4\n\n' +
+    '<b>دستورات:</b>\n/menu /help /analyze /journal /watch /myid';
   await sendOrEdit(token, chatId, mid, t, { inline_keyboard: [[{ text: '🏠 منو', callback_data: 'menu_main' }]] });
 }
 
@@ -1117,7 +1196,6 @@ async function runMultiTFAnalysis(token, chatId, symbol, twelveKey, env, forcedP
   }
 }
 
-// ⭐ runImageAnalysis اصلاح‌شده — ارسال تحلیل کامل
 async function runImageAnalysis(token, chatId, photoFileId, env) {
   try {
     await sendMessage(token, chatId, '📸 دریافت تصویر...');
@@ -1128,10 +1206,8 @@ async function runImageAnalysis(token, chatId, photoFileId, env) {
     var result = await callWithFallback(env, IMAGE_PROMPT, pd.base64, 'image/jpeg');
     var levels = validateSignal(extractLevels(result.text));
     
-    // کپشن (خلاصه سطوح)
     await sendMessage(token, chatId, buildImageCaption(levels, result.provider));
     
-    // ارسال تحلیل کامل
     var fullText = result.text;
     fullText = fullText.replace(/```json[\s\S]*?```/gi, '');
     fullText = fullText.replace(/```[\s\S]*?```/g, '');
