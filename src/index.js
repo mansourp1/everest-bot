@@ -1,6 +1,6 @@
 // ============================================
-// EVEREST AI TERMINAL — Final v3.1
-// Confluence: 3 modes + unified display
+// EVEREST AI TERMINAL — Final v3.2
+// Confluence: 3 modes + Mode-aware thresholds
 // ============================================
 
 // ---------- Confluence constants ----------
@@ -12,6 +12,37 @@ const CONF_LABELS = {
   candle: 'Candlestick',
   liquidity: 'Liquidity Sweep',
   riskReward: 'R/R'
+};
+
+// ⭐ جدید — تنظیمات حالت معاملاتی
+const MODE_CONFIG = {
+  scalping: {
+    label: '⚡ اسکلپی',
+    icon: '⚡',
+    minConfidence: 70,
+    minRR: 2.0,
+    minConfluence: 7,
+    allowedTFs: ['1min', '3min', '5min', '15min'],
+    note: 'فقط در Kill Zone لندن/نیویورک، حجم ۰.۲۵٪'
+  },
+  medium: {
+    label: '⚖️ متوسط',
+    icon: '⚖️',
+    minConfidence: 65,
+    minRR: 1.5,
+    minConfluence: 6,
+    allowedTFs: ['5min', '15min', '1h', '4h'],
+    note: 'تعادل بین سرعت و دقت، حجم ۰.۵٪'
+  },
+  confident: {
+    label: '🛡️ مطمئن',
+    icon: '🛡️',
+    minConfidence: 75,
+    minRR: 2.5,
+    minConfluence: 8,
+    allowedTFs: ['15min', '1h', '4h'],
+    note: 'کیفیت بالا، تعداد کم سیگنال، حجم ۱٪'
+  }
 };
 
 const FORCE_DIRECTIVE = "\n\n" +
@@ -59,15 +90,9 @@ const MULTI_TF_PROMPT = "شما یک تحلیل‌گر ارشد بازارهای
 
 const IMAGE_PROMPT = "شما یک تحلیل‌گر ارشد بازارهای مالی با ۱۵ سال تجربه در SMC، ICT و پرایس اکشن هستید.\n\n" +
 "**تحلیل چارت از روی تصویر**\n\n" +
-"**مرحله ۱: تحلیل کامل و مفصل (این بخش را حتماً بنویس)**\n" +
-"### ۰. اطلاعات تصویر\n- تشخیص نماد و تایم‌فریم\n- کالیبراسیون محور Y\n\n" +
-"### ۱. رژیم بازار\n- Trending / Ranging / Transitional\n\n" +
-"### ۲. ساختار بازار\n- BOS و CHoCH\n- سطوح نقدینگی\n- Retestها\n\n" +
-"### ۳. SMC و Order Blocks\n- Order Blocks معتبر\n- FVG ها\n- Premium/Discount\n\n" +
-"### ۴. الگوهای کندلی\n- الگوهای مهم\n\n" +
-"### ۵. سطوح کلیدی\n- حمایت و مقاومت\n\n" +
-"### ۶. سناریو معاملاتی\n- ورود، SL، TP1-3\n\n" +
-"### ۷. خلاصه اجرایی\n\n" +
+"**مرحله ۱: تحلیل کامل و مفصل**\n" +
+"### ۰. اطلاعات تصویر\n- نماد و تایم‌فریم\n- کالیبراسیون محور Y\n\n" +
+"### ۱. رژیم بازار\n### ۲. ساختار بازار (BOS/CHoCH)\n### ۳. SMC و Order Blocks\n### ۴. الگوهای کندلی\n### ۵. سطوح کلیدی\n### ۶. سناریو معاملاتی\n### ۷. خلاصه اجرایی\n\n" +
 "**مرحله ۲: فرمت نهایی**\n---\nDirection: [BUY/SELL/WAIT]\nSymbol: [نماد یا UNKNOWN]\nTimeframe: [تایم‌فریم یا UNKNOWN]\nRegime: [TRENDING_UP/TRENDING_DOWN/RANGING/TRANSITIONAL]\nConfidenceScore: [0-100]\nEntry: [عدد یا N/A]\nStop Loss: [عدد یا N/A]\nTP1: [عدد یا N/A]\nTP2: [عدد یا N/A]\nTP3: [عدد یا N/A]\nR/R: [نسبت یا N/A]\n---\n\n" +
 "**قوانین:** حداقل ۵۰۰ کلمه. Confidence < 65 → WAIT. از JSON استفاده نکن.";
 
@@ -163,7 +188,6 @@ function parseRR(rrStr) {
   return isNaN(n) ? null : n;
 }
 
-// ⭐ اصلاح‌شده — فقط اولین عدد پیوسته
 function findValue(text, labels) {
   for (var i = 0; i < labels.length; i++) {
     var pattern = new RegExp("\\*{0,2}" + labels[i] + "\\*{0,2}\\s*[:=]\\s*\\*{0,2}\\s*([\\d]+(?:\\.[\\d]+)?)", 'i');
@@ -238,6 +262,7 @@ function extractLevels(rawText) {
   };
 }
 
+// ⭐ validateSignal — پایه (بدون mode)
 function validateSignal(levels) {
   var issues = [];
   var originalDir = levels.direction;
@@ -263,6 +288,42 @@ function validateSignal(levels) {
     }
   }
   levels.validationIssues = issues;
+  return levels;
+}
+
+// ⭐ validateSignalWithMode — با آستانه‌های mode
+async function validateSignalWithMode(env, chatId, levels, timeframe) {
+  levels = validateSignal(levels);  // اول validation پایه
+
+  var modeKey = await getUserMode(env, chatId);
+  var cfg = MODE_CONFIG[modeKey];
+  levels.appliedMode = modeKey;
+  levels.appliedModeCfg = cfg;
+
+  // چک تایم‌فریم مجاز
+  if (timeframe && cfg.allowedTFs.indexOf(timeframe) === -1) {
+    levels.validationIssues.push('تایم‌فریم ' + timeframe + ' برای حالت ' + cfg.label + ' مجاز نیست');
+    levels.direction = 'WAIT';
+    return levels;
+  }
+
+  // چک اطمینان (بالاتر از حالت پیش‌فرض)
+  if (levels.direction !== 'WAIT' && levels.confidence !== null) {
+    if (levels.confidence < cfg.minConfidence) {
+      levels.validationIssues.push('اطمینان ' + levels.confidence + '% < ' + cfg.minConfidence + '% (حالت ' + cfg.label + ')');
+      levels.direction = 'WAIT';
+    }
+  }
+
+  // چک R/R (بالاتر از حد پایه)
+  if (levels.direction !== 'WAIT' && levels.rr) {
+    var rrNum = parseRR(levels.rr);
+    if (rrNum !== null && rrNum < cfg.minRR) {
+      levels.validationIssues.push('R/R < ' + cfg.minRR + ' (حالت ' + cfg.label + ')');
+      levels.direction = 'WAIT';
+    }
+  }
+
   return levels;
 }
 
@@ -372,12 +433,23 @@ async function setConfluenceMode(env, chatId, mode) {
   await env.KV.put('confmode:' + chatId, mode);
 }
 
+// ⭐ جدید — mode معاملاتی
+async function getUserMode(env, chatId) {
+  try {
+    var m = await env.KV.get('mode:' + chatId);
+    return MODE_CONFIG[m] ? m : 'medium';
+  } catch (e) { return 'medium'; }
+}
+async function setUserMode(env, chatId, mode) {
+  if (!MODE_CONFIG[mode]) mode = 'medium';
+  await env.KV.put('mode:' + chatId, mode);
+}
+
 function buildPromptForMode(basePrompt, mode) {
   if (mode === 'force') return basePrompt + FORCE_DIRECTIVE;
   return basePrompt;
 }
 
-// ⭐ چیپ‌ها — با محاسبه میانگین اگر عدد نبود
 function buildConfluenceChips(scores, opts) {
   opts = opts || {};
   if (!scores) return '';
@@ -396,7 +468,7 @@ function buildConfluenceChips(scores, opts) {
   return c;
 }
 
-// ⭐ جدید — بلوک کامل هم‌گرایی: عدد + چیپ‌ها + هشدار
+// ⭐ بلوک هم‌گرایی — با چک حالت معاملاتی
 function buildConfluenceBlock(confluence, levels) {
   if (!confluence) return '';
   var c = '';
@@ -407,7 +479,6 @@ function buildConfluenceBlock(confluence, levels) {
         ? levels.confluenceScore
         : null);
 
-  // اگر عدد نبود ولی چیپ‌ها بودن، از میانگین استفاده کن
   if (cfScore === null && confluence.scores) {
     var sum = 0, cnt = 0;
     for (var kk in confluence.scores) {
@@ -421,6 +492,11 @@ function buildConfluenceBlock(confluence, levels) {
     c += '\n<b>هم‌گرایی:</b> ' + e + ' <b>' + cfScore + '/10</b>';
     if (confluence.auto) c += ' <i>(خودکار)</i>';
     c += '\n';
+
+    // ⭐ چک آستانه حالت
+    if (levels && levels.appliedModeCfg && cfScore < levels.appliedModeCfg.minConfluence) {
+      c += '❌ <b>زیر آستانه‌ی حالت ' + levels.appliedModeCfg.label + ' (' + levels.appliedModeCfg.minConfluence + '/10)</b>\n';
+    }
   }
 
   if (confluence.scores) {
@@ -882,12 +958,15 @@ function watchMenu() {
   };
 }
 
-function modeMenu() {
+// ⭐ منوی mode — با نمایش mark
+function modeMenu(current) {
+  var cur = current || 'medium';
+  var mark = function(m) { return cur === m ? ' ✅' : ''; };
   return {
     inline_keyboard: [
-      [{ text: '⚡ اسکلپی', callback_data: 'mode_scalping' }],
-      [{ text: '⚖️ متوسط', callback_data: 'mode_medium' }],
-      [{ text: '🛡️ مطمئن', callback_data: 'mode_confident' }],
+      [{ text: '⚡ اسکلپی (≥۷۰٪، R/R≥۲)' + mark('scalping'), callback_data: 'mode_scalping' }],
+      [{ text: '⚖️ متوسط (≥۶۵٪، R/R≥۱.۵)' + mark('medium'), callback_data: 'mode_medium' }],
+      [{ text: '🛡️ مطمئن (≥۷۵٪، R/R≥۲.۵)' + mark('confident'), callback_data: 'mode_confident' }],
       [{ text: '◀️ بازگشت', callback_data: 'menu_settings' }]
     ]
   };
@@ -938,9 +1017,12 @@ async function showProviderMenu(token, chatId, mid, symbolRaw, timeframe, isMTF,
   var tfDisplay = isMTF ? 'تحلیل MTF (4H+1H+15M+1M)' : timeframeLabel(timeframe);
   var confMode = await getConfluenceMode(env, chatId);
   var confLabel = confMode === 'force' ? '🔴 اجبار AI' : confMode === 'auto' ? '🟢 خودکار' : '🔵 عادی';
+  var userModeKey = await getUserMode(env, chatId);
+  var userModeCfg = MODE_CONFIG[userModeKey];
   var text = '<b>🎯 انتخاب سرویس AI</b>\n\n' +
     '<b>نماد:</b> ' + symbolDisplay + '\n' +
     '<b>روش:</b> ' + tfDisplay + '\n' +
+    '<b>حالت معاملاتی:</b> ' + userModeCfg.icon + ' ' + userModeCfg.label + '\n' +
     '<b>حالت هم‌گرایی:</b> ' + confLabel + '\n\n' +
     '<i>کدوم سرویس تحلیل رو انجام بده؟</i>';
   await sendOrEdit(token, chatId, mid, text, providerMenu(available, symbolRaw, timeframe, isMTF));
@@ -968,14 +1050,23 @@ async function showWatchMenu(token, chatId, mid, env) {
 async function showSettingsMenu(token, chatId, mid, env) {
   var confMode = await getConfluenceMode(env, chatId);
   var confLabel = confMode === 'force' ? '🔴 اجبار AI (سختگیر)' : confMode === 'auto' ? '🟢 خودکار پیشرفته' : '🔵 عادی';
+
+  var userModeKey = await getUserMode(env, chatId);
+  var userModeCfg = MODE_CONFIG[userModeKey];
+
   var text = '⚙️ <b>تنظیمات</b>\n\n' +
-    '<b>🎯 حالت هم‌گرایی فعلی:</b> ' + confLabel + '\n\n' +
-    '🔵 <b>عادی:</b> اگر AI نداد → هشدار\n' +
-    '🟢 <b>خودکار:</b> اگر AI نداد → بات حساب می‌کند\n' +
-    '🔴 <b>اجبار:</b> پرامپت سختگیر + JSON اجباری';
+    '<b>🎯 حالت معاملاتی فعلی:</b> ' + userModeCfg.icon + ' ' + userModeCfg.label + '\n' +
+    '<i>' + userModeCfg.note + '</i>\n' +
+    '• حداقل اطمینان: ' + userModeCfg.minConfidence + '%\n' +
+    '• حداقل R/R: ' + userModeCfg.minRR + '\n' +
+    '• حداقل هم‌گرایی: ' + userModeCfg.minConfluence + '/10\n\n' +
+    '<b>🧠 حالت هم‌گرایی فعلی:</b> ' + confLabel + '\n\n' +
+    '🔵 عادی: اگر AI نداد → هشدار\n' +
+    '🟢 خودکار: اگر AI نداد → بات حساب می‌کند\n' +
+    '🔴 اجبار: پرامپت سختگیر + JSON اجباری';
   await sendOrEdit(token, chatId, mid, text, {
     inline_keyboard: [
-      [{ text: '🎯 حالت تحلیل', callback_data: 'settings_mode' }],
+      [{ text: '🎯 حالت معاملاتی', callback_data: 'settings_mode' }],
       [{ text: '🧠 حالت هم‌گرایی', callback_data: 'settings_confluence' }],
       [{ text: '🏠 منو', callback_data: 'menu_main' }]
     ]
@@ -1005,7 +1096,7 @@ async function showStatus(token, chatId, mid, env) {
 }
 
 async function showHelp(token, chatId, mid) {
-  var t = '📖 <b>راهنما</b>\n\n📊 تحلیل:\n• تک تایم‌فریم\n• MTF (۴ تایم‌فریم)\n• تصویر 📸\n\n📓 ژورنال\n🔔 هشدار\n\n🧠 سه حالت هم‌گرایی:\n🔵 عادی — هشدار اگر نبود\n🟢 خودکار — محاسبه از متن\n🔴 اجبار — پرامپت سختگیر\n\n<b>دستورات:</b>\n/menu /help /analyze /journal /watch /myid';
+  var t = '📖 <b>راهنما</b>\n\n📊 تحلیل:\n• تک تایم‌فریم\n• MTF (۴ تایم‌فریم)\n• تصویر 📸\n\n📓 ژورنال\n🔔 هشدار\n\n🎯 <b>حالت معاملاتی:</b>\n⚡ اسکلپی: 1m-15m، اطمینان≥۷۰، R/R≥۲\n⚖️ متوسط: 5m-4h، اطمینان≥۶۵، R/R≥۱.۵\n🛡️ مطمئن: 15m-4h، اطمینان≥۷۵، R/R≥۲.۵\n\n🧠 <b>حالت هم‌گرایی:</b>\n🔵 عادی — هشدار اگر نبود\n🟢 خودکار — محاسبه از متن\n🔴 اجبار — پرامپت سختگیر\n\n<b>دستورات:</b>\n/menu /help /analyze /journal /watch /myid';
   await sendOrEdit(token, chatId, mid, t, { inline_keyboard: [[{ text: '🏠 منو', callback_data: 'menu_main' }]] });
 }
 
@@ -1125,20 +1216,32 @@ async function buildChartImage(symbol, timeframe, levels, env) {
 }
 
 // ============================================
-// FORMATTING — Caption builders (با Confluence Block)
+// FORMATTING — Caption builders
 // ============================================
+
+// ⭐ header با mode
+function buildModeHeader(levels) {
+  if (!levels || !levels.appliedModeCfg) return '';
+  return '<b>حالت:</b> ' + levels.appliedModeCfg.icon + ' ' + levels.appliedModeCfg.label + '\n';
+}
 
 function buildCaption(levels, symbol, timeframe, provider, confluence) {
   var c = '<b>📊 تحلیل چارت</b>\n\n<b>نماد:</b> ' + symbol + '\n<b>تایم‌فریم:</b> ' + timeframeLabel(timeframe) + '\n';
   if (provider) c += '<b>سرویس:</b> ' + provider + '\n';
+  c += buildModeHeader(levels);
   c += '\n';
   var d = levels.direction || 'WAIT';
   c += '<b>جهت:</b> ' + (d === 'BUY' ? '🟢 خرید' : d === 'SELL' ? '🔴 فروش' : '⏸️ انتظار') + '\n';
   if (levels.regime) c += '<b>رژیم:</b> ' + regimeLabel(levels.regime) + '\n';
   if (levels.confidence !== null && levels.confidence !== undefined) c += '<b>اطمینان:</b> ' + levels.confidence + '%\n';
   c += '\n';
-  if (d === 'WAIT') c += '<i>ستاپ معتبری نیست.</i>\n';
-  else {
+  if (d === 'WAIT') {
+    c += '<i>ستاپ معتبری نیست.</i>\n';
+    if (levels.validationIssues && levels.validationIssues.length) {
+      c += '\n<b>دلایل رد:</b>\n';
+      for (var vi = 0; vi < levels.validationIssues.length; vi++) c += '• ' + levels.validationIssues[vi] + '\n';
+    }
+  } else {
     if (levels.entry) c += '<b>🎯 ورود:</b> <code>' + levels.entry + '</code>\n';
     if (levels.sl) c += '<b>🛑 SL:</b> <code>' + levels.sl + '</code>\n';
     if (levels.tp1) c += '<b>✅ TP1:</b> <code>' + levels.tp1 + '</code>\n';
@@ -1153,6 +1256,7 @@ function buildCaption(levels, symbol, timeframe, provider, confluence) {
 function buildMultiTFCaption(levels, symbol, provider, confluence) {
   var c = '<b>🎯 تحلیل MTF</b>\n\n<b>نماد:</b> ' + symbol + '\n';
   if (provider) c += '<b>سرویس:</b> ' + provider + '\n';
+  c += buildModeHeader(levels);
   c += '\n';
   if (levels.htf || levels.mtf || levels.ltf || levels.entryTf) {
     c += '<b>📊 تایم‌فریم‌ها:</b>\n';
@@ -1165,8 +1269,13 @@ function buildMultiTFCaption(levels, symbol, provider, confluence) {
   c += '<b>جهت:</b> ' + (d === 'BUY' ? '🟢 خرید' : d === 'SELL' ? '🔴 فروش' : '⏸️ انتظار') + '\n';
   if (levels.confidence !== null && levels.confidence !== undefined) c += '<b>اطمینان:</b> ' + levels.confidence + '%\n';
   c += '\n';
-  if (d === 'WAIT') c += '<i>هم‌جهت نیستند یا ستاپ معتبر نیست.</i>\n';
-  else {
+  if (d === 'WAIT') {
+    c += '<i>هم‌جهت نیستند یا ستاپ معتبر نیست.</i>\n';
+    if (levels.validationIssues && levels.validationIssues.length) {
+      c += '\n<b>دلایل رد:</b>\n';
+      for (var vi = 0; vi < levels.validationIssues.length; vi++) c += '• ' + levels.validationIssues[vi] + '\n';
+    }
+  } else {
     if (levels.entry) c += '<b>🎯 ورود:</b> <code>' + levels.entry + '</code>\n';
     if (levels.sl) c += '<b>🛑 SL:</b> <code>' + levels.sl + '</code>\n';
     if (levels.tp1) c += '<b>✅ TP1:</b> <code>' + levels.tp1 + '</code>\n';
@@ -1265,7 +1374,27 @@ async function runAnalysis(token, chatId, symbol, twelveKey, env, timeframe, for
     var providerLabel = forcedProvider ? (PROVIDER_NAMES[forcedProvider] || forcedProvider) : 'خودکار';
     var mode = await getConfluenceMode(env, chatId);
     var modeLabel = mode === 'force' ? '🔴 اجبار' : mode === 'auto' ? '🟢 خودکار' : '🔵 عادی';
-    await sendMessage(token, chatId, '⏳ تحلیل <b>' + symbol + '</b>\n🤖 سرویس: <b>' + providerLabel + '</b>\n🧠 هم‌گرایی: ' + modeLabel);
+    var userModeKey = await getUserMode(env, chatId);
+    var userModeCfg = MODE_CONFIG[userModeKey];
+
+    // چک تایم‌فریم مجاز
+    if (userModeCfg.allowedTFs.indexOf(timeframe) === -1) {
+      await sendMessage(token, chatId,
+        '⚠️ <b>تایم‌فریم ' + timeframeLabel(timeframe) + ' برای حالت ' + userModeCfg.icon + ' ' + userModeCfg.label + ' مجاز نیست</b>\n\n' +
+        'تایم‌فریم‌های مجاز: ' + userModeCfg.allowedTFs.map(timeframeLabel).join(', ') + '\n\n' +
+        '💡 از تنظیمات → 🎯 حالت معاملاتی می‌تونی حالت رو عوض کنی.',
+        { inline_keyboard: [[{ text: '⚙️ تنظیمات', callback_data: 'menu_settings' }]] }
+      );
+      return;
+    }
+
+    await sendMessage(token, chatId,
+      '⏳ تحلیل <b>' + symbol + '</b>\n' +
+      '🤖 سرویس: <b>' + providerLabel + '</b>\n' +
+      '🎯 حالت: ' + userModeCfg.icon + ' ' + userModeCfg.label + '\n' +
+      '🧠 هم‌گرایی: ' + modeLabel
+    );
+
     var im = { '1min': '1min', '3min': '5min', '5min': '5min', '15min': '15min', '1h': '1h', '4h': '4h' };
     var interval = im[timeframe] || '1h';
     var klines = await fetchTwelveData(symbol, interval, twelveKey, 200);
@@ -1288,7 +1417,8 @@ async function runAnalysis(token, chatId, symbol, twelveKey, env, timeframe, for
       result = await callWithFallback(env, fullPrompt, null, null);
     }
 
-    var levels = validateSignal(extractLevels(result.text));
+    // ⭐ استفاده از validateSignalWithMode
+    var levels = await validateSignalWithMode(env, chatId, extractLevels(result.text), timeframe);
     var confluence = await resolveConfluence(env, chatId, levels, result.text);
 
     try {
@@ -1312,7 +1442,15 @@ async function runMultiTFAnalysis(token, chatId, symbol, twelveKey, env, forcedP
     var providerLabel = forcedProvider ? (PROVIDER_NAMES[forcedProvider] || forcedProvider) : 'خودکار';
     var mode = await getConfluenceMode(env, chatId);
     var modeLabel = mode === 'force' ? '🔴 اجبار' : mode === 'auto' ? '🟢 خودکار' : '🔵 عادی';
-    await sendMessage(token, chatId, '🎯 MTF <b>' + symbol + '</b>\n🤖 سرویس: <b>' + providerLabel + '</b>\n🧠 هم‌گرایی: ' + modeLabel);
+    var userModeKey = await getUserMode(env, chatId);
+    var userModeCfg = MODE_CONFIG[userModeKey];
+
+    await sendMessage(token, chatId,
+      '🎯 MTF <b>' + symbol + '</b>\n' +
+      '🤖 سرویس: <b>' + providerLabel + '</b>\n' +
+      '🎯 حالت: ' + userModeCfg.icon + ' ' + userModeCfg.label + '\n' +
+      '🧠 هم‌گرایی: ' + modeLabel
+    );
     var k4H = await fetchTwelveData(symbol, '4h', twelveKey, 150);
     var k1H = await fetchTwelveData(symbol, '1h', twelveKey, 150);
     var k15M = await fetchTwelveData(symbol, '15min', twelveKey, 150);
@@ -1336,7 +1474,8 @@ async function runMultiTFAnalysis(token, chatId, symbol, twelveKey, env, forcedP
       result = await callWithFallback(env, fullPrompt, null, null);
     }
 
-    var levels = validateSignal(extractLevels(result.text));
+    // MTF: بدون چک تایم‌فریم (چون MTF خودش ۴ تایم‌فریم داره)
+    var levels = await validateSignalWithMode(env, chatId, extractLevels(result.text), null);
     var confluence = await resolveConfluence(env, chatId, levels, result.text);
 
     try {
@@ -1365,7 +1504,19 @@ async function runImageAnalysis(token, chatId, photoFileId, env) {
 
     var fullPrompt = buildPromptForMode(IMAGE_PROMPT, mode);
     var result = await callWithFallback(env, fullPrompt, pd.base64, 'image/jpeg');
+    // برای تصویر، mode رو با تایم‌فریم null چک می‌کنیم (چون TF نامعلومه)
     var levels = validateSignal(extractLevels(result.text));
+    // فقط آستانه‌های mode رو اعمال کن (بدون چک TF)
+    var userModeKey = await getUserMode(env, chatId);
+    var cfg = MODE_CONFIG[userModeKey];
+    levels.appliedMode = userModeKey;
+    levels.appliedModeCfg = cfg;
+
+    if (levels.direction !== 'WAIT' && levels.confidence !== null && levels.confidence < cfg.minConfidence) {
+      levels.validationIssues.push('اطمینان ' + levels.confidence + '% < ' + cfg.minConfidence + '%');
+      levels.direction = 'WAIT';
+    }
+
     var confluence = await resolveConfluence(env, chatId, levels, result.text);
 
     await sendMessage(token, chatId, buildImageCaption(levels, result.provider, confluence));
@@ -1618,23 +1769,40 @@ async function handleCallback(token, chatId, mid, data, env) {
     await sendOrEdit(token, chatId, mid, '🔔 ۳/۳ <b>قیمت:</b>', { inline_keyboard: [[{ text: '❌ لغو', callback_data: 'wizard_cancel' }]] });
     return;
   }
-  if (data === 'settings_mode') { await sendOrEdit(token, chatId, mid, '⚙️ حالت:', modeMenu()); return; }
-  if (data.indexOf('mode_') === 0) {
-    var m = data.replace('mode_', '');
-    await env.KV.put('mode:' + chatId, m);
-    await sendOrEdit(token, chatId, mid, '✅ ' + m, { inline_keyboard: [[{ text: '◀️', callback_data: 'menu_settings' }]] });
+
+  // ⭐ mode معاملاتی
+  if (data === 'settings_mode') {
+    var curMode = await getUserMode(env, chatId);
+    await sendOrEdit(token, chatId, mid, '🎯 <b>حالت معاملاتی</b>\n\nهر حالت آستانه‌های متفاوتی داره:', modeMenu(curMode));
     return;
   }
+  if (data === 'mode_scalping' || data === 'mode_medium' || data === 'mode_confident') {
+    var newMode = data.replace('mode_', '');
+    await setUserMode(env, chatId, newMode);
+    var cfg = MODE_CONFIG[newMode];
+    await sendOrEdit(token, chatId, mid,
+      '✅ حالت تنظیم شد: <b>' + cfg.icon + ' ' + cfg.label + '</b>\n\n' +
+      '<i>' + cfg.note + '</i>\n\n' +
+      '• حداقل اطمینان: ' + cfg.minConfidence + '%\n' +
+      '• حداقل R/R: ' + cfg.minRR + '\n' +
+      '• حداقل هم‌گرایی: ' + cfg.minConfluence + '/10\n' +
+      '• تایم‌فریم‌ها: ' + cfg.allowedTFs.map(timeframeLabel).join(', '),
+      modeMenu(newMode)
+    );
+    return;
+  }
+
+  // ⭐ Confluence mode
   if (data === 'settings_confluence') {
     var cur = await getConfluenceMode(env, chatId);
     await sendOrEdit(token, chatId, mid, '🧠 <b>حالت هم‌گرایی</b>\n\n🔵 عادی: هشدار اگر AI نداد\n🟢 خودکار: محاسبه از متن\n🔴 اجبار: پرامپت سختگیر', confluenceModeMenu(cur));
     return;
   }
   if (data === 'conf_normal' || data === 'conf_auto' || data === 'conf_force') {
-    var newMode = data.replace('conf_', '');
-    await setConfluenceMode(env, chatId, newMode);
-    var label = newMode === 'force' ? '🔴 اجبار AI (سختگیر)' : newMode === 'auto' ? '🟢 خودکار پیشرفته' : '🔵 عادی';
-    await sendOrEdit(token, chatId, mid, '✅ حالت هم‌گرایی تنظیم شد: <b>' + label + '</b>', confluenceModeMenu(newMode));
+    var newConfMode = data.replace('conf_', '');
+    await setConfluenceMode(env, chatId, newConfMode);
+    var lbl = newConfMode === 'force' ? '🔴 اجبار AI (سختگیر)' : newConfMode === 'auto' ? '🟢 خودکار پیشرفته' : '🔵 عادی';
+    await sendOrEdit(token, chatId, mid, '✅ حالت هم‌گرایی تنظیم شد: <b>' + lbl + '</b>', confluenceModeMenu(newConfMode));
     return;
   }
 }
@@ -1711,7 +1879,7 @@ async function handleUpdate(update, env) {
 export default {
   async fetch(request, env, ctx) {
     var url = new URL(request.url);
-    if (url.pathname === '/' || url.pathname === '') return new Response('Everest Bot — v3.1 Confluence Modes', { status: 200 });
+    if (url.pathname === '/' || url.pathname === '') return new Response('Everest Bot — v3.2 Mode-Aware', { status: 200 });
     if (request.method === 'POST' && url.pathname === '/webhook') {
       try {
         var update = await request.json();
