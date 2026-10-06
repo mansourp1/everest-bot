@@ -421,7 +421,7 @@ function mainMenu(){return {inline_keyboard:[
   [{text:'📓 ژورنال',callback_data:'menu_journal'},{text:'🔔 هشدار',callback_data:'menu_watch'}],
   [{text:'⚙️ تنظیمات',callback_data:'menu_settings'},{text:'📈 وضعیت',callback_data:'menu_status'}],
   [{text:'📖 راهنما',callback_data:'menu_help'}]
-];};}
+]};}
 
 function symbolMenu(){return {inline_keyboard:[
   [{text:'🥇 XAU/USD',callback_data:'sym_XAUUSD'},{text:'💶 EUR/USD',callback_data:'sym_EURUSD'}],
@@ -429,7 +429,7 @@ function symbolMenu(){return {inline_keyboard:[
   [{text:'💎 ETH/USD',callback_data:'sym_ETHUSD'},{text:'💵 USD/JPY',callback_data:'sym_USDJPY'}],
   [{text:'✏️ نماد دیگر',callback_data:'sym_custom'}],
   [{text:'🏠 منو',callback_data:'menu_main'}]
-];};}
+]};}
 
 function timeframeMenu(sr){return {inline_keyboard:[
   [{text:'🎯 MTF (4H+1H+15M+1M)',callback_data:'mtf_'+sr}],
@@ -437,7 +437,7 @@ function timeframeMenu(sr){return {inline_keyboard:[
   [{text:'⏱️ 15 دقیقه',callback_data:'tf_'+sr+'_15min'},{text:'🕐 1 ساعت',callback_data:'tf_'+sr+'_1h'}],
   [{text:'📅 4 ساعت',callback_data:'tf_'+sr+'_4h'}],
   [{text:'◀️ بازگشت',callback_data:'menu_analyze'}]
-];};}
+]};}
 
 function providerMenu(list,sr,tf,isMTF){
   const btn=[];let row=[];
@@ -455,7 +455,7 @@ function monitorMenu(){return {inline_keyboard:[
   [{text:'➕ مانیتور جدید',callback_data:'mon_add'}],
   [{text:'📋 لیست مانیتورها',callback_data:'mon_list'}],
   [{text:'🏠 منو',callback_data:'menu_main'}]
-];};}
+]};}
 
 function monitorListMenu(monitors){
   const btn=monitors.map((m,i)=>[{text:(m.active?'🟢':'⏸️')+' #'+(i+1)+' '+m.symbol+' '+m.timeframe+' '+DATA_PROVIDERS[m.dataProvider]?.label,callback_data:'mon_view_'+i}]);
@@ -468,69 +468,69 @@ function monitorTfMenu(){return {inline_keyboard:[
   [{text:'⏱️ 15 دقیقه',callback_data:'mon_tf_15min'},{text:'🕐 1 ساعت',callback_data:'mon_tf_1h'}],
   [{text:'📅 4 ساعت',callback_data:'mon_tf_4h'}],
   [{text:'❌ لغو',callback_data:'mon_cancel'}]
-];};}
+]};}
 
 function monitorAiMenu(){return {inline_keyboard:[
   [{text:'🎯 خودکار',callback_data:'mon_ai_auto'}],
   [{text:'🅰️ AIPrime',callback_data:'mon_ai_aiprime'},{text:'💎 GapGPT',callback_data:'mon_ai_gapgpt'}],
   [{text:'🌟 Gemini',callback_data:'mon_ai_gemini'},{text:'⚡ Groq',callback_data:'mon_ai_groq'}],
   [{text:'❌ لغو',callback_data:'mon_cancel'}]
-];};}
+]};}
 
 function monitorDataMenu(){return {inline_keyboard:[
   [{text:'📊 Twelve Data',callback_data:'mon_dp_twelve'}],
   [{text:'🌐 Yahoo Finance',callback_data:'mon_dp_yahoo'}],
   [{text:'🔄 خودکار (Twelve→Yahoo)',callback_data:'mon_dp_auto'}],
   [{text:'❌ لغو',callback_data:'mon_cancel'}]
-];};}
+]};}
 
 function journalMenu(){return {inline_keyboard:[
   [{text:'➕ معامله جدید',callback_data:'journal_add'}],
   [{text:'📋 لیست',callback_data:'journal_list'},{text:'📊 آمار',callback_data:'journal_stats'}],
   [{text:'🗑️ پاک',callback_data:'journal_clear'}],
   [{text:'🏠 منو',callback_data:'menu_main'}]
-];};}
+]};}
 
 function watchMenu(){return {inline_keyboard:[
   [{text:'➕ هشدار جدید',callback_data:'watch_add'}],
   [{text:'📋 لیست',callback_data:'watch_list'}],
   [{text:'🗑️ پاک',callback_data:'watch_clear'}],
   [{text:'🏠 منو',callback_data:'menu_main'}]
-];};}
+]};}
 
 function modeMenu(cur){const m=x=>cur===x?' ✅':'';return {inline_keyboard:[
   [{text:'⚡ اسکلپی'+m('scalping'),callback_data:'mode_scalping'}],
   [{text:'⚖️ متوسط'+m('medium'),callback_data:'mode_medium'}],
   [{text:'🛡️ مطمئن'+m('confident'),callback_data:'mode_confident'}],
   [{text:'◀️ بازگشت',callback_data:'menu_settings'}]
-];};}
+]};}
 
 function confModeMenu(cur){const m=x=>cur===x?' ✅':'';return {inline_keyboard:[
   [{text:'🔵 عادی'+m('normal'),callback_data:'conf_normal'}],
   [{text:'🟢 خودکار'+m('auto'),callback_data:'conf_auto'}],
   [{text:'🔴 اجبار'+m('force'),callback_data:'conf_force'}],
   [{text:'◀️ بازگشت',callback_data:'menu_settings'}]
-];};}
+]};}
 
 function dataProviderMenu(cur){const m=x=>cur===x?' ✅':'';return {inline_keyboard:[
   [{text:'📊 Twelve Data'+m('twelve'),callback_data:'dp_twelve'}],
   [{text:'🌐 Yahoo Finance'+m('yahoo'),callback_data:'dp_yahoo'}],
   [{text:'🔄 خودکار'+m('auto'),callback_data:'dp_auto'}],
   [{text:'◀️ بازگشت',callback_data:'menu_settings'}]
-];};}
+]};}
 
 function tierMenu(cur){const m=x=>cur===x?' ✅':'';return {inline_keyboard:[
   [{text:'🚀 سریع'+m('fast'),callback_data:'tier_fast'}],
   [{text:'🧠 DeepSeek'+m('deepseek'),callback_data:'tier_deepseek'}],
   [{text:'💎 قوی (Claude)'+m('premium'),callback_data:'tier_premium'}],
   [{text:'◀️ بازگشت',callback_data:'menu_settings'}]
-];};}
+]};}
 
 function tierProvMenu(){return {inline_keyboard:[
   [{text:'🅰️ AIPrime',callback_data:'tier_prov_aiprime'}],
   [{text:'💎 GapGPT',callback_data:'tier_prov_gapgpt'}],
   [{text:'◀️ بازگشت',callback_data:'menu_settings'}]
-];};}
+]};}
 
 // ===== SEND/EDIT =====
 async function sendOrEdit(token,cid,mid,text,kb){
