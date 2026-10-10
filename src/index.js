@@ -1,39 +1,46 @@
 // ============================================
-// EVEREST AI TERMINAL — Telegram Bot v3.6
-// + Strictness Mode (Hard/Easy)
-// + 3 Model Tiers + Confluence + Journal
+// EVEREST AI TERMINAL — Telegram Bot v3.7
+// + KZ Mode Selector (off/priority/only)
+// + Crypto Support (Binance)
+// + Auto Crypto Detection
 // ============================================
 
 // ---------- Confluence constants ----------
 const CONF_KEYS = ['structure', 'smc', 'ict', 'candle', 'liquidity', 'riskReward'];
 const CONF_LABELS = {
-  structure: 'Market Structure',
-  smc: 'SMC / Order Blocks',
-  ict: 'ICT / FVG',
-  candle: 'Candlestick',
-  liquidity: 'Liquidity Sweep',
-  riskReward: 'R/R'
+  structure: 'Market Structure', smc: 'SMC / Order Blocks', ict: 'ICT / FVG',
+  candle: 'Candlestick', liquidity: 'Liquidity Sweep', riskReward: 'R/R'
 };
 
-// ⭐ سطح مدل
 const MODEL_TIERS = {
   aiprime: {
-    fast: { label: '🚀 سریع', text: 'gpt-4o-mini', vision: 'gpt-4o', desc: '~$0.001 به ازای هر تحلیل', note: 'مناسب تحلیل‌های روزمره' },
-    premium: { label: '💎 قوی', text: 'claude-sonnet-5', vision: 'claude-sonnet-5', desc: '~$0.045 به ازای هر تحلیل', note: 'مناسب ستاپ‌های مهم' },
-    deepseek: { label: '🧠 DeepSeek', text: 'deepseek-v4.1-flash', vision: 'deepseek-v4.1-flash', desc: '~$0.003 به ازای هر تحلیل', note: 'تعادل کیفیت و هزینه' }
+    fast: { label: '🚀 سریع', text: 'gpt-4o-mini', vision: 'gpt-4o', desc: '~$0.001', note: 'تحلیل روزمره' },
+    premium: { label: '💎 قوی', text: 'claude-sonnet-5', vision: 'claude-sonnet-5', desc: '~$0.045', note: 'ستاپ مهم' },
+    deepseek: { label: '🧠 DeepSeek', text: 'deepseek-v4.1-flash', vision: 'deepseek-v4.1-flash', desc: '~$0.003', note: 'تعادل' }
   },
   gapgpt: {
-    fast: { label: '🚀 سریع', text: 'gpt-4o-mini', vision: 'gemini-2.0-flash', desc: '~$0.001 به ازای هر تحلیل', note: 'مناسب تحلیل‌های روزمره' },
-    premium: { label: '💎 قوی', text: 'claude-sonnet-5', vision: 'claude-sonnet-5', desc: '~$0.045 به ازای هر تحلیل', note: 'مناسب ستاپ‌های مهم' },
-    deepseek: { label: '🧠 DeepSeek', text: 'deepseek-v4.1-flash', vision: 'deepseek-v4.1-flash', desc: '~$0.003 به ازای هر تحلیل', note: 'تعادل کیفیت و هزینه' }
+    fast: { label: '🚀 سریع', text: 'gpt-4o-mini', vision: 'gemini-2.0-flash', desc: '~$0.001', note: 'تحلیل روزمره' },
+    premium: { label: '💎 قوی', text: 'claude-sonnet-5', vision: 'claude-sonnet-5', desc: '~$0.045', note: 'ستاپ مهم' },
+    deepseek: { label: '🧠 DeepSeek', text: 'deepseek-v4.1-flash', vision: 'deepseek-v4.1-flash', desc: '~$0.003', note: 'تعادل' }
   }
 };
 
-// ⭐ جدید: نوع تحلیل (سخت/آسان)
 const STRICTNESS_MODES = {
-  hard: { label: '🔴 سختگیر', icon: '🔴', desc: 'همه فیلترها فعال — R/R بالا، TP1 الزامی، ATR check' },
-  easy: { label: '🟢 آسان', icon: '🟢', desc: 'فیلتر سبک — R/R پایین‌تر، TP1 اختیاری، سیگنال بیشتر' }
+  hard: { label: '🔴 سختگیر', icon: '🔴', desc: 'همه فیلترها + TP1 الزامی + R/R سخت' },
+  easy: { label: '🟢 آسان', icon: '🟢', desc: 'آستانه نرم‌تر + TP1 اختیاری + سیگنال بیشتر' }
 };
+
+// ⭐ KZ Modes جدید
+const KZ_MODES = {
+  off: { label: '۲۴/۷', icon: '🌐', desc: 'همیشه بررسی — بی‌توجه به KZ' },
+  priority: { label: 'اولویت KZ', icon: '⭐', desc: 'همیشه بررسی + بج اولویت در سیگنال' },
+  only: { label: 'فقط KZ', icon: '🔒', desc: 'خارج از KZ بررسی نمی‌شود (صرفه‌جویی API)' }
+};
+
+// ⭐ Crypto Bases
+const CRYPTO_BASES = ['BTC','ETH','SOL','BNB','XRP','ADA','DOGE','DOT','AVAX','MATIC','LINK','LTC','ATOM','UNI','NEAR','APT','ARB','OP','TRX','SHIB','PEPE','TON','SUI','INJ','SEI','FIL','ETC','BCH','XLM','HBAR','VET','ALGO','FTM','SAND','MANA','AXS','GALA'];
+
+const BINANCE_INTERVALS = { '1min':'1m','3min':'3m','5min':'5m','15min':'15m','1h':'1h','4h':'4h','4H':'4h','1H':'1h','15M':'15m','1M':'1m' };
 
 function getModelTierConfig(provider, tier, hasImage) {
   const cfg = MODEL_TIERS[provider]?.[tier];
@@ -42,33 +49,10 @@ function getModelTierConfig(provider, tier, hasImage) {
 }
 
 const FORCE_DIRECTIVE = "\n\n" +
-"⚠️ **اجباری (STRICT MODE)**: در انتهای پاسخ، دقیقاً این JSON را بده و **هیچ فیلدی را خالی/صفر نگذار**:\n" +
+"⚠️ **اجباری (STRICT MODE)**: در انتهای پاسخ، دقیقاً این JSON را بده:\n" +
 "```json\n" +
-"{\n" +
-"  \"direction\": \"BUY|SELL|WAIT\",\n" +
-"  \"confluenceScore\": 0.0,\n" +
-"  \"scores\": {\n" +
-"    \"structure\": 0,\n" +
-"    \"smc\": 0,\n" +
-"    \"ict\": 0,\n" +
-"    \"candle\": 0,\n" +
-"    \"liquidity\": 0,\n" +
-"    \"riskReward\": 0\n" +
-"  },\n" +
-"  \"htf4h\": \"BULLISH|BEARISH|RANGING\",\n" +
-"  \"mtf1h\": \"BULLISH|BEARISH|RANGING\",\n" +
-"  \"ltf15m\": \"BULLISH|BEARISH|RANGING\",\n" +
-"  \"entrytf1m\": \"BULLISH|BEARISH|RANGING\",\n" +
-"  \"confidence\": 0,\n" +
-"  \"entry\": 0,\n" +
-"  \"stopLoss\": 0,\n" +
-"  \"tp1\": 0,\n" +
-"  \"tp2\": 0,\n" +
-"  \"tp3\": 0,\n" +
-"  \"rr\": \"1:0\"\n" +
-"}\n" +
-"```\n" +
-"نمرات ۰-۱۰۰ و confluenceScore ۰-۱۰.";
+"{\"direction\":\"BUY|SELL|WAIT\",\"confluenceScore\":0.0,\"scores\":{\"structure\":0,\"smc\":0,\"ict\":0,\"candle\":0,\"liquidity\":0,\"riskReward\":0},\"confidence\":0,\"entry\":0,\"stopLoss\":0,\"tp1\":0,\"tp2\":0,\"tp3\":0,\"rr\":\"1:0\"}\n" +
+"```\nنمرات ۰-۱۰۰ و confluenceScore ۰-۱۰.";
 
 // ============================================
 // PROMPTS
@@ -80,18 +64,18 @@ const SYSTEM_PROMPT = "شما یک تحلیل‌گر ارشد بازارهای �
 "**قوانین:**\n1. اگر Confidence < 65 → WAIT\n2. حد ضرر ساختاری\n3. در BUY، SL زیر Entry و در SELL، SL بالای Entry\n4. R/R اعلامی با محاسبه واقعی\n5. تحلیل کامل و مفصل بنویس";
 
 const MULTI_TF_PROMPT = "شما یک تحلیل‌گر ارشد بازارهای مالی هستید.\n\n" +
-"**تحلیل Multi-Timeframe**\n🎯 HTF (4H): روند اصلی (قطعی)\n🔍 MTF (1H): تأیید ساختار\n📊 LTF (15M): ستاپ\n⏱️ EntryTF (1M): فقط تایمینگ\n\n" +
+"**تحلیل Multi-Timeframe**\n🎯 HTF (4H): روند اصلی\n🔍 MTF (1H): تأیید ساختار\n📊 LTF (15M): ستاپ\n⏱️ EntryTF (1M): فقط تایمینگ\n\n" +
 "**قوانین:**\n1. جهت نهایی = جهت 4H\n2. 1M فقط تایمینگ\n3. 4H رنج بود → WAIT\n\n" +
 "**فرمت:**\n---\nDirection: [BUY/SELL/WAIT]\nConfluenceScore: [0-10]\nHTF4H: [BULLISH/BEARISH/RANGING]\nMTF1H: [BULLISH/BEARISH/RANGING]\nLTF15M: [BULLISH/BEARISH/RANGING]\nEntryTF1M: [BULLISH/BEARISH/RANGING]\nConfidenceScore: [0-100]\nEntry: [عدد یا N/A]\nStop Loss: [عدد یا N/A]\nTP1: [عدد یا N/A]\nTP2: [عدد یا N/A]\nTP3: [عدد یا N/A]\nR/R: [نسبت یا N/A]\n---";
 
 const IMAGE_PROMPT = "شما یک تحلیل‌گر ارشد بازارهای مالی با ۱۵ سال تجربه در SMC، ICT و پرایس اکشن هستید.\n\n" +
 "**تحلیل چارت از روی تصویر**\n\n" +
-"**مرحله ۱: تحلیل کامل و مفصل (این بخش را حتماً بنویس)**\n" +
-"### ۰. اطلاعات تصویر\n- تشخیص نماد و تایم‌فریم\n- کالیبراسیون محور Y\n\n" +
-"### ۱. رژیم بازار\n### ۲. ساختار بازار\n### ۳. SMC و Order Blocks\n### ۴. الگوهای کندلی\n### ۵. سطوح کلیدی\n### ۶. سناریو معاملاتی\n### ۷. خلاصه اجرایی\n\n" +
-"**مرحله ۲: در انتهای پاسخ دقیقاً این فرمت را بنویس:**\n\n" +
+"**مرحله ۱: تحلیل کامل (حداقل ۵۰۰ کلمه)**\n### ۰. اطلاعات تصویر\n### ۱. رژیم بازار\n### ۲. ساختار بازار\n### ۳. SMC و Order Blocks\n### ۴. الگوهای کندلی\n### ۵. سطوح کلیدی\n### ۶. سناریو معاملاتی\n### ۷. خلاصه اجرایی\n\n" +
+"**مرحله ۲: در انتهای پاسخ دقیقاً این فرمت:**\n\n" +
 "---\nDirection: [BUY/SELL/WAIT]\nSymbol: [نماد یا UNKNOWN]\nTimeframe: [تایم‌فریم یا UNKNOWN]\nRegime: [TRENDING_UP/TRENDING_DOWN/RANGING/TRANSITIONAL]\nConfidenceScore: [0-100]\nEntry: [عدد یا N/A]\nStop Loss: [عدد یا N/A]\nTP1: [عدد یا N/A]\nTP2: [عدد یا N/A]\nTP3: [عدد یا N/A]\nR/R: [نسبت یا N/A]\n---\n\n" +
-"**قوانین:**\n1. تحلیل کامل و مفصل بنویس — حداقل ۵۰۰ کلمه\n2. Confidence < 65 → WAIT\n3. اگر نماد/تایم‌فریم نامعلوم → UNKNOWN\n4. حد ضرر ساختاری\n5. از JSON استفاده نکن، فقط فرمت بالا";
+"**قوانین:**\n1. تحلیل مفصل\n2. Confidence < 65 → WAIT\n3. اگر نامعلوم → UNKNOWN\n4. از JSON استفاده نکن";
+
+const CRYPTO_NOTE = "\n\n**🪙 کریپتو:** بازار ۲۴/۷ بدون سشن رسمی. ساعات لیکویید بالا (US/EU) بهترین فرصت‌ها رو می‌ده. حواست به ویکی‌پدیاهای اخبار و funding rate باشه (اگر فیوچرز)";
 
 // ============================================
 // ACCESS CONTROL
@@ -144,10 +128,7 @@ function normDir(d) {
 }
 
 function esc(s) {
-  return String(s == null ? '' : s)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
+  return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
 function calcATR(klines, period) {
@@ -162,6 +143,85 @@ function calcATR(klines, period) {
   }
   if (!trs.length) return null;
   return trs.reduce((a, b) => a + b, 0) / trs.length;
+}
+
+// ============================================
+// ⭐ CRYPTO & KILL ZONE
+// ============================================
+
+function isCryptoSymbol(sym) {
+  const s = String(sym || '').toUpperCase().replace(/[\/\-_]/g, '');
+  for (const base of CRYPTO_BASES) { if (s.startsWith(base)) return true; }
+  return /\/(USDT|USDC|BUSD|BTC|ETH)$/.test(String(sym || '').toUpperCase());
+}
+
+function getLondonHour() {
+  try { return parseInt(new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/London', hour: 'numeric', hour12: false }).format(new Date())); }
+  catch (e) { return new Date().getUTCHours(); }
+}
+function getNYHour() {
+  try { return parseInt(new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: 'numeric', hour12: false }).format(new Date())); }
+  catch (e) { return new Date().getUTCHours() - 5; }
+}
+
+function getKillZoneInfo() {
+  const londonH = getLondonHour();
+  const nyH = getNYHour();
+  const inLondon = londonH >= 7 && londonH < 10;
+  const inNY = nyH >= 8 && nyH < 11;
+  return {
+    active: inLondon || inNY,
+    london: inLondon,
+    ny: inNY,
+    overlap: inLondon && inNY,
+    londonH, nyH,
+    type: 'forex'
+  };
+}
+
+// ⭐ برای کریپتو: لیکوییدیتی بر اساس سشن US
+function getCryptoLiquidityWindow() {
+  const nyH = getNYHour();
+  return {
+    active: nyH >= 8 && nyH < 18,
+    high: nyH >= 13 && nyH < 17,
+    nyH,
+    type: 'crypto'
+  };
+}
+
+// ⭐ تابع یکپارچه — بسته به نوع نماد
+function getMarketWindow(symbol) {
+  if (isCryptoSymbol(symbol)) return getCryptoLiquidityWindow();
+  return getKillZoneInfo();
+}
+
+// ⭐ برچسب کوتاه برای لاگ/نمایش
+function getKZShortLabel(symbol) {
+  if (isCryptoSymbol(symbol)) {
+    const w = getCryptoLiquidityWindow();
+    return w.high ? '🪙LIQ+' : w.active ? '🪙LIQ' : '🪙low';
+  }
+  const kz = getKillZoneInfo();
+  if (kz.overlap) return '🟢KZ+';
+  if (kz.london) return '🟢KZ-L';
+  if (kz.ny) return '🟢KZ-N';
+  return '⚪noKZ';
+}
+
+// ⭐ بج کامل برای نمایش در caption
+function getKZBadge(symbol) {
+  if (isCryptoSymbol(symbol)) {
+    const w = getCryptoLiquidityWindow();
+    if (w.high) return '🪙 <b>کریپتو — لیکویید بالا</b>';
+    if (w.active) return '🪙 کریپتو — لیکویید متوسط';
+    return '🪙 کریپتو — لیکویید پایین';
+  }
+  const kz = getKillZoneInfo();
+  if (kz.overlap) return '⭐ <b>KZ همپوشانی</b>';
+  if (kz.london) return '⭐ <b>KZ لندن</b>';
+  if (kz.ny) return '⭐ <b>KZ نیویورک</b>';
+  return '⚪ خارج از KZ';
 }
 
 // ============================================
@@ -287,21 +347,19 @@ function extractLevels(rawText) {
 }
 
 // ============================================
-// ⭐ validateSignal — با Strictness
+// validateSignal — با Strictness
 // ============================================
 
 function validateSignal(levels, opts) {
   opts = opts || {};
-  var strict = opts.strict || 'hard';         // hard | easy
+  var strict = opts.strict || 'hard';
   var minRR = opts.minRR || 1.5;
   var minConfidence = opts.minConfidence || 65;
-
   var issues = [];
   var originalDir = levels.direction;
 
-  // ⭐ در easy mode، آستانه‌ها نرم‌تر
   if (strict === 'easy') {
-    minRR = Math.max(1.0, minRR * 0.7);       // مثلاً 1.5 → 1.05
+    minRR = Math.max(1.0, minRR * 0.7);
     minConfidence = Math.max(55, minConfidence - 5);
   }
 
@@ -314,51 +372,30 @@ function validateSignal(levels, opts) {
 
   if (levels.direction === 'BUY' || levels.direction === 'SELL') {
     var entry = levels.entry, sl = levels.sl;
-
     if (entry === null) { issues.push('Entry نیست'); levels.direction = 'WAIT'; }
     else if (sl === null) { issues.push('SL نیست'); levels.direction = 'WAIT'; }
     else {
-      // ⭐ SL وارونه — در hard همیشه WAIT، در easy فقط هشدار
       if (levels.direction === 'BUY' && sl >= entry) {
-        if (strict === 'hard') {
-          issues.push('❌ SL بالای Entry → WAIT');
-          levels.direction = 'WAIT';
-        } else {
-          issues.push('⚠️ SL بالای Entry (نادیده گرفته شد در حالت آسان)');
-        }
+        if (strict === 'hard') { issues.push('❌ SL بالای Entry'); levels.direction = 'WAIT'; }
+        else issues.push('⚠️ SL بالای Entry (نادیده در easy)');
       }
       if (levels.direction === 'SELL' && sl <= entry) {
-        if (strict === 'hard') {
-          issues.push('❌ SL زیر Entry → WAIT');
-          levels.direction = 'WAIT';
-        } else {
-          issues.push('⚠️ SL زیر Entry (نادیده گرفته شد در حالت آسان)');
-        }
+        if (strict === 'hard') { issues.push('❌ SL زیر Entry'); levels.direction = 'WAIT'; }
+        else issues.push('⚠️ SL زیر Entry (نادیده در easy)');
       }
     }
-
-    // ⭐ چک TP1 — در hard الزامی، در easy اختیاری
     if (levels.direction !== 'WAIT' && entry && sl) {
       if (levels.tp1) {
-        var wrongDir = (levels.direction === 'BUY' && levels.tp1 <= entry) ||
-                       (levels.direction === 'SELL' && levels.tp1 >= entry);
-        if (wrongDir) {
-          issues.push('❌ TP1 سمت اشتباه → WAIT');
-          levels.direction = 'WAIT';
-        } else {
-          var risk = Math.abs(entry - sl);
-          var reward = Math.abs(levels.tp1 - entry);
+        var wrongDir = (levels.direction === 'BUY' && levels.tp1 <= entry) || (levels.direction === 'SELL' && levels.tp1 >= entry);
+        if (wrongDir) { issues.push('❌ TP1 سمت اشتباه'); levels.direction = 'WAIT'; }
+        else {
+          var risk = Math.abs(entry - sl); var reward = Math.abs(levels.tp1 - entry);
           var actualRR = risk > 0 ? reward / risk : 0;
-          if (actualRR < minRR) {
-            issues.push('R/R ' + actualRR.toFixed(2) + ' < ' + minRR + ' → WAIT');
-            levels.direction = 'WAIT';
-          } else {
-            levels.rr = '1:' + actualRR.toFixed(2);
-          }
+          if (actualRR < minRR) { issues.push('R/R ' + actualRR.toFixed(2) + ' < ' + minRR); levels.direction = 'WAIT'; }
+          else levels.rr = '1:' + actualRR.toFixed(2);
         }
       } else if (strict === 'hard') {
-        issues.push('⚠️ TP1 نیست (در حالت سختگیر اجباری) → WAIT');
-        levels.direction = 'WAIT';
+        issues.push('⚠️ TP1 نیست (hard)'); levels.direction = 'WAIT';
       }
     }
   }
@@ -375,16 +412,11 @@ function validateSignal(levels, opts) {
 function extractScores(text) {
   var j = parseJsonBlock(text);
   if (j && j.scores) {
-    var s = {};
-    var ok = 0;
+    var s = {}; var ok = 0;
     for (var i = 0; i < CONF_KEYS.length; i++) {
-      var k = CONF_KEYS[i];
-      var v = j.scores[k];
+      var k = CONF_KEYS[i]; var v = j.scores[k];
       if (typeof v === 'number' && v >= 0 && v <= 100) { s[k] = v; ok++; }
-      else if (typeof v === 'string') {
-        var n = parseFloat(v);
-        if (!isNaN(n)) { s[k] = n; ok++; }
-      }
+      else if (typeof v === 'string') { var n = parseFloat(v); if (!isNaN(n)) { s[k] = n; ok++; } }
     }
     if (ok >= 4) return s;
   }
@@ -396,14 +428,10 @@ function extractScores(text) {
     liquidity: /(?:Liquidity|نقدینگی|Sweep)[^\d\n]{0,25}(\d{1,3})/i,
     riskReward: /(?:R\/R|RiskReward|Risk-Reward)[^\d\n]{0,25}(\d{1,3})/i
   };
-  var scores = {};
-  var found = 0;
+  var scores = {}; var found = 0;
   for (var key in pats) {
     var m = text.match(pats[key]);
-    if (m) {
-      var vv = parseInt(m[1]);
-      if (vv >= 0 && vv <= 100) { scores[key] = vv; found++; }
-    }
+    if (m) { var vv = parseInt(m[1]); if (vv >= 0 && vv <= 100) { scores[key] = vv; found++; } }
   }
   if (found >= 3) return scores;
   return null;
@@ -412,39 +440,29 @@ function extractScores(text) {
 function calculateConfluenceAuto(levels, rawText) {
   var t = (rawText || '');
   var scores = {};
-
   var st = 50;
   if (/\bBOS\b/i.test(t)) st += 12;
-  if (/CHOCH|CHoCH|Change\s*of\s*Character/i.test(t)) st += 10;
-  if (/Retest|پولبک|ری\s*تست/i.test(t)) st += 8;
-  if (/TRENDING_UP|TRENDING_DOWN|روند\s*قوی/i.test(t)) st += 10;
+  if (/CHOCH|CHoCH/i.test(t)) st += 10;
+  if (/Retest|پولبک/i.test(t)) st += 8;
+  if (/TRENDING_UP|TRENDING_DOWN/i.test(t)) st += 10;
   if (/RANGING|رنج/i.test(t)) st -= 15;
   scores.structure = Math.max(0, Math.min(100, st));
-
   var smc = 50;
   if (/Order\s*Block|\bOB\b/i.test(t)) smc += 18;
   if (/Premium|Discount/i.test(t)) smc += 8;
-  if (/Supply|Demand|عرضه|تقاضا/i.test(t)) smc += 8;
-  if (/Mitigation|Breaker/i.test(t)) smc += 6;
   scores.smc = Math.max(0, Math.min(100, smc));
-
   var ict = 50;
   if (/FVG|Fair\s*Value\s*Gap/i.test(t)) ict += 22;
   if (/Imbalance/i.test(t)) ict += 12;
-  if (/Displacement/i.test(t)) ict += 8;
   scores.ict = Math.max(0, Math.min(100, ict));
-
   var cd = 50;
   if (/Engulf|پوششی/i.test(t)) cd += 18;
-  if (/Pin\s*Bar|Pinbar|پین/i.test(t)) cd += 15;
-  if (/Hammer|Doji|Shooting|Star/i.test(t)) cd += 12;
+  if (/Pin\s*Bar/i.test(t)) cd += 15;
   scores.candle = Math.max(0, Math.min(100, cd));
-
   var lq = 50;
-  if (/Liquidity\s*Sweep|Sweep|Stop\s*Hunt/i.test(t)) lq += 20;
-  if (/Equal\s*Highs|Equal\s*Lows|EQH|EQL/i.test(t)) lq += 12;
+  if (/Liquidity\s*Sweep|Sweep/i.test(t)) lq += 20;
+  if (/نقدینگی/i.test(t)) lq += 10;
   scores.liquidity = Math.max(0, Math.min(100, lq));
-
   var rr = 0;
   if (levels.entry && levels.sl && levels.tp1) {
     var risk = Math.abs(levels.entry - levels.sl);
@@ -453,29 +471,23 @@ function calculateConfluenceAuto(levels, rawText) {
     rr = Math.min(100, Math.round(ratio * 33));
   }
   scores.riskReward = rr;
-
   var avg = (scores.structure + scores.smc + scores.ict + scores.candle + scores.liquidity + scores.riskReward) / 6;
   return { scores: scores, confluence: Math.round((avg / 10) * 10) / 10, auto: true };
 }
 
-async function getConfluenceMode(env, chatId) {
-  try { return (await env.KV.get('confmode:' + chatId)) || 'normal'; } catch (e) { return 'normal'; }
-}
+// ============================================
+// KV STATE
+// ============================================
+
+async function getConfluenceMode(env, chatId) { try { return (await env.KV.get('confmode:' + chatId)) || 'normal'; } catch (e) { return 'normal'; } }
 async function setConfluenceMode(env, chatId, mode) { await env.KV.put('confmode:' + chatId, mode); }
-
-async function getUserModelTier(env, chatId, provider) {
-  try { return (await env.KV.get('tier:' + chatId + ':' + provider)) || 'fast'; } catch (e) { return 'fast'; }
-}
+async function getUserModelTier(env, chatId, provider) { try { return (await env.KV.get('tier:' + chatId + ':' + provider)) || 'fast'; } catch (e) { return 'fast'; } }
 async function setUserModelTier(env, chatId, provider, tier) { await env.KV.put('tier:' + chatId + ':' + provider, tier); }
-
-// ⭐ جدید: strictness KV
-async function getStrictness(env, chatId) {
-  try { return (await env.KV.get('strict:' + chatId)) || 'hard'; } catch (e) { return 'hard'; }
-}
-async function setStrictness(env, chatId, mode) {
-  if (!STRICTNESS_MODES[mode]) mode = 'hard';
-  await env.KV.put('strict:' + chatId, mode);
-}
+async function getStrictness(env, chatId) { try { return (await env.KV.get('strict:' + chatId)) || 'hard'; } catch (e) { return 'hard'; } }
+async function setStrictness(env, chatId, mode) { if (!STRICTNESS_MODES[mode]) mode = 'hard'; await env.KV.put('strict:' + chatId, mode); }
+// ⭐ KZ Mode جدید
+async function getKzMode(env, chatId) { try { return (await env.KV.get('kzmode:' + chatId)) || 'priority'; } catch (e) { return 'priority'; } }
+async function setKzMode(env, chatId, mode) { if (!KZ_MODES[mode]) mode = 'priority'; await env.KV.put('kzmode:' + chatId, mode); }
 
 function buildPromptForMode(basePrompt, mode) {
   if (mode === 'force') return basePrompt + FORCE_DIRECTIVE;
@@ -487,14 +499,9 @@ function buildConfluenceChips(scores, opts) {
   if (!scores) return '';
   var c = '\n<b>📌 چیپ‌های هم‌گرایی</b>' + (opts.auto ? ' <i>(محاسبه خودکار)</i>' : '') + ':\n';
   for (var i = 0; i < CONF_KEYS.length; i++) {
-    var k = CONF_KEYS[i];
-    var v = scores[k];
-    var lbl = CONF_LABELS[k];
+    var k = CONF_KEYS[i]; var v = scores[k]; var lbl = CONF_LABELS[k];
     if (v === null || v === undefined) c += '◯ ' + lbl + ' (—)\n';
-    else {
-      var icon = v >= 80 ? '🟢' : v >= 60 ? '🟡' : v >= 40 ? '🟠' : '🔴';
-      c += icon + ' ' + lbl + ' (' + v + ')\n';
-    }
+    else { var icon = v >= 80 ? '🟢' : v >= 60 ? '🟡' : v >= 40 ? '🟠' : '🔴'; c += icon + ' ' + lbl + ' (' + v + ')\n'; }
   }
   return c;
 }
@@ -502,18 +509,12 @@ function buildConfluenceChips(scores, opts) {
 function buildConfluenceBlock(confluence, levels) {
   if (!confluence) return '';
   var c = '';
-  var cfScore = (confluence.confluence !== null && confluence.confluence !== undefined)
-    ? confluence.confluence
-    : (levels && levels.confluenceScore !== null && levels.confluenceScore !== undefined ? levels.confluenceScore : null);
-
+  var cfScore = (confluence.confluence !== null && confluence.confluence !== undefined) ? confluence.confluence : (levels && levels.confluenceScore !== null && levels.confluenceScore !== undefined ? levels.confluenceScore : null);
   if (cfScore === null && confluence.scores) {
     var sum = 0, cnt = 0;
-    for (var kk in confluence.scores) {
-      if (typeof confluence.scores[kk] === 'number') { sum += confluence.scores[kk]; cnt++; }
-    }
+    for (var kk in confluence.scores) { if (typeof confluence.scores[kk] === 'number') { sum += confluence.scores[kk]; cnt++; } }
     if (cnt > 0) cfScore = Math.round((sum / cnt / 10) * 10) / 10;
   }
-
   if (cfScore !== null && cfScore !== undefined) {
     var e = cfScore >= 8 ? '🔥' : cfScore >= 6 ? '✅' : cfScore >= 4 ? '⚠️' : '❌';
     c += '\n<b>هم‌گرایی:</b> ' + e + ' <b>' + esc(cfScore) + '/10</b>';
@@ -528,13 +529,9 @@ function buildConfluenceBlock(confluence, levels) {
 function buildConfluenceWarning(levels, mode) {
   var w = '';
   if (mode === 'normal') {
-    w = '\n⚠️ <b>نمرات هم‌گرایی دریافت نشد</b>\nلطفاً تحلیل را مجدداً بگیر یا از منوی تنظیمات، حالت «خودکار پیشرفته» را فعال کن.';
-    if (levels.direction === 'BUY' || levels.direction === 'SELL') {
-      w += '\n\n🚨 <b>سیگنال BUY/SELL داد ولی نمرات نیامد</b> → احتمالاً مشکل AI است، دوباره تحلیل بگیر.';
-    }
-  } else if (mode === 'force') {
-    w = '\n⚠️ <b>AI از دستور اجباری پیروی نکرد</b> — از محاسبه خودکار استفاده شد.';
-  }
+    w = '\n⚠️ <b>نمرات هم‌گرایی دریافت نشد</b>\nلطفاً تحلیل را مجدداً بگیر یا حالت خودکار را فعال کن.';
+    if (levels.direction === 'BUY' || levels.direction === 'SELL') w += '\n\n🚨 <b>سیگنال BUY/SELL داد ولی نمرات نیامد</b>';
+  } else if (mode === 'force') w = '\n⚠️ AI از دستور اجباری پیروی نکرد';
   return w;
 }
 
@@ -575,9 +572,7 @@ async function callAIPrimeText(env, prompt, imageBase64, imageMime, chatId) {
   if (!key) throw new Error('no aiprime key');
   var tier = chatId ? await getUserModelTier(env, chatId, 'aiprime') : 'fast';
   var cfg = getModelTierConfig('aiprime', tier, !!imageBase64);
-  var content = imageBase64
-    ? [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: 'data:' + imageMime + ';base64,' + imageBase64 } }]
-    : prompt;
+  var content = imageBase64 ? [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: 'data:' + imageMime + ';base64,' + imageBase64 } }] : prompt;
   var res = await fetch('https://api.aiprime.shop/v1/chat/completions', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + key },
@@ -592,14 +587,10 @@ async function callAIPrimeText(env, prompt, imageBase64, imageMime, chatId) {
 async function callGroqText(env, prompt, imageBase64, imageMime) {
   var key = env.GROQ_KEY;
   if (!key) throw new Error('no groq key');
-  var models = imageBase64
-    ? ['meta-llama/llama-4-scout-17b-16e-instruct', 'meta-llama/llama-4-maverick-17b-128e-instruct']
-    : ['llama-3.1-8b-instant', 'llama-3.3-70b-versatile', 'gemma2-9b-it'];
+  var models = imageBase64 ? ['meta-llama/llama-4-scout-17b-16e-instruct', 'meta-llama/llama-4-maverick-17b-128e-instruct'] : ['llama-3.1-8b-instant', 'llama-3.3-70b-versatile', 'gemma2-9b-it'];
   var lastErr = '';
   for (var i = 0; i < models.length; i++) {
-    var content = imageBase64
-      ? [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: 'data:' + imageMime + ';base64,' + imageBase64 } }]
-      : prompt;
+    var content = imageBase64 ? [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: 'data:' + imageMime + ';base64,' + imageBase64 } }] : prompt;
     try {
       var res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
         method: 'POST',
@@ -618,9 +609,7 @@ async function callGitHubText(env, prompt, imageBase64, imageMime) {
   var token = env.GITHUB_MODELS_TOKEN;
   if (!token) throw new Error('no github token');
   var model = env.GITHUB_MODELS_MODEL || 'gpt-4o-mini';
-  var content = imageBase64
-    ? [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: 'data:' + imageMime + ';base64,' + imageBase64 } }]
-    : prompt;
+  var content = imageBase64 ? [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: 'data:' + imageMime + ';base64,' + imageBase64 } }] : prompt;
   var res = await fetch('https://models.inference.ai.azure.com/chat/completions', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
@@ -652,9 +641,7 @@ async function callGapGPTText(env, prompt, imageBase64, imageMime, chatId) {
   if (!key) throw new Error('no gapgpt key');
   var tier = chatId ? await getUserModelTier(env, chatId, 'gapgpt') : 'fast';
   var cfg = getModelTierConfig('gapgpt', tier, !!imageBase64);
-  var content = imageBase64
-    ? [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: 'data:' + imageMime + ';base64,' + imageBase64 } }]
-    : prompt;
+  var content = imageBase64 ? [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: 'data:' + imageMime + ';base64,' + imageBase64 } }] : prompt;
   var res = await fetch('https://api.gapgpt.app/v1/chat/completions', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + key },
@@ -836,15 +823,9 @@ async function callWithFallback(env, prompt, imageBase64, imageMime, chatId) {
       console.log('Trying ' + p + '...');
       var timeout = (p === 'gapgpt' || p === 'aiprime') ? 30000 : 15000;
       var result = await withTimeout(PROVIDER_FUNCS[p](env, prompt, imageBase64, imageMime, chatId), timeout, p);
-      if (result && result.length > 10) {
-        console.log('✅ OK ' + p + ' (' + result.length + ' chars)');
-        return { text: result, provider: PROVIDER_NAMES[p] };
-      }
+      if (result && result.length > 10) { console.log('✅ OK ' + p + ' (' + result.length + ' chars)'); return { text: result, provider: PROVIDER_NAMES[p] }; }
       errors.push(p + ': کوتاه');
-    } catch (e) {
-      console.log('❌ ' + p + ': ' + e.message);
-      errors.push(p + ': ' + e.message);
-    }
+    } catch (e) { console.log('❌ ' + p + ': ' + e.message); errors.push(p + ': ' + e.message); }
   }
   throw new Error('همه سرویس‌ها خطا دادند:\n' + errors.slice(0, 8).join('\n'));
 }
@@ -861,7 +842,9 @@ function klinesToText(klines, symbol, tfName) {
     var t = k.datetime ? formatTime(k.datetime) : '';
     return '  ' + t + ' | O:' + k.open + ' H:' + k.high + ' L:' + k.low + ' C:' + k.close;
   }).join('\n');
-  return '=== ' + tfName + ' (' + symbol + ') ===\nقیمت فعلی: ' + last.close + '\n\n' + rows;
+  var isCrypto = isCryptoSymbol(symbol);
+  var header = isCrypto ? '=== ' + tfName + ' (' + symbol + ') [CRYPTO] ===' : '=== ' + tfName + ' (' + symbol + ') ===';
+  return header + '\nقیمت فعلی: ' + last.close + '\n\n' + rows;
 }
 
 function normalizeSymbol(sym) {
@@ -893,84 +876,54 @@ function directionEmoji(d) {
 // ============================================
 
 const MODE_CONFIG = {
-  scalping: {
-    label: 'اسکلپی', icon: '⚡', color: '#fbbf24',
-    minConfidence: 70, minRR: 2.0, minConfluence: 7,
-    allowedTFs: ['1min', '3min', '5min', '15min'],
-    note: 'فقط در Kill Zone لندن/نیویورک'
-  },
-  medium: {
-    label: 'متوسط', icon: '⚖️', color: '#6ea8fe',
-    minConfidence: 65, minRR: 1.5, minConfluence: 6,
-    allowedTFs: ['5min', '15min', '1h', '4h'],
-    note: 'تعادل بین سرعت و دقت'
-  },
-  confident: {
-    label: 'مطمئن', icon: '🛡️', color: '#4ade80',
-    minConfidence: 75, minRR: 2.5, minConfluence: 8,
-    allowedTFs: ['15min', '1h', '4h'],
-    note: 'کیفیت بالا، تعداد کم سیگنال'
-  }
+  scalping: { label: 'اسکلپی', icon: '⚡', color: '#fbbf24', minConfidence: 70, minRR: 2.0, minConfluence: 7, allowedTFs: ['1min', '3min', '5min', '15min'], note: 'Kill Zone لندن/نیویورک' },
+  medium: { label: 'متوسط', icon: '⚖️', color: '#6ea8fe', minConfidence: 65, minRR: 1.5, minConfluence: 6, allowedTFs: ['5min', '15min', '1h', '4h'], note: 'تعادل سرعت/دقت' },
+  confident: { label: 'مطمئن', icon: '🛡️', color: '#4ade80', minConfidence: 75, minRR: 2.5, minConfluence: 8, allowedTFs: ['15min', '1h', '4h'], note: 'کیفیت بالا' }
 };
 
-async function getUserMode(env, chatId) {
-  try { var m = await env.KV.get('mode:' + chatId); return MODE_CONFIG[m] ? m : 'medium'; }
-  catch (e) { return 'medium'; }
-}
-async function setUserMode(env, chatId, mode) {
-  if (!MODE_CONFIG[mode]) mode = 'medium';
-  await env.KV.put('mode:' + chatId, mode);
-}
+async function getUserMode(env, chatId) { try { var m = await env.KV.get('mode:' + chatId); return MODE_CONFIG[m] ? m : 'medium'; } catch (e) { return 'medium'; } }
+async function setUserMode(env, chatId, mode) { if (!MODE_CONFIG[mode]) mode = 'medium'; await env.KV.put('mode:' + chatId, mode); }
 
 // ============================================
 // KEYBOARDS
 // ============================================
 
 function mainMenu() {
-  return {
-    inline_keyboard: [
-      [{ text: '📊 تحلیل جدید', callback_data: 'menu_analyze' }, { text: '🎯 تحلیل MTF', callback_data: 'menu_mtf' }],
-      [{ text: '📸 تحلیل تصویر', callback_data: 'menu_image' }, { text: '📓 ژورنال', callback_data: 'menu_journal' }],
-      [{ text: '🔔 هشدارها', callback_data: 'menu_watch' }, { text: '⚙️ تنظیمات', callback_data: 'menu_settings' }],
-      [{ text: '📈 وضعیت', callback_data: 'menu_status' }, { text: '📖 راهنما', callback_data: 'menu_help' }]
-    ]
-  };
+  return { inline_keyboard: [
+    [{ text: '📊 تحلیل جدید', callback_data: 'menu_analyze' }, { text: '🎯 تحلیل MTF', callback_data: 'menu_mtf' }],
+    [{ text: '📸 تحلیل تصویر', callback_data: 'menu_image' }, { text: '📓 ژورنال', callback_data: 'menu_journal' }],
+    [{ text: '🔔 هشدارها', callback_data: 'menu_watch' }, { text: '⚙️ تنظیمات', callback_data: 'menu_settings' }],
+    [{ text: '📈 وضعیت', callback_data: 'menu_status' }, { text: '📖 راهنما', callback_data: 'menu_help' }]
+  ]};
 }
 
 function symbolMenu() {
-  return {
-    inline_keyboard: [
-      [{ text: '🥇 XAU/USD', callback_data: 'sym_XAUUSD' }, { text: '💶 EUR/USD', callback_data: 'sym_EURUSD' }],
-      [{ text: '₿ BTC/USD', callback_data: 'sym_BTCUSD' }, { text: '💷 GBP/USD', callback_data: 'sym_GBPUSD' }],
-      [{ text: '💎 ETH/USD', callback_data: 'sym_ETHUSD' }, { text: '💵 USD/JPY', callback_data: 'sym_USDJPY' }],
-      [{ text: '✏️ نماد دیگر', callback_data: 'sym_custom' }],
-      [{ text: '🏠 منوی اصلی', callback_data: 'menu_main' }]
-    ]
-  };
+  return { inline_keyboard: [
+    [{ text: '🥇 XAU/USD', callback_data: 'sym_XAUUSD' }, { text: '💶 EUR/USD', callback_data: 'sym_EURUSD' }],
+    [{ text: '💷 GBP/USD', callback_data: 'sym_GBPUSD' }, { text: '💵 USD/JPY', callback_data: 'sym_USDJPY' }],
+    [{ text: '₿ BTC/USD', callback_data: 'sym_BTCUSD' }, { text: 'Ξ ETH/USD', callback_data: 'sym_ETHUSD' }],
+    [{ text: '◎ SOL/USD', callback_data: 'sym_SOLUSD' }, { text: '🟡 BNB/USD', callback_data: 'sym_BNBUSD' }],
+    [{ text: '✕ XRP/USD', callback_data: 'sym_XRPUSD' }, { text: '🐕 DOGE/USD', callback_data: 'sym_DOGEUSD' }],
+    [{ text: '✏️ نماد دیگر', callback_data: 'sym_custom' }],
+    [{ text: '🏠 منوی اصلی', callback_data: 'menu_main' }]
+  ]};
 }
 
 function timeframeMenu(symbolRaw) {
-  return {
-    inline_keyboard: [
-      [{ text: '🎯 تحلیل MTF (4H+1H+15M+1M)', callback_data: 'mtf_' + symbolRaw }],
-      [{ text: '⏱️ 1 دقیقه', callback_data: 'tf_' + symbolRaw + '_1min' }, { text: '⏱️ 3 دقیقه', callback_data: 'tf_' + symbolRaw + '_3min' }],
-      [{ text: '⏱️ 5 دقیقه', callback_data: 'tf_' + symbolRaw + '_5min' }, { text: '⏱️ 15 دقیقه', callback_data: 'tf_' + symbolRaw + '_15min' }],
-      [{ text: '🕐 1 ساعت', callback_data: 'tf_' + symbolRaw + '_1h' }, { text: '📅 4 ساعت', callback_data: 'tf_' + symbolRaw + '_4h' }],
-      [{ text: '◀️ بازگشت', callback_data: 'menu_analyze' }]
-    ]
-  };
+  return { inline_keyboard: [
+    [{ text: '🎯 تحلیل MTF (4H+1H+15M+1M)', callback_data: 'mtf_' + symbolRaw }],
+    [{ text: '⏱️ 1 دقیقه', callback_data: 'tf_' + symbolRaw + '_1min' }, { text: '⏱️ 3 دقیقه', callback_data: 'tf_' + symbolRaw + '_3min' }],
+    [{ text: '⏱️ 5 دقیقه', callback_data: 'tf_' + symbolRaw + '_5min' }, { text: '⏱️ 15 دقیقه', callback_data: 'tf_' + symbolRaw + '_15min' }],
+    [{ text: '🕐 1 ساعت', callback_data: 'tf_' + symbolRaw + '_1h' }, { text: '📅 4 ساعت', callback_data: 'tf_' + symbolRaw + '_4h' }],
+    [{ text: '◀️ بازگشت', callback_data: 'menu_analyze' }]
+  ]};
 }
 
 function providerMenu(providerList, symbolRaw, timeframe, isMTF) {
-  var buttons = [];
-  var row = [];
+  var buttons = []; var row = [];
   for (var i = 0; i < providerList.length; i++) {
     var p = providerList[i];
-    var icon = {
-      gemini: '🌟', aiprime: '🅰️', groq: '⚡', openrouter: '🔀', mistral: '🌬️', github: '🐙',
-      together: '🤝', gapgpt: '💎', huggingface: '🤗', cloudflare: '☁️', nvidia: '🟢',
-      llm7: '🎁', avalai: '🇮🇷', metis: '🇮🇷', onexai: '🇮🇷'
-    }[p] || '🤖';
+    var icon = { gemini: '🌟', aiprime: '🅰️', groq: '⚡', openrouter: '🔀', mistral: '🌬️', github: '🐙', together: '🤝', gapgpt: '💎', huggingface: '🤗', cloudflare: '☁️', nvidia: '🟢', llm7: '🎁', avalai: '🇮🇷', metis: '🇮🇷', onexai: '🇮🇷' }[p] || '🤖';
     var label = icon + ' ' + (PROVIDER_NAMES[p] || p);
     var cb = 'pvd_' + p + '_' + symbolRaw + '_' + (isMTF ? 'MTF' : timeframe);
     row.push({ text: label, callback_data: cb });
@@ -982,87 +935,84 @@ function providerMenu(providerList, symbolRaw, timeframe, isMTF) {
 }
 
 function journalMenu() {
-  return {
-    inline_keyboard: [
-      [{ text: '➕ ثبت معامله جدید', callback_data: 'journal_add' }],
-      [{ text: '📋 لیست معاملات', callback_data: 'journal_list' }, { text: '📊 آمار عملکرد', callback_data: 'journal_stats' }],
-      [{ text: '🗑️ پاک کردن همه', callback_data: 'journal_clear' }],
-      [{ text: '🏠 منوی اصلی', callback_data: 'menu_main' }]
-    ]
-  };
+  return { inline_keyboard: [
+    [{ text: '➕ ثبت معامله جدید', callback_data: 'journal_add' }],
+    [{ text: '📋 لیست معاملات', callback_data: 'journal_list' }, { text: '📊 آمار عملکرد', callback_data: 'journal_stats' }],
+    [{ text: '🗑️ پاک کردن همه', callback_data: 'journal_clear' }],
+    [{ text: '🏠 منوی اصلی', callback_data: 'menu_main' }]
+  ]};
 }
 
 function watchMenu() {
-  return {
-    inline_keyboard: [
-      [{ text: '➕ افزودن هشدار', callback_data: 'watch_add' }],
-      [{ text: '📋 لیست هشدارها', callback_data: 'watch_list' }],
-      [{ text: '🗑️ پاک کردن همه', callback_data: 'watch_clear' }],
-      [{ text: '🏠 منوی اصلی', callback_data: 'menu_main' }]
-    ]
-  };
+  return { inline_keyboard: [
+    [{ text: '➕ افزودن هشدار', callback_data: 'watch_add' }],
+    [{ text: '📋 لیست هشدارها', callback_data: 'watch_list' }],
+    [{ text: '🗑️ پاک کردن همه', callback_data: 'watch_clear' }],
+    [{ text: '🏠 منوی اصلی', callback_data: 'menu_main' }]
+  ]};
 }
 
 function modeMenu(current) {
   var cur = current || 'medium';
   var mark = function(m) { return cur === m ? ' ✅' : ''; };
-  return {
-    inline_keyboard: [
-      [{ text: '⚡ اسکلپی (≥۷۰٪، R/R≥۲)' + mark('scalping'), callback_data: 'mode_scalping' }],
-      [{ text: '⚖️ متوسط (≥۶۵٪، R/R≥۱.۵)' + mark('medium'), callback_data: 'mode_medium' }],
-      [{ text: '🛡️ مطمئن (≥۷۵٪، R/R≥۲.۵)' + mark('confident'), callback_data: 'mode_confident' }],
-      [{ text: '◀️ بازگشت', callback_data: 'menu_settings' }]
-    ]
-  };
+  return { inline_keyboard: [
+    [{ text: '⚡ اسکلپی (≥۷۰٪، R/R≥۲)' + mark('scalping'), callback_data: 'mode_scalping' }],
+    [{ text: '⚖️ متوسط (≥۶۵٪، R/R≥۱.۵)' + mark('medium'), callback_data: 'mode_medium' }],
+    [{ text: '🛡️ مطمئن (≥۷۵٪، R/R≥۲.۵)' + mark('confident'), callback_data: 'mode_confident' }],
+    [{ text: '◀️ بازگشت', callback_data: 'menu_settings' }]
+  ]};
 }
 
 function confluenceModeMenu(current) {
   var cur = current || 'normal';
   var mark = function(m) { return cur === m ? ' ✅' : ''; };
-  return {
-    inline_keyboard: [
-      [{ text: '🔵 حالت عادی (AI)' + mark('normal'), callback_data: 'conf_normal' }],
-      [{ text: '🟢 حالت خودکار پیشرفته' + mark('auto'), callback_data: 'conf_auto' }],
-      [{ text: '🔴 اجبار AI (سختگیر)' + mark('force'), callback_data: 'conf_force' }],
-      [{ text: '◀️ بازگشت', callback_data: 'menu_settings' }]
-    ]
-  };
+  return { inline_keyboard: [
+    [{ text: '🔵 عادی (AI)' + mark('normal'), callback_data: 'conf_normal' }],
+    [{ text: '🟢 خودکار پیشرفته' + mark('auto'), callback_data: 'conf_auto' }],
+    [{ text: '🔴 اجبار AI' + mark('force'), callback_data: 'conf_force' }],
+    [{ text: '◀️ بازگشت', callback_data: 'menu_settings' }]
+  ]};
 }
 
-// ⭐ جدید: منوی نوع تحلیل
 function strictnessMenu(current) {
   var cur = current || 'hard';
   var mark = function(m) { return cur === m ? ' ✅' : ''; };
-  return {
-    inline_keyboard: [
-      [{ text: '🔴 سختگیر (Hard) — همه فیلترها' + mark('hard'), callback_data: 'strict_hard' }],
-      [{ text: '🟢 آسان (Easy) — فیلتر سبک' + mark('easy'), callback_data: 'strict_easy' }],
-      [{ text: '◀️ بازگشت', callback_data: 'menu_settings' }]
-    ]
-  };
+  return { inline_keyboard: [
+    [{ text: '🔴 سختگیر (Hard)' + mark('hard'), callback_data: 'strict_hard' }],
+    [{ text: '🟢 آسان (Easy)' + mark('easy'), callback_data: 'strict_easy' }],
+    [{ text: '◀️ بازگشت', callback_data: 'menu_settings' }]
+  ]};
+}
+
+// ⭐ منوی KZ Mode
+function kzModeMenu(current) {
+  var cur = current || 'priority';
+  var mark = function(m) { return cur === m ? ' ✅' : ''; };
+  return { inline_keyboard: [
+    [{ text: '🌐 ۲۴/۷ (بی‌توجه به KZ)' + mark('off'), callback_data: 'kz_off' }],
+    [{ text: '⭐ اولویت KZ (پیش‌فرض)' + mark('priority'), callback_data: 'kz_priority' }],
+    [{ text: '🔒 فقط در KZ (صرفه‌جویی API)' + mark('only'), callback_data: 'kz_only' }],
+    [{ text: '◀️ بازگشت', callback_data: 'menu_settings' }]
+  ]};
 }
 
 function modelTierMenu(currentTier) {
   var cur = currentTier || 'fast';
   var mark = function(m) { return cur === m ? ' ✅' : ''; };
-  return {
-    inline_keyboard: [
-      [{ text: '🚀 سریع (GPT-4o-mini ~$0.001)' + mark('fast'), callback_data: 'tier_fast' }],
-      [{ text: '🧠 DeepSeek (V4.1 Flash ~$0.003)' + mark('deepseek'), callback_data: 'tier_deepseek' }],
-      [{ text: '💎 قوی (Claude Sonnet 5 ~$0.045)' + mark('premium'), callback_data: 'tier_premium' }],
-      [{ text: '◀️ بازگشت', callback_data: 'menu_settings' }]
-    ]
-  };
+  return { inline_keyboard: [
+    [{ text: '🚀 سریع (GPT-4o-mini)' + mark('fast'), callback_data: 'tier_fast' }],
+    [{ text: '🧠 DeepSeek (V4.1 Flash)' + mark('deepseek'), callback_data: 'tier_deepseek' }],
+    [{ text: '💎 قوی (Claude Sonnet 5)' + mark('premium'), callback_data: 'tier_premium' }],
+    [{ text: '◀️ بازگشت', callback_data: 'menu_settings' }]
+  ]};
 }
 
 function modelTierProviderMenu() {
-  return {
-    inline_keyboard: [
-      [{ text: '🅰️ AIPrime', callback_data: 'tier_prov_aiprime' }],
-      [{ text: '💎 GapGPT', callback_data: 'tier_prov_gapgpt' }],
-      [{ text: '◀️ بازگشت', callback_data: 'menu_settings' }]
-    ]
-  };
+  return { inline_keyboard: [
+    [{ text: '🅰️ AIPrime', callback_data: 'tier_prov_aiprime' }],
+    [{ text: '💎 GapGPT', callback_data: 'tier_prov_gapgpt' }],
+    [{ text: '◀️ بازگشت', callback_data: 'menu_settings' }]
+  ]};
 }
 
 // ============================================
@@ -1081,29 +1031,36 @@ async function saveWatchlist(env, chatId, list) { await env.KV.put('watch:' + ch
 // MENU VIEWS
 // ============================================
 
-async function showMainMenu(token, chatId, mid) { await sendOrEdit(token, chatId, mid, '🎯 <b>Everest AI Terminal</b>\n\nاز منو انتخاب کنید:', mainMenu()); }
-async function showSymbolMenu(token, chatId, mid) { await sendOrEdit(token, chatId, mid, '🎯 <b>نماد:</b>', symbolMenu()); }
-async function showTimeframeMenu(token, chatId, mid, sr) { await sendOrEdit(token, chatId, mid, '⏰ <b>روش تحلیل ' + esc(normalizeSymbol(sr)) + '</b>', timeframeMenu(sr)); }
+async function showMainMenu(token, chatId, mid) { await sendOrEdit(token, chatId, mid, '🎯 <b>Everest AI Terminal</b>\n\n🌐 ۲۴/۷ · 🪙 کریپتو · ⚙️ KZ Selector\n\nاز منو انتخاب کنید:', mainMenu()); }
+async function showSymbolMenu(token, chatId, mid) { await sendOrEdit(token, chatId, mid, '🎯 <b>نماد:</b>\n\n💱 فارکس · 🪙 کریپتو', symbolMenu()); }
+async function showTimeframeMenu(token, chatId, mid, sr) {
+  var sym = normalizeSymbol(sr);
+  var isCrypto = isCryptoSymbol(sym);
+  var header = (isCrypto ? '🪙 ' : '💱 ') + esc(sym);
+  await sendOrEdit(token, chatId, mid, '⏰ <b>روش تحلیل ' + header + '</b>', timeframeMenu(sr));
+}
 
 async function showProviderMenu(token, chatId, mid, symbolRaw, timeframe, isMTF, env) {
   var available = getAvailableProviders(env);
-  if (!available.length) {
-    await sendOrEdit(token, chatId, mid, '❌ هیچ سرویس AI فعالی نیست', { inline_keyboard: [[{ text: '🏠 منو', callback_data: 'menu_main' }]] });
-    return;
-  }
+  if (!available.length) { await sendOrEdit(token, chatId, mid, '❌ هیچ سرویس AI فعالی نیست', { inline_keyboard: [[{ text: '🏠 منو', callback_data: 'menu_main' }]] }); return; }
   var symbolDisplay = normalizeSymbol(symbolRaw);
+  var isCrypto = isCryptoSymbol(symbolDisplay);
   var tfDisplay = isMTF ? 'تحلیل MTF (4H+1H+15M+1M)' : timeframeLabel(timeframe);
   var confMode = await getConfluenceMode(env, chatId);
-  var confLabel = confMode === 'force' ? '🔴 اجبار AI' : confMode === 'auto' ? '🟢 خودکار' : '🔵 عادی';
+  var confLabel = confMode === 'force' ? '🔴 اجبار' : confMode === 'auto' ? '🟢 خودکار' : '🔵 عادی';
   var userModeKey = await getUserMode(env, chatId);
   var userModeCfg = MODE_CONFIG[userModeKey];
   var strict = await getStrictness(env, chatId);
   var strictCfg = STRICTNESS_MODES[strict];
+  var kzMode = await getKzMode(env, chatId);
+  var kzCfg = KZ_MODES[kzMode];
+  var symIcon = isCrypto ? '🪙' : '💱';
   var text = '<b>🎯 انتخاب سرویس AI</b>\n\n' +
-    '<b>نماد:</b> ' + esc(symbolDisplay) + '\n' +
+    '<b>نماد:</b> ' + symIcon + ' ' + esc(symbolDisplay) + '\n' +
     '<b>روش:</b> ' + tfDisplay + '\n' +
     '<b>حالت معاملاتی:</b> ' + userModeCfg.icon + ' ' + userModeCfg.label + '\n' +
     '<b>نوع تحلیل:</b> ' + strictCfg.icon + ' ' + strictCfg.label + '\n' +
+    '<b>KZ Mode:</b> ' + kzCfg.icon + ' ' + kzCfg.label + '\n' +
     '<b>حالت هم‌گرایی:</b> ' + confLabel + '\n\n' +
     '<i>کدوم سرویس تحلیل رو انجام بده؟</i>';
   await sendOrEdit(token, chatId, mid, text, providerMenu(available, symbolRaw, timeframe, isMTF));
@@ -1128,29 +1085,31 @@ async function showWatchMenu(token, chatId, mid, env) {
   await sendOrEdit(token, chatId, mid, t, watchMenu());
 }
 
-// ⭐ settings menu — با دکمه strictness
+// ⭐ Settings با KZ Mode
 async function showSettingsMenu(token, chatId, mid, env) {
   var confMode = await getConfluenceMode(env, chatId);
-  var confLabel = confMode === 'force' ? '🔴 اجبار AI' : confMode === 'auto' ? '🟢 خودکار' : '🔵 عادی';
+  var confLabel = confMode === 'force' ? '🔴 اجبار' : confMode === 'auto' ? '🟢 خودکار' : '🔵 عادی';
   var userModeKey = await getUserMode(env, chatId);
   var userModeCfg = MODE_CONFIG[userModeKey];
   var strict = await getStrictness(env, chatId);
   var strictCfg = STRICTNESS_MODES[strict];
+  var kzMode = await getKzMode(env, chatId);
+  var kzCfg = KZ_MODES[kzMode];
   var apTier = await getUserModelTier(env, chatId, 'aiprime');
   var ggTier = await getUserModelTier(env, chatId, 'gapgpt');
   var apLabel = apTier === 'premium' ? '💎 قوی' : apTier === 'deepseek' ? '🧠 DeepSeek' : '🚀 سریع';
   var ggLabel = ggTier === 'premium' ? '💎 قوی' : ggTier === 'deepseek' ? '🧠 DeepSeek' : '🚀 سریع';
 
   var text = '⚙️ <b>تنظیمات</b>\n\n' +
-    '<b>🎯 حالت معاملاتی فعلی:</b> ' + userModeCfg.icon + ' ' + userModeCfg.label + '\n' +
+    '<b>🎯 حالت معاملاتی:</b> ' + userModeCfg.icon + ' ' + userModeCfg.label + '\n' +
     '<i>' + userModeCfg.note + '</i>\n' +
-    '• حداقل اطمینان: ' + userModeCfg.minConfidence + '%\n' +
-    '• حداقل R/R: ' + userModeCfg.minRR + '\n' +
-    '• حداقل هم‌گرایی: ' + userModeCfg.minConfluence + '/10\n\n' +
-    '<b>🎚️ نوع تحلیل فعلی:</b> ' + strictCfg.icon + ' ' + strictCfg.label + '\n' +
+    '• اطمینان: ≥' + userModeCfg.minConfidence + '% · R/R: ≥' + userModeCfg.minRR + ' · هم‌گرایی: ≥' + userModeCfg.minConfluence + '\n\n' +
+    '<b>🎚️ نوع تحلیل:</b> ' + strictCfg.icon + ' ' + strictCfg.label + '\n' +
     '<i>' + strictCfg.desc + '</i>\n\n' +
-    '<b>🧠 حالت هم‌گرایی فعلی:</b> ' + confLabel + '\n\n' +
-    '<b>🎚️ سطح مدل‌ها:</b>\n' +
+    '<b>⚙️ KZ Mode:</b> ' + kzCfg.icon + ' ' + kzCfg.label + '\n' +
+    '<i>' + kzCfg.desc + '</i>\n\n' +
+    '<b>🧠 هم‌گرایی:</b> ' + confLabel + '\n\n' +
+    '<b>💎 سطح مدل:</b>\n' +
     '• 🅰️ AIPrime: ' + apLabel + '\n' +
     '• 💎 GapGPT: ' + ggLabel + '\n';
 
@@ -1158,6 +1117,7 @@ async function showSettingsMenu(token, chatId, mid, env) {
     inline_keyboard: [
       [{ text: '🎯 حالت معاملاتی', callback_data: 'settings_mode' }],
       [{ text: '🎚️ نوع تحلیل (سخت/آسان)', callback_data: 'settings_strictness' }],
+      [{ text: '⚙️ KZ Mode (۲۴/۷/اولویت/فقط)', callback_data: 'settings_kz' }],
       [{ text: '🧠 حالت هم‌گرایی', callback_data: 'settings_confluence' }],
       [{ text: '💎 سطح مدل', callback_data: 'settings_tier' }],
       [{ text: '🏠 منو', callback_data: 'menu_main' }]
@@ -1170,8 +1130,7 @@ async function showStatus(token, chatId, mid, env) {
   var text = '📈 <b>وضعیت سرویس‌ها</b>\n\n';
   var active = 0;
   for (var i = 0; i < all.length; i++) {
-    var p = all[i];
-    var hasKey;
+    var p = all[i]; var hasKey;
     if (p === 'gemini') hasKey = getGeminiKeys(env).length > 0;
     else if (p === 'llm7') hasKey = true;
     else hasKey = !!getKey(env, p);
@@ -1181,25 +1140,28 @@ async function showStatus(token, chatId, mid, env) {
   text += '\n🎯 فعال: <b>' + active + '/' + all.length + '</b>\n';
   text += '🔑 Gemini: <b>' + getGeminiKeys(env).length + '</b> کلید\n';
   text += '📊 TwelveData: ' + (env.TWELVE_KEY ? '✅' : '❌') + '\n';
+  text += '🪙 Binance: ✅ (رایگان)\n';
   text += '📸 Chart-Img: ' + (env.CHART_IMG_KEY ? '✅' : '❌') + '\n';
   text += '💾 KV: ' + (env.KV ? '✅' : '❌') + '\n';
   text += '🔒 قفل: ' + (env.ADMIN_CHAT_ID ? '✅ فعال' : '❌ غیرفعال');
   await sendOrEdit(token, chatId, mid, text, { inline_keyboard: [[{ text: '🏠 منو', callback_data: 'menu_main' }]] });
 }
 
-// ⭐ help — با توضیح strictness
 async function showHelp(token, chatId, mid) {
-  var t = '📖 <b>راهنما</b>\n\n📊 تحلیل:\n• تک تایم‌فریم\n• MTF (۴ تایم‌فریم)\n• تصویر 📸\n\n📓 ژورنال\n🔔 هشدار\n\n' +
-    '🎯 <b>حالت معاملاتی:</b>\n⚡ اسکلپی: 1m-15m، اطمینان≥۷۰\n⚖️ متوسط: 5m-4h، اطمینان≥۶۵\n🛡️ مطمئن: 15m-4h، اطمینان≥۷۵\n\n' +
-    '🎚️ <b>نوع تحلیل (سخت/آسان):</b>\n🔴 سختگیر: همه فیلترها فعال + TP1 الزامی + R/R سخت\n🟢 آسان: آستانه‌های نرم‌تر + TP1 اختیاری + سیگنال بیشتر\n\n' +
-    '🧠 <b>حالت هم‌گرایی:</b>\n🔵 عادی / 🟢 خودکار / 🔴 اجبار\n\n' +
-    '🎚️ <b>سطح مدل (AIPrime/GapGPT):</b>\n🚀 سریع: GPT-4o-mini (~$0.001)\n🧠 DeepSeek: V4.1 Flash (~$0.003)\n💎 قوی: Claude Sonnet 5 (~$0.045)\n\n' +
+  var t = '📖 <b>راهنما</b>\n\n' +
+    '📊 تحلیل:\n• تک تایم‌فریم\n• MTF\n• تصویر 📸\n\n' +
+    '📓 ژورنال · 🔔 هشدار\n\n' +
+    '🎯 <b>حالت معاملاتی:</b>\n⚡ اسکلپی: 1m-15m، ≥۷۰\n⚖️ متوسط: 5m-4h، ≥۶۵\n🛡️ مطمئن: 15m-4h، ≥۷۵\n\n' +
+    '🎚️ <b>نوع تحلیل:</b>\n🔴 سختگیر: فیلتر کامل + TP1 الزامی\n🟢 آسان: آستانه نرم‌تر + سیگنال بیشتر\n\n' +
+    '⚙️ <b>KZ Mode:</b>\n🌐 ۲۴/۷: همیشه بررسی\n⭐ اولویت: همیشه + بج اولویت\n🔒 فقط KZ: خارج از KZ skip (صرفه‌جویی API)\n\n' +
+    '🪙 <b>کریپتو:</b>\nنمادهایی مثل BTC/USD، ETH/USD، SOL/USD خودکار شناسایی می‌شن و از <b>Binance</b> (رایگان) داده می‌گیرن. به جای سشن فارکس، <b>لیکوییدیتی US</b> معیار قرار می‌گیره.\n\n' +
+    '🧠 <b>هم‌گرایی:</b> 🔵 عادی · 🟢 خودکار · 🔴 اجبار\n\n' +
     '<b>دستورات:</b>\n/menu /help /analyze /journal /watch /myid';
   await sendOrEdit(token, chatId, mid, t, { inline_keyboard: [[{ text: '🏠 منو', callback_data: 'menu_main' }]] });
 }
 
 async function showImageGuide(token, chatId, mid) {
-  var t = '📸 <b>تحلیل تصویر</b>\n\nفقط عکس چارت را بفرستید!\n\n💡 محور Y واضح باشد\n\n🤖 سرویس: Gemini اول (خودکار)';
+  var t = '📸 <b>تحلیل تصویر</b>\n\nعکس چارت را بفرستید!\n\n💡 محور Y واضح باشد\n\n🤖 Gemini اول (خودکار)';
   await sendOrEdit(token, chatId, mid, t, { inline_keyboard: [[{ text: '🏠 منو', callback_data: 'menu_main' }]] });
 }
 
@@ -1263,6 +1225,25 @@ async function downloadTelegramPhoto(token, fileId) {
 // EXTERNAL APIs
 // ============================================
 
+// ⭐ Binance
+async function fetchBinanceData(symbol, tf) {
+  var sym = String(symbol).toUpperCase().replace(/[\/\-_]/g, '');
+  var binSym = sym;
+  if (binSym.endsWith('USDT')) { /* ok */ }
+  else if (binSym.endsWith('USD')) binSym = binSym.replace(/USD$/, 'USDT');
+  else if (binSym.endsWith('USDC')) { /* ok */ }
+  else if (/^[A-Z]+$/.test(binSym)) binSym = binSym + 'USDT';
+  var interval = BINANCE_INTERVALS[tf] || '1h';
+  var url = 'https://api.binance.com/api/v3/klines?symbol=' + binSym + '&interval=' + interval + '&limit=200';
+  var res = await fetch(url);
+  if (!res.ok) { var e = await res.text(); throw new Error('Binance ' + res.status + ': ' + e.slice(0, 120)); }
+  var data = await res.json();
+  if (!Array.isArray(data) || !data.length) throw new Error('Binance: empty for ' + binSym);
+  return data.map(function(k) {
+    return { datetime: new Date(k[0]).toISOString(), open: +k[1], high: +k[2], low: +k[3], close: +k[4], volume: +k[5] };
+  });
+}
+
 async function fetchTwelveData(symbol, interval, apiKey, size) {
   var url = new URL('https://api.twelvedata.com/time_series');
   url.searchParams.set('symbol', symbol);
@@ -1282,8 +1263,16 @@ async function fetchTwelveData(symbol, interval, apiKey, size) {
 }
 
 async function getCurrentPrice(symbol, apiKey) {
-  var res = await fetch('https://api.twelvedata.com/price?symbol=' + encodeURIComponent(symbol) + '&apikey=' + apiKey);
-  var data = await res.json();
+  if (isCryptoSymbol(symbol)) {
+    var s = String(symbol).toUpperCase().replace(/[\/\-_]/g, '');
+    if (s.endsWith('USD')) s = s.replace(/USD$/, 'USDT');
+    var res = await fetch('https://api.binance.com/api/v3/ticker/price?symbol=' + s);
+    var d = await res.json();
+    if (d.price) return parseFloat(d.price);
+    throw new Error('Binance price error');
+  }
+  var res2 = await fetch('https://api.twelvedata.com/price?symbol=' + encodeURIComponent(symbol) + '&apikey=' + apiKey);
+  var data = await res2.json();
   if (data.status === 'error' || data.code) throw new Error(data.message || 'خطا');
   return parseFloat(data.price);
 }
@@ -1292,7 +1281,7 @@ async function buildChartImage(symbol, timeframe, levels, env) {
   if (!env.CHART_IMG_KEY) throw new Error('no chart-img key');
   var symUpper = symbol.toUpperCase().replace('/', '');
   var exchange = 'OANDA';
-  if (symUpper === 'BTCUSD' || symUpper === 'ETHUSD' || symUpper.indexOf('USDT') !== -1) exchange = 'BINANCE';
+  if (isCryptoSymbol(symbol)) exchange = 'BINANCE';
   else if (['AAPL', 'MSFT', 'TSLA', 'GOOGL'].indexOf(symUpper) !== -1) exchange = 'NASDAQ';
   var im = { '1min': '1m', '3min': '3m', '5min': '5m', '15min': '15m', '1h': '1h', '4h': '4h' };
   var ci = im[timeframe] || '1h';
@@ -1314,16 +1303,20 @@ async function buildChartImage(symbol, timeframe, levels, env) {
 }
 
 // ============================================
-// FORMATTING
+// FORMATTING — با KZ badge
 // ============================================
 
 function buildCaption(levels, symbol, timeframe, provider, confluence, strict) {
-  var c = '<b>📊 تحلیل چارت</b>\n\n<b>نماد:</b> ' + esc(symbol) + '\n<b>تایم‌فریم:</b> ' + timeframeLabel(timeframe) + '\n';
+  var isCrypto = isCryptoSymbol(symbol);
+  var symIcon = isCrypto ? '🪙' : '💱';
+  var c = '<b>📊 تحلیل چارت</b>\n\n<b>نماد:</b> ' + symIcon + ' ' + esc(symbol) + '\n<b>تایم‌فریم:</b> ' + timeframeLabel(timeframe) + '\n';
   if (provider) c += '<b>سرویس:</b> ' + esc(provider) + '\n';
   if (strict) {
     var sc = STRICTNESS_MODES[strict];
     if (sc) c += '<b>نوع:</b> ' + sc.icon + ' ' + sc.label + '\n';
   }
+  // ⭐ KZ badge
+  c += '<b>وضعیت:</b> ' + getKZBadge(symbol) + '\n';
   c += '\n';
   var d = levels.direction || 'WAIT';
   c += '<b>جهت:</b> ' + (d === 'BUY' ? '🟢 خرید' : d === 'SELL' ? '🔴 فروش' : '⏸️ انتظار') + '\n';
@@ -1344,12 +1337,15 @@ function buildCaption(levels, symbol, timeframe, provider, confluence, strict) {
 }
 
 function buildMultiTFCaption(levels, symbol, provider, confluence, strict) {
-  var c = '<b>🎯 تحلیل MTF</b>\n\n<b>نماد:</b> ' + esc(symbol) + '\n';
+  var isCrypto = isCryptoSymbol(symbol);
+  var symIcon = isCrypto ? '🪙' : '💱';
+  var c = '<b>🎯 تحلیل MTF</b>\n\n<b>نماد:</b> ' + symIcon + ' ' + esc(symbol) + '\n';
   if (provider) c += '<b>سرویس:</b> ' + esc(provider) + '\n';
   if (strict) {
     var sc = STRICTNESS_MODES[strict];
     if (sc) c += '<b>نوع:</b> ' + sc.icon + ' ' + sc.label + '\n';
   }
+  c += '<b>وضعیت:</b> ' + getKZBadge(symbol) + '\n';
   c += '\n';
   if (levels.htf || levels.mtf || levels.ltf || levels.entryTf) {
     c += '<b>📊 تایم‌فریم‌ها:</b>\n';
@@ -1440,7 +1436,7 @@ async function resolveConfluence(env, chatId, levels, rawText) {
     result.scores = auto.scores;
     result.confluence = auto.confluence;
     result.auto = true;
-    if (mode === 'force') result.warning = '\n⚠️ <b>AI از دستور اجباری پیروی نکرد</b> — از محاسبه خودکار استفاده شد.';
+    if (mode === 'force') result.warning = '\n⚠️ AI از دستور اجباری پیروی نکرد';
     return result;
   }
   result.warning = buildConfluenceWarning(levels, mode);
@@ -1448,10 +1444,41 @@ async function resolveConfluence(env, chatId, levels, rawText) {
 }
 
 // ============================================
+// FETCH MARKET DATA — هوشمند
+// ============================================
+
+async function fetchMarketData(symbol, tf, env, provider) {
+  provider = provider || 'auto';
+  var tk = env.TWELVE_KEY;
+  var isCrypto = isCryptoSymbol(symbol);
+  var tdInterval = { '1min': '1min', '3min': '5min', '5min': '5min', '15min': '15min', '1h': '1h', '4h': '4h' }[tf] || '1h';
+  var binInterval = BINANCE_INTERVALS[tf] || '1h';
+
+  if (provider === 'binance') {
+    if (!isCrypto) throw new Error('Binance فقط برای کریپتو');
+    return await withTimeout(fetchBinanceData(symbol, tf), 12000, 'Binance');
+  }
+  if (provider === 'twelve') {
+    if (!tk) throw new Error('Twelve Key خالی');
+    return await withTimeout(fetchTwelveData(symbol, tdInterval, tk, 200), 15000, 'Twelve');
+  }
+  // auto
+  if (isCrypto) {
+    try { return await withTimeout(fetchBinanceData(symbol, tf), 12000, 'Binance'); }
+    catch (e) {
+      if (tk) return await withTimeout(fetchTwelveData(symbol, tdInterval, tk, 200), 15000, 'Twelve');
+      throw e;
+    }
+  }
+  if (tk) return await withTimeout(fetchTwelveData(symbol, tdInterval, tk, 200), 15000, 'Twelve');
+  throw new Error('Twelve Key لازم است (فارکس) یا از کریپتو استفاده کن');
+}
+
+// ============================================
 // ANALYSIS
 // ============================================
 
-async function runAnalysis(token, chatId, symbol, twelveKey, env, timeframe, forcedProvider) {
+async function runAnalysis(token, chatId, symbol, env, timeframe, forcedProvider) {
   try {
     var providerLabel = forcedProvider ? (PROVIDER_NAMES[forcedProvider] || forcedProvider) : 'خودکار';
     var mode = await getConfluenceMode(env, chatId);
@@ -1460,28 +1487,32 @@ async function runAnalysis(token, chatId, symbol, twelveKey, env, timeframe, for
     var userModeCfg = MODE_CONFIG[userModeKey];
     var strict = await getStrictness(env, chatId);
     var strictCfg = STRICTNESS_MODES[strict];
+    var kzMode = await getKzMode(env, chatId);
+    var kzCfg = KZ_MODES[kzMode];
+    var isCrypto = isCryptoSymbol(symbol);
+    var symIcon = isCrypto ? '🪙' : '💱';
 
     if (userModeCfg.allowedTFs.indexOf(timeframe) === -1) {
       await sendMessage(token, chatId,
         '⚠️ <b>تایم‌فریم ' + timeframeLabel(timeframe) + ' برای حالت ' + userModeCfg.icon + ' ' + userModeCfg.label + ' مجاز نیست</b>\n\n' +
-        'تایم‌فریم‌های مجاز: ' + userModeCfg.allowedTFs.map(timeframeLabel).join(', ') + '\n\n' +
-        '💡 از تنظیمات → 🎯 حالت معاملاتی می‌تونی حالت رو عوض کنی.',
+        'مجاز: ' + userModeCfg.allowedTFs.map(timeframeLabel).join(', '),
         { inline_keyboard: [[{ text: '⚙️ تنظیمات', callback_data: 'menu_settings' }]] });
       return;
     }
 
     await sendMessage(token, chatId,
-      '⏳ تحلیل <b>' + esc(symbol) + '</b>\n' +
+      '⏳ تحلیل ' + symIcon + ' <b>' + esc(symbol) + '</b>\n' +
       '🤖 سرویس: <b>' + esc(providerLabel) + '</b>\n' +
       '🎯 حالت: ' + userModeCfg.icon + ' ' + userModeCfg.label + '\n' +
       '🎚️ نوع: ' + strictCfg.icon + ' ' + strictCfg.label + '\n' +
+      '⚙️ KZ: ' + kzCfg.icon + ' ' + kzCfg.label + '\n' +
       '🧠 هم‌گرایی: ' + modeLabel);
 
-    var im = { '1min': '1min', '3min': '5min', '5min': '5min', '15min': '15min', '1h': '1h', '4h': '4h' };
-    var interval = im[timeframe] || '1h';
-    var klines = await withTimeout(fetchTwelveData(symbol, interval, twelveKey, 200), 15000, 'Twelve');
+    var klines = await fetchMarketData(symbol, timeframe, env);
     var promptBody = 'نماد: ' + symbol + '\nتایم‌فریم: ' + timeframeLabel(timeframe) + '\n\n' + klinesToText(klines, symbol, timeframeLabel(timeframe));
-    var fullPrompt = buildPromptForMode(SYSTEM_PROMPT, mode) + '\n\n' + promptBody;
+    var fullPrompt = buildPromptForMode(SYSTEM_PROMPT, mode);
+    if (isCrypto) fullPrompt += CRYPTO_NOTE;
+    fullPrompt += '\n\n' + promptBody;
 
     var result;
     if (forcedProvider && PROVIDER_FUNCS[forcedProvider]) {
@@ -1490,27 +1521,22 @@ async function runAnalysis(token, chatId, symbol, twelveKey, env, timeframe, for
         if (text && text.length > 10) result = { text: text, provider: PROVIDER_NAMES[forcedProvider] };
         else throw new Error('پاسخ کوتاه');
       } catch (e) {
-        await sendMessage(token, chatId, '❌ <b>' + (PROVIDER_NAMES[forcedProvider] || forcedProvider) + '</b> خطا داد:\n<code>' + esc(e.message) + '</code>\n\n🔄 تلاش با بقیه سرویس‌ها...');
+        await sendMessage(token, chatId, '❌ <b>' + (PROVIDER_NAMES[forcedProvider] || forcedProvider) + '</b> خطا:\n<code>' + esc(e.message) + '</code>\n\n🔄 تلاش با بقیه...');
         result = await callWithFallback(env, fullPrompt, null, null, chatId);
       }
     } else {
       result = await callWithFallback(env, fullPrompt, null, null, chatId);
     }
 
-    // ⭐ validateSignal با strictness
     var levels = validateSignal(extractLevels(result.text), {
-      strict: strict,
-      minRR: userModeCfg.minRR,
-      minConfidence: userModeCfg.minConfidence
+      strict: strict, minRR: userModeCfg.minRR, minConfidence: userModeCfg.minConfidence
     });
 
-    // ATR filter
     var atr = calcATR(klines, 14);
     if (levels.direction !== 'WAIT' && atr && levels.entry) {
       var currentPrice = klines[klines.length - 1].close;
       var dist = Math.abs(levels.entry - currentPrice);
-      var maxDist = atr * 3;
-      if (dist > maxDist) {
+      if (dist > atr * 3) {
         levels.validationIssues.push('❌ Entry دور از قیمت (ATR filter)');
         levels.direction = 'WAIT';
       }
@@ -1534,7 +1560,7 @@ async function runAnalysis(token, chatId, symbol, twelveKey, env, timeframe, for
   }
 }
 
-async function runMultiTFAnalysis(token, chatId, symbol, twelveKey, env, forcedProvider) {
+async function runMultiTFAnalysis(token, chatId, symbol, env, forcedProvider) {
   try {
     var providerLabel = forcedProvider ? (PROVIDER_NAMES[forcedProvider] || forcedProvider) : 'خودکار';
     var mode = await getConfluenceMode(env, chatId);
@@ -1543,24 +1569,28 @@ async function runMultiTFAnalysis(token, chatId, symbol, twelveKey, env, forcedP
     var userModeCfg = MODE_CONFIG[userModeKey];
     var strict = await getStrictness(env, chatId);
     var strictCfg = STRICTNESS_MODES[strict];
+    var kzMode = await getKzMode(env, chatId);
+    var kzCfg = KZ_MODES[kzMode];
+    var isCrypto = isCryptoSymbol(symbol);
+    var symIcon = isCrypto ? '🪙' : '💱';
 
     await sendMessage(token, chatId,
-      '🎯 MTF <b>' + esc(symbol) + '</b>\n' +
+      '🎯 MTF ' + symIcon + ' <b>' + esc(symbol) + '</b>\n' +
       '🤖 سرویس: <b>' + esc(providerLabel) + '</b>\n' +
       '🎯 حالت: ' + userModeCfg.icon + ' ' + userModeCfg.label + '\n' +
       '🎚️ نوع: ' + strictCfg.icon + ' ' + strictCfg.label + '\n' +
+      '⚙️ KZ: ' + kzCfg.icon + ' ' + kzCfg.label + '\n' +
       '🧠 هم‌گرایی: ' + modeLabel);
 
-    var fetched = await withTimeout(Promise.all([
-      fetchTwelveData(symbol, '4h', twelveKey, 150),
-      fetchTwelveData(symbol, '1h', twelveKey, 150),
-      fetchTwelveData(symbol, '15min', twelveKey, 150),
-      fetchTwelveData(symbol, '1min', twelveKey, 150)
-    ]), 25000, 'MTF Fetch');
+    var k4H = await fetchMarketData(symbol, '4h', env);
+    var k1H = await fetchMarketData(symbol, '1h', env);
+    var k15M = await fetchMarketData(symbol, '15min', env);
+    var k1M = await fetchMarketData(symbol, '1min', env);
 
-    var k4H = fetched[0], k1H = fetched[1], k15M = fetched[2], k1M = fetched[3];
     var p = 'نماد: ' + symbol + '\n\n🔹 HTF (4H):\n' + klinesToText(k4H, symbol, '4H') + '\n\n🔹 MTF (1H):\n' + klinesToText(k1H, symbol, '1H') + '\n\n🔹 LTF (15M):\n' + klinesToText(k15M, symbol, '15M') + '\n\n🔹 EntryTF (1M):\n' + klinesToText(k1M, symbol, '1M');
-    var fullPrompt = buildPromptForMode(MULTI_TF_PROMPT, mode) + '\n\n' + p;
+    var fullPrompt = buildPromptForMode(MULTI_TF_PROMPT, mode);
+    if (isCrypto) fullPrompt += CRYPTO_NOTE;
+    fullPrompt += '\n\n' + p;
 
     var result;
     if (forcedProvider && PROVIDER_FUNCS[forcedProvider]) {
@@ -1569,7 +1599,7 @@ async function runMultiTFAnalysis(token, chatId, symbol, twelveKey, env, forcedP
         if (text && text.length > 10) result = { text: text, provider: PROVIDER_NAMES[forcedProvider] };
         else throw new Error('پاسخ کوتاه');
       } catch (e) {
-        await sendMessage(token, chatId, '❌ <b>' + (PROVIDER_NAMES[forcedProvider] || forcedProvider) + '</b> خطا داد:\n<code>' + esc(e.message) + '</code>\n\n🔄 تلاش با بقیه سرویس‌ها...');
+        await sendMessage(token, chatId, '❌ <b>' + (PROVIDER_NAMES[forcedProvider] || forcedProvider) + '</b> خطا:\n<code>' + esc(e.message) + '</code>');
         result = await callWithFallback(env, fullPrompt, null, null, chatId);
       }
     } else {
@@ -1577,21 +1607,16 @@ async function runMultiTFAnalysis(token, chatId, symbol, twelveKey, env, forcedP
     }
 
     var levels = validateSignal(extractLevels(result.text), {
-      strict: strict,
-      minRR: userModeCfg.minRR,
-      minConfidence: userModeCfg.minConfidence
+      strict: strict, minRR: userModeCfg.minRR, minConfidence: userModeCfg.minConfidence
     });
-
     var atr = calcATR(k15M, 14);
     if (levels.direction !== 'WAIT' && atr && levels.entry) {
       var currentPrice = k15M[k15M.length - 1].close;
-      var dist = Math.abs(levels.entry - currentPrice);
-      if (dist > atr * 3) {
+      if (Math.abs(levels.entry - currentPrice) > atr * 3) {
         levels.validationIssues.push('❌ Entry دور از قیمت (ATR filter)');
         levels.direction = 'WAIT';
       }
     }
-
     var confluence = await resolveConfluence(env, chatId, levels, result.text);
 
     try {
@@ -1625,38 +1650,21 @@ async function runImageAnalysis(token, chatId, photoFileId, env) {
 
     var fullPrompt = buildPromptForMode(IMAGE_PROMPT, mode);
     var result = await callWithFallback(env, fullPrompt, pd.base64, 'image/jpeg', chatId);
-
     var levels = validateSignal(extractLevels(result.text), {
-      strict: strict,
-      minRR: cfg.minRR,
-      minConfidence: cfg.minConfidence
+      strict: strict, minRR: cfg.minRR, minConfidence: cfg.minConfidence
     });
-    levels.appliedMode = userModeKey;
-    levels.appliedModeCfg = cfg;
-
+    levels.appliedMode = userModeKey; levels.appliedModeCfg = cfg;
     var confluence = await resolveConfluence(env, chatId, levels, result.text);
     await sendMessage(token, chatId, buildImageCaption(levels, result.provider, confluence, strict));
 
-    var fullText = result.text;
-    fullText = fullText.replace(/```json[\s\S]*?```/gi, '');
-    fullText = fullText.replace(/```[\s\S]*?```/g, '');
+    var fullText = result.text.replace(/```json[\s\S]*?```/gi, '').replace(/```[\s\S]*?```/g, '');
     var ft = tgFormat(fullText);
-
     if (ft.length > 20) {
-      for (var i = 0; i < ft.length; i += 3800) {
-        await sendMessage(token, chatId, ft.slice(i, i + 3800));
-        await sleep(400);
-      }
+      for (var i = 0; i < ft.length; i += 3800) { await sendMessage(token, chatId, ft.slice(i, i + 3800)); await sleep(400); }
     } else {
       var raw = fullText.trim();
-      if (raw.length > 20) {
-        for (var j = 0; j < raw.length; j += 3800) {
-          await sendMessage(token, chatId, raw.slice(j, j + 3800));
-          await sleep(400);
-        }
-      } else {
-        await sendMessage(token, chatId, '⚠️ پاسخ AI فقط JSON بود. لطفاً دوباره تلاش کن.');
-      }
+      if (raw.length > 20) { for (var j = 0; j < raw.length; j += 3800) { await sendMessage(token, chatId, raw.slice(j, j + 3800)); await sleep(400); } }
+      else await sendMessage(token, chatId, '⚠️ پاسخ فقط JSON بود.');
     }
     await sendMessage(token, chatId, '🏠 بازگشت:', { inline_keyboard: [[{ text: '🏠 منو', callback_data: 'menu_main' }]] });
   } catch (e) {
@@ -1777,7 +1785,7 @@ async function handleWatchWizard(token, chatId, text, env, state) {
 
 async function checkWatchlist(env) {
   try {
-    var token = env.TG_TOKEN, tk = env.TWELVE_KEY;
+    var token = env.TG_TOKEN;
     var list = await env.KV.list({ prefix: 'watch:' });
     for (var i = 0; i < list.keys.length; i++) {
       var k = list.keys[i].name;
@@ -1788,7 +1796,7 @@ async function checkWatchlist(env) {
       for (var j = 0; j < wl.length; j++) {
         var w = wl[j];
         try {
-          var price = await withTimeout(getCurrentPrice(w.symbol, tk), 10000, 'Price');
+          var price = await withTimeout(getCurrentPrice(w.symbol, env.TWELVE_KEY), 10000, 'Price');
           var tg = (w.condition === 'above' && price >= w.price) || (w.condition === 'below' && price <= w.price);
           if (tg) {
             await sendMessage(token, cid, '🔔 <b>هشدار!</b>\n\n📌 ' + esc(w.symbol) + '\n💰 ' + esc(price), { inline_keyboard: [[{ text: '📊 تحلیل', callback_data: 'sym_' + w.symbol.replace('/', '') }]] });
@@ -1805,7 +1813,6 @@ async function checkWatchlist(env) {
 // ============================================
 
 async function handleCallback(token, chatId, mid, data, env) {
-  var tk = env.TWELVE_KEY;
   if (data === 'menu_main') { await showMainMenu(token, chatId, mid); return; }
   if (data === 'menu_analyze') { await showSymbolMenu(token, chatId, mid); return; }
   if (data === 'menu_mtf') { await showSymbolMenu(token, chatId, mid); return; }
@@ -1816,7 +1823,7 @@ async function handleCallback(token, chatId, mid, data, env) {
   if (data === 'menu_status') { await showStatus(token, chatId, mid, env); return; }
   if (data === 'menu_help') { await showHelp(token, chatId, mid); return; }
   if (data === 'wizard_cancel') { await clearUserState(env, chatId); await sendOrEdit(token, chatId, mid, '❌ لغو', { inline_keyboard: [[{ text: '🏠 منو', callback_data: 'menu_main' }]] }); return; }
-  if (data === 'sym_custom') { await setUserState(env, chatId, { action: 'custom_symbol', step: 'input', data: {} }); await sendOrEdit(token, chatId, mid, '✏️ نماد:', { inline_keyboard: [[{ text: '❌ لغو', callback_data: 'wizard_cancel' }]] }); return; }
+  if (data === 'sym_custom') { await setUserState(env, chatId, { action: 'custom_symbol', step: 'input', data: {} }); await sendOrEdit(token, chatId, mid, '✏️ نماد:\n\nمثال: XAU/USD · BTC/USD · SOL/USD', { inline_keyboard: [[{ text: '❌ لغو', callback_data: 'wizard_cancel' }]] }); return; }
   if (data.indexOf('sym_') === 0) { await showTimeframeMenu(token, chatId, mid, data.replace('sym_', '')); return; }
 
   if (data.indexOf('mtf_') === 0) {
@@ -1851,8 +1858,8 @@ async function handleCallback(token, chatId, mid, data, env) {
       });
     } catch (e) {}
 
-    if (timeframe === 'MTF') await runMultiTFAnalysis(token, chatId, symbol, tk, env, provider);
-    else await runAnalysis(token, chatId, symbol, tk, env, timeframe, provider);
+    if (timeframe === 'MTF') await runMultiTFAnalysis(token, chatId, symbol, env, provider);
+    else await runAnalysis(token, chatId, symbol, env, timeframe, provider);
     return;
   }
 
@@ -1880,10 +1887,10 @@ async function handleCallback(token, chatId, mid, data, env) {
     return;
   }
 
-  // ⭐ settings menu
+  // settings mode
   if (data === 'settings_mode') {
     var curMode = await getUserMode(env, chatId);
-    await sendOrEdit(token, chatId, mid, '🎯 <b>حالت معاملاتی</b>\n\nهر حالت آستانه‌های متفاوتی داره:', modeMenu(curMode));
+    await sendOrEdit(token, chatId, mid, '🎯 <b>حالت معاملاتی</b>', modeMenu(curMode));
     return;
   }
   if (data === 'mode_scalping' || data === 'mode_medium' || data === 'mode_confident') {
@@ -1891,34 +1898,24 @@ async function handleCallback(token, chatId, mid, data, env) {
     await setUserMode(env, chatId, newMode);
     var cfg = MODE_CONFIG[newMode];
     await sendOrEdit(token, chatId, mid,
-      '✅ حالت تنظیم شد: <b>' + cfg.icon + ' ' + cfg.label + '</b>\n\n' +
+      '✅ حالت: <b>' + cfg.icon + ' ' + cfg.label + '</b>\n\n' +
       '<i>' + cfg.note + '</i>\n\n' +
-      '• حداقل اطمینان: ' + cfg.minConfidence + '%\n' +
-      '• حداقل R/R: ' + cfg.minRR + '\n' +
-      '• حداقل هم‌گرایی: ' + cfg.minConfluence + '/10\n' +
-      '• تایم‌فریم‌ها: ' + cfg.allowedTFs.map(timeframeLabel).join(', '),
+      '• اطمینان: ' + cfg.minConfidence + '%\n' +
+      '• R/R: ' + cfg.minRR + '\n' +
+      '• هم‌گرایی: ' + cfg.minConfluence + '/10\n' +
+      '• TF: ' + cfg.allowedTFs.map(timeframeLabel).join(', '),
       modeMenu(newMode));
     return;
   }
 
-  // ⭐ جدید: نوع تحلیل (strictness)
+  // strictness
   if (data === 'settings_strictness') {
     var curStrict = await getStrictness(env, chatId);
     await sendOrEdit(token, chatId, mid,
       '🎚️ <b>نوع تحلیل</b>\n\n' +
-      '🔴 <b>سختگیر (Hard):</b>\n' +
-      '• همه فیلترها فعال\n' +
-      '• TP1 الزامی\n' +
-      '• R/R بر اساس حالت معاملاتی (سخت‌گیرانه)\n' +
-      '• SL وارونه → WAIT\n' +
-      '• ATR filter فعال\n\n' +
-      '🟢 <b>آسان (Easy):</b>\n' +
-      '• فیلترهای سبک‌تر\n' +
-      '• TP1 اختیاری\n' +
-      '• R/R نرم‌تر (۷۰٪ آستانه)\n' +
-      '• اطمینان پایین‌تر مجاز (۵٪ کمتر)\n' +
-      '• SL وارونه فقط هشدار (بدون WAIT)\n\n' +
-      '👉 حالت فعلی: ' + STRICTNESS_MODES[curStrict].icon + ' ' + STRICTNESS_MODES[curStrict].label,
+      '🔴 <b>سختگیر:</b> همه فیلترها + TP1 الزامی + R/R سخت\n' +
+      '🟢 <b>آسان:</b> آستانه نرم‌تر + TP1 اختیاری + سیگنال بیشتر\n\n' +
+      '👉 فعلی: ' + STRICTNESS_MODES[curStrict].icon + ' ' + STRICTNESS_MODES[curStrict].label,
       strictnessMenu(curStrict));
     return;
   }
@@ -1926,63 +1923,68 @@ async function handleCallback(token, chatId, mid, data, env) {
     var newStrict = data.replace('strict_', '');
     await setStrictness(env, chatId, newStrict);
     var sc = STRICTNESS_MODES[newStrict];
+    await sendOrEdit(token, chatId, mid, '✅ نوع تحلیل: <b>' + sc.icon + ' ' + sc.label + '</b>\n\n<i>' + sc.desc + '</i>', strictnessMenu(newStrict));
+    return;
+  }
+
+  // ⭐ KZ Mode
+  if (data === 'settings_kz') {
+    var curKz = await getKzMode(env, chatId);
     await sendOrEdit(token, chatId, mid,
-      '✅ نوع تحلیل تنظیم شد: <b>' + sc.icon + ' ' + sc.label + '</b>\n\n<i>' + sc.desc + '</i>',
-      strictnessMenu(newStrict));
+      '⚙️ <b>KZ Mode</b>\n\n' +
+      '🌐 <b>۲۴/۷:</b> همیشه بررسی — KZ نادیده\n' +
+      '⭐ <b>اولویت KZ:</b> همیشه بررسی + بج اولویت در سیگنال\n' +
+      '🔒 <b>فقط KZ:</b> خارج از KZ بررسی نمی‌شود (صرفه‌جویی API)\n\n' +
+      '👉 فعلی: ' + KZ_MODES[curKz].icon + ' ' + KZ_MODES[curKz].label,
+      kzModeMenu(curKz));
+    return;
+  }
+  if (data === 'kz_off' || data === 'kz_priority' || data === 'kz_only') {
+    var newKz = data.replace('kz_', '');
+    await setKzMode(env, chatId, newKz);
+    var kc = KZ_MODES[newKz];
+    await sendOrEdit(token, chatId, mid, '✅ KZ Mode: <b>' + kc.icon + ' ' + kc.label + '</b>\n\n<i>' + kc.desc + '</i>', kzModeMenu(newKz));
     return;
   }
 
   if (data === 'settings_confluence') {
     var cur = await getConfluenceMode(env, chatId);
-    await sendOrEdit(token, chatId, mid, '🧠 <b>حالت هم‌گرایی</b>\n\n🔵 عادی: هشدار اگر AI نداد\n🟢 خودکار: محاسبه از متن\n🔴 اجبار: پرامپت سختگیر', confluenceModeMenu(cur));
+    await sendOrEdit(token, chatId, mid, '🧠 <b>حالت هم‌گرایی</b>', confluenceModeMenu(cur));
     return;
   }
   if (data === 'conf_normal' || data === 'conf_auto' || data === 'conf_force') {
     var newConfMode = data.replace('conf_', '');
     await setConfluenceMode(env, chatId, newConfMode);
-    var lbl = newConfMode === 'force' ? '🔴 اجبار AI (سختگیر)' : newConfMode === 'auto' ? '🟢 خودکار پیشرفته' : '🔵 عادی';
-    await sendOrEdit(token, chatId, mid, '✅ حالت هم‌گرایی تنظیم شد: <b>' + lbl + '</b>', confluenceModeMenu(newConfMode));
+    var lbl = newConfMode === 'force' ? '🔴 اجبار' : newConfMode === 'auto' ? '🟢 خودکار' : '🔵 عادی';
+    await sendOrEdit(token, chatId, mid, '✅ هم‌گرایی: <b>' + lbl + '</b>', confluenceModeMenu(newConfMode));
     return;
   }
 
   if (data === 'settings_tier') {
-    await sendOrEdit(token, chatId, mid, '🎚️ <b>سطح مدل</b>\n\nکدوم سرویس رو تنظیم کنم؟', modelTierProviderMenu());
+    await sendOrEdit(token, chatId, mid, '🎚️ <b>سطح مدل</b>\n\nکدوم سرویس؟', modelTierProviderMenu());
     return;
   }
   if (data === 'tier_prov_aiprime') {
     await env.KV.put('last_tier_prov:' + chatId, 'aiprime');
     var apCur = await getUserModelTier(env, chatId, 'aiprime');
-    var apLabel = apCur === 'premium' ? '💎 قوی (Claude Sonnet 5)' : apCur === 'deepseek' ? '🧠 DeepSeek (V4.1 Flash)' : '🚀 سریع (GPT-4o-mini)';
-    await sendOrEdit(token, chatId, mid,
-      '🅰️ <b>AIPrime</b>\n\nسطح فعلی: <b>' + apLabel + '</b>\n\n' +
-      '🚀 سریع: GPT-4o-mini — ~$0.001\n' +
-      '🧠 DeepSeek: V4.1 Flash — ~$0.003\n' +
-      '💎 قوی: Claude Sonnet 5 — ~$0.045',
-      modelTierMenu(apCur));
+    var apLabel = apCur === 'premium' ? '💎 قوی' : apCur === 'deepseek' ? '🧠 DeepSeek' : '🚀 سریع';
+    await sendOrEdit(token, chatId, mid, '🅰️ <b>AIPrime</b>\n\nفعلی: <b>' + apLabel + '</b>', modelTierMenu(apCur));
     return;
   }
   if (data === 'tier_prov_gapgpt') {
     await env.KV.put('last_tier_prov:' + chatId, 'gapgpt');
     var ggCur = await getUserModelTier(env, chatId, 'gapgpt');
-    var ggLabel = ggCur === 'premium' ? '💎 قوی (Claude Sonnet 5)' : ggCur === 'deepseek' ? '🧠 DeepSeek (V4.1 Flash)' : '🚀 سریع (GPT-4o-mini)';
-    await sendOrEdit(token, chatId, mid,
-      '💎 <b>GapGPT</b>\n\nسطح فعلی: <b>' + ggLabel + '</b>\n\n' +
-      '🚀 سریع: GPT-4o-mini — ~$0.001\n' +
-      '🧠 DeepSeek: V4.1 Flash — ~$0.003\n' +
-      '💎 قوی: Claude Sonnet 5 — ~$0.045',
-      modelTierMenu(ggCur));
+    var ggLabel = ggCur === 'premium' ? '💎 قوی' : ggCur === 'deepseek' ? '🧠 DeepSeek' : '🚀 سریع';
+    await sendOrEdit(token, chatId, mid, '💎 <b>GapGPT</b>\n\nفعلی: <b>' + ggLabel + '</b>', modelTierMenu(ggCur));
     return;
   }
   if (data === 'tier_fast' || data === 'tier_premium' || data === 'tier_deepseek') {
     var newTier = data.replace('tier_', '');
     var lastTierProv = await env.KV.get('last_tier_prov:' + chatId) || 'aiprime';
     await setUserModelTier(env, chatId, lastTierProv, newTier);
-    var tierLabel = newTier === 'premium' ? '💎 قوی (Claude Sonnet 5)' : newTier === 'deepseek' ? '🧠 DeepSeek (V4.1 Flash)' : '🚀 سریع (GPT-4o-mini)';
-    var extraInfo = newTier === 'premium' ? '~$0.045 / تحلیل' : newTier === 'deepseek' ? '~$0.003 / تحلیل' : '~$0.001 / تحلیل';
-    var provLabel = lastTierProv === 'gapgpt' ? '💎 GapGPT' : '🅰️ AIPrime';
-    await sendOrEdit(token, chatId, mid,
-      '✅ سطح مدل ' + provLabel + ' تنظیم شد:\n\n<b>' + tierLabel + '</b>\n' + extraInfo,
-      modelTierMenu(newTier));
+    var tierLabel = newTier === 'premium' ? '💎 قوی' : newTier === 'deepseek' ? '🧠 DeepSeek' : '🚀 سریع';
+    var provLabel = lastTierProv === 'gapgpt' ? 'GapGPT' : 'AIPrime';
+    await sendOrEdit(token, chatId, mid, '✅ ' + provLabel + ': <b>' + tierLabel + '</b>', modelTierMenu(newTier));
     return;
   }
 }
@@ -1992,7 +1994,7 @@ async function handleCallback(token, chatId, mid, data, env) {
 // ============================================
 
 async function sendAccessDenied(token, chatId) {
-  await sendMessage(token, chatId, '🔒 <b>دسترسی محدود</b>\n\n<b>Chat ID شما:</b>\n<code>' + chatId + '</code>');
+  await sendMessage(token, chatId, '🔒 <b>دسترسی محدود</b>\n\n<b>Chat ID:</b>\n<code>' + chatId + '</code>');
 }
 
 // ============================================
@@ -2000,7 +2002,7 @@ async function sendAccessDenied(token, chatId) {
 // ============================================
 
 async function handleUpdate(update, env) {
-  var token = env.TG_TOKEN, tk = env.TWELVE_KEY;
+  var token = env.TG_TOKEN;
 
   if (update.message) {
     var chatId = update.message.chat.id;
@@ -2058,7 +2060,7 @@ async function handleUpdate(update, env) {
 export default {
   async fetch(request, env, ctx) {
     var url = new URL(request.url);
-    if (url.pathname === '/' || url.pathname === '') return new Response('Everest Bot v3.6', { status: 200 });
+    if (url.pathname === '/' || url.pathname === '') return new Response('Everest Bot v3.7 — KZ + Crypto', { status: 200 });
     if (request.method === 'POST' && url.pathname === '/webhook') {
       try {
         var update = await request.json();
