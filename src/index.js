@@ -1,9 +1,6 @@
 // ============================================
-// EVEREST BOT v4.1 — Final
-// + Entry Type Detection (LIMIT/MARKET/STOP)
-// + Auto Monitor (multi-symbol, precise cron)
-// + KZ Mode + Crypto + Strictness + Confluence
-// + FIX: buildPromptForMode defined
+// EVEREST BOT v4.2
+// + Dual Evaluation Mode (Hard + Easy together)
 // ============================================
 
 const CONF_KEYS = ['structure', 'smc', 'ict', 'candle', 'liquidity', 'riskReward'];
@@ -25,9 +22,11 @@ const MODEL_TIERS = {
   }
 };
 
+// ⭐ STRICTNESS — اضافه شد: both
 const STRICTNESS_MODES = {
   hard: { label: '🔴 سختگیر', icon: '🔴', desc: 'همه فیلترها + TP1 الزامی + R/R سخت' },
-  easy: { label: '🟢 آسان', icon: '🟢', desc: 'آستانه نرم‌تر + TP1 اختیاری + سیگنال بیشتر' }
+  easy: { label: '🟢 آسان', icon: '🟢', desc: 'آستانه نرم‌تر + TP1 اختیاری + سیگنال بیشتر' },
+  both: { label: '⚖️ هر دو', icon: '⚖️', desc: 'ارزیابی دوگانه: سخت + آسان — نمایش ✅/❌ برای هرکدوم' }
 };
 
 const KZ_MODES = {
@@ -60,7 +59,6 @@ const FORCE_DIRECTIVE = "\n\n" +
 "{\"direction\":\"BUY|SELL|WAIT\",\"confluenceScore\":0.0,\"scores\":{\"structure\":0,\"smc\":0,\"ict\":0,\"candle\":0,\"liquidity\":0,\"riskReward\":0},\"confidence\":0,\"entry\":0,\"stopLoss\":0,\"tp1\":0,\"tp2\":0,\"tp3\":0,\"rr\":\"1:0\"}\n" +
 "```";
 
-// ⭐ FIX: این تابع در v4.0 جا افتاده بود
 function buildPromptForMode(basePrompt, mode) {
   if (mode === 'force') return basePrompt + FORCE_DIRECTIVE;
   return basePrompt;
@@ -144,7 +142,6 @@ function dropForming(klines, tf) {
   return a;
 }
 
-// ⭐ ENTRY TYPE DETECTION — core
 function detectEntryType(levels, currentPrice) {
   if (!levels.entry || !currentPrice || levels.direction === 'WAIT') {
     return { type: 'N/A', action: '—', icon: '⚪️', cls: '', desc: '', pct: 0, currentPrice: currentPrice || 0 };
@@ -157,15 +154,15 @@ function detectEntryType(levels, currentPrice) {
   }
   if (levels.direction === 'BUY') {
     if (diff < 0) return { type: 'BUY LIMIT', action: 'BUY LIMIT', icon: '🔵', cls: 'limit',
-      desc: `منتظر ریزش ${pct.toFixed(2)}٪ به ${levels.entry} — سفارش Limit بذار`, pct, currentPrice };
+      desc: `منتظر ریزش ${pct.toFixed(2)}٪ به ${levels.entry}`, pct, currentPrice };
     return { type: 'BUY STOP', action: 'BUY STOP', icon: '🟡', cls: 'stop',
-      desc: `منتظر شکست ${pct.toFixed(2)}٪ بالای ${levels.entry} — سفارش Stop بذار`, pct, currentPrice };
+      desc: `منتظر شکست ${pct.toFixed(2)}٪ بالای ${levels.entry}`, pct, currentPrice };
   }
   if (levels.direction === 'SELL') {
     if (diff > 0) return { type: 'SELL LIMIT', action: 'SELL LIMIT', icon: '🔵', cls: 'limit',
-      desc: `منتظر رشد ${pct.toFixed(2)}٪ به ${levels.entry} — سفارش Limit بذار`, pct, currentPrice };
+      desc: `منتظر رشد ${pct.toFixed(2)}٪ به ${levels.entry}`, pct, currentPrice };
     return { type: 'SELL STOP', action: 'SELL STOP', icon: '🟡', cls: 'stop',
-      desc: `منتظر شکست ${pct.toFixed(2)}٪ زیر ${levels.entry} — سفارش Stop بذار`, pct, currentPrice };
+      desc: `منتظر شکست ${pct.toFixed(2)}٪ زیر ${levels.entry}`, pct, currentPrice };
   }
   return { type: 'LIMIT', action: levels.direction + ' LIMIT', icon: '🔵', cls: 'limit', desc: '', pct, currentPrice };
 }
@@ -378,10 +375,10 @@ function extractLevels(rawText) {
 }
 
 // ============================================
-// VALIDATE
+// ⭐ VALIDATE — Single + Dual
 // ============================================
 
-function validateSignal(levels, opts) {
+function validateSignalSingle(levels, opts) {
   opts = opts || {};
   const strict = opts.strict || 'hard';
   let minRR = opts.minRR || 1.5;
@@ -430,6 +427,105 @@ function validateSignal(levels, opts) {
   levels.validationIssues = issues;
   levels.appliedStrictness = strict;
   return levels;
+}
+
+// ⭐ DUAL — اجرا با هر دو حالت
+function validateSignal(levels, opts) {
+  opts = opts || {};
+  const mode = opts.strict || 'hard';
+
+  // حالت عادی
+  if (mode === 'hard' || mode === 'easy') {
+    return validateSignalSingle(levels, opts);
+  }
+
+  // ⭐ حالت both — ارزیابی دوگانه
+  if (mode === 'both') {
+    const hardLv = JSON.parse(JSON.stringify(levels));
+    const easyLv = JSON.parse(JSON.stringify(levels));
+
+    const hardRes = validateSignalSingle(hardLv, Object.assign({}, opts, { strict: 'hard' }));
+    const easyRes = validateSignalSingle(easyLv, Object.assign({}, opts, { strict: 'easy' }));
+
+    // پایه = نتیجه easy (چون سهل‌گیرتره، direction از اون میاد)
+    const result = easyRes;
+    result.appliedStrictness = 'both';
+    result.dualEval = {
+      hard: {
+        approved: hardRes.direction !== 'WAIT',
+        direction: hardRes.direction,
+        confidence: hardRes.confidence,
+        rr: hardRes.rr || null,
+        issues: hardRes.validationIssues || []
+      },
+      easy: {
+        approved: easyRes.direction !== 'WAIT',
+        direction: easyRes.direction,
+        confidence: easyRes.confidence,
+        rr: easyRes.rr || null,
+        issues: easyRes.validationIssues || []
+      }
+    };
+    // اگه هیچ‌کدوم تایید نکردن → WAIT
+    if (!result.dualEval.hard.approved && !result.dualEval.easy.approved) {
+      result.direction = 'WAIT';
+    }
+    return result;
+  }
+
+  return validateSignalSingle(levels, opts);
+}
+
+// ⭐ Dual evaluation badge — نمایش در captions
+function buildDualEvalBadge(levels) {
+  if (!levels.dualEval) return '';
+  const h = levels.dualEval.hard;
+  const e = levels.dualEval.easy;
+  const hIcon = h.approved ? '✅' : '❌';
+  const eIcon = e.approved ? '✅' : '❌';
+  const hText = h.approved ? 'تأیید' : 'رد';
+  const eText = e.approved ? 'تأیید' : 'رد';
+
+  let c = '\n🎚️ <b>ارزیابی دوگانه:</b>\n';
+  c += '━━━━━━━━━━━━━━━\n';
+
+  c += `🔴 <b>سختگیر:</b> ${hIcon} <b>${hText}</b>`;
+  if (h.confidence != null) c += ` <i>(${h.confidence}%`;
+  if (h.confidence != null && h.rr) c += ` · ${h.rr}`;
+  if (h.confidence != null) c += `)</i>`;
+  c += '\n';
+  if (!h.approved && h.issues.length) {
+    const clean = h.issues[0].replace(/[❌⚠️]\s*/g, '').trim();
+    c += `   <i>→ ${esc(clean)}</i>\n`;
+  }
+
+  c += `🟢 <b>آسان:</b>    ${eIcon} <b>${eText}</b>`;
+  if (e.confidence != null) c += ` <i>(${e.confidence}%`;
+  if (e.confidence != null && e.rr) c += ` · ${e.rr}`;
+  if (e.confidence != null) c += `)</i>`;
+  c += '\n';
+  if (!e.approved && e.issues.length) {
+    const clean = e.issues[0].replace(/[❌⚠️]\s*/g, '').trim();
+    c += `   <i>→ ${esc(clean)}</i>\n`;
+  }
+
+  // خلاصه توصیه
+  if (h.approved && e.approved) {
+    c += '━━━━━━━━━━━━━━━\n';
+    c += '🏆 <b>هر دو حالت تأیید</b> — بالاترین کیفیت\n';
+  } else if (e.approved && !h.approved) {
+    c += '━━━━━━━━━━━━━━━\n';
+    c += '⚠️ <b>فقط آسان تأیید</b> — با احتیاط بیشتر\n';
+  } else if (h.approved && !e.approved) {
+    c += '━━━━━━━━━━━━━━━\n';
+    c += '⚠️ <b>فقط سخت تأیید</b> — نامعمول!\n';
+  } else {
+    c += '━━━━━━━━━━━━━━━\n';
+    c += '❌ <b>هیچ‌کدوم تأیید نکردن</b>\n';
+  }
+  c += '━━━━━━━━━━━━━━━\n';
+
+  return c;
 }
 
 // ============================================
@@ -521,7 +617,6 @@ async function resolveConfluence(env, chatId, levels, rawText) {
     result.scores = a.scores;
     result.confluence = a.confluence;
     result.auto = true;
-    if (mode === 'force') result.warning = '\n⚠️ AI از دستور اجباری پیروی نکرد';
     return result;
   }
   result.warning = '\n⚠️ نمرات هم‌گرایی دریافت نشد.';
@@ -979,11 +1074,15 @@ function confluenceModeMenu(cur) { const m = x => cur === x ? ' ✅' : ''; retur
   [{ text: '🔴 اجبار' + m('force'), callback_data: 'conf_force' }],
   [{ text: '◀️ بازگشت', callback_data: 'menu_settings' }]
 ]}; }
+
+// ⭐ strictness menu با هر دو
 function strictnessMenu(cur) { const m = x => cur === x ? ' ✅' : ''; return { inline_keyboard: [
   [{ text: '🔴 سختگیر' + m('hard'), callback_data: 'strict_hard' }],
   [{ text: '🟢 آسان' + m('easy'), callback_data: 'strict_easy' }],
+  [{ text: '⚖️ هر دو (نمایش دوگانه)' + m('both'), callback_data: 'strict_both' }],
   [{ text: '◀️ بازگشت', callback_data: 'menu_settings' }]
 ]}; }
+
 function kzModeMenu(cur) { const m = x => cur === x ? ' ✅' : ''; return { inline_keyboard: [
   [{ text: '🌐 ۲۴/۷' + m('off'), callback_data: 'kz_off' }],
   [{ text: '⭐ اولویت KZ' + m('priority'), callback_data: 'kz_priority' }],
@@ -1092,7 +1191,7 @@ async function downloadTelegramPhoto(t, fid) {
 }
 
 // ============================================
-// FORMATTING
+// FORMATTING — با پشتیبانی Dual Eval
 // ============================================
 
 function tgFormat(text) {
@@ -1131,11 +1230,19 @@ function buildConfBlock(conf, levels) {
 function buildCaption(levels, symbol, tf, provider, conf, currentPrice) {
   const isCrypto = isCryptoSymbol(symbol);
   const symIcon = isCrypto ? '🪙' : '💱';
+  const isDual = levels.appliedStrictness === 'both' && levels.dualEval;
+  const st = isDual ? STRICTNESS_MODES.both : (levels.appliedStrictness ? STRICTNESS_MODES[levels.appliedStrictness] : null);
+
   let c = '<b>📊 تحلیل</b>\n\n<b>نماد:</b> ' + symIcon + ' ' + symbol + '\n<b>TF:</b> ' + timeframeLabel(tf) + '\n';
   if (provider) c += '<b>سرویس:</b> ' + esc(provider) + '\n';
+  if (st) c += '<b>نوع:</b> ' + st.icon + ' ' + st.label + '\n';
   c += '<b>وضعیت:</b> ' + getKZBadge(symbol) + '\n\n';
+
+  // ⭐ Dual eval badge
+  if (isDual) c += buildDualEvalBadge(levels) + '\n';
+
   const d = levels.direction || 'WAIT';
-  c += '<b>جهت:</b> ' + (d === 'BUY' ? '🟢 خرید' : d === 'SELL' ? '🔴 فروش' : '⏸️ انتظار') + '\n';
+  c += '<b>جهت نهایی:</b> ' + (d === 'BUY' ? '🟢 خرید' : d === 'SELL' ? '🔴 فروش' : '⏸️ انتظار') + '\n';
   if (levels.regime) c += '<b>رژیم:</b> ' + regimeLabel(levels.regime) + '\n';
   if (levels.confidence != null) c += '<b>اطمینان:</b> ' + levels.confidence + '%\n';
   if (d !== 'WAIT' && levels.entry != null && currentPrice) c += buildEntryTypeLine(levels, currentPrice);
@@ -1156,9 +1263,14 @@ function buildCaption(levels, symbol, tf, provider, conf, currentPrice) {
 function buildMTFCaption(levels, symbol, provider, conf, currentPrice) {
   const isCrypto = isCryptoSymbol(symbol);
   const symIcon = isCrypto ? '🪙' : '💱';
+  const isDual = levels.appliedStrictness === 'both' && levels.dualEval;
+  const st = isDual ? STRICTNESS_MODES.both : (levels.appliedStrictness ? STRICTNESS_MODES[levels.appliedStrictness] : null);
+
   let c = '<b>🎯 MTF</b>\n\n<b>نماد:</b> ' + symIcon + ' ' + symbol + '\n';
   if (provider) c += '<b>سرویس:</b> ' + esc(provider) + '\n';
+  if (st) c += '<b>نوع:</b> ' + st.icon + ' ' + st.label + '\n';
   c += '<b>وضعیت:</b> ' + getKZBadge(symbol) + '\n\n';
+  if (isDual) c += buildDualEvalBadge(levels) + '\n';
   if (levels.htf || levels.mtf || levels.ltf || levels.entryTf) {
     c += '<b>📊 TF:</b>\n• 4H: ' + directionEmoji(levels.htf) + '\n• 1H: ' + directionEmoji(levels.mtf) + '\n• 15M: ' + directionEmoji(levels.ltf) + '\n• 1M: ' + directionEmoji(levels.entryTf) + '\n\n';
   }
@@ -1178,10 +1290,12 @@ function buildMTFCaption(levels, symbol, provider, conf, currentPrice) {
 }
 
 function buildImageCaption(levels, provider, conf, currentPrice) {
+  const isDual = levels.appliedStrictness === 'both' && levels.dualEval;
   let c = '<b>📸 تصویر</b>\n';
   if (provider) c += '<b>سرویس:</b> ' + esc(provider) + '\n';
   c += '\n';
   if (levels.detectedSymbol && levels.detectedSymbol !== 'UNKNOWN') c += '<b>نماد:</b> ' + levels.detectedSymbol + '\n';
+  if (isDual) c += buildDualEvalBadge(levels) + '\n';
   const d = levels.direction || 'WAIT';
   c += '<b>جهت:</b> ' + (d === 'BUY' ? '🟢' : d === 'SELL' ? '🔴' : '⏸️') + '\n';
   if (levels.confidence != null) c += '<b>اطمینان:</b> ' + levels.confidence + '%\n';
@@ -1202,13 +1316,13 @@ function buildImageCaption(levels, provider, conf, currentPrice) {
 // ============================================
 
 async function showMainMenu(t, c, mid) {
-  await sendOrEdit(t, c, mid, '🎯 <b>Everest v4.1</b>\n\n🆕 Entry Type (LIMIT/MARKET/STOP)\n🌐 KZ Mode · 🪙 کریپتو · 🤖 مانیتور\n\nاز منو:', mainMenu());
+  await sendOrEdit(t, c, mid, '🎯 <b>Everest v4.2</b>\n\n🆕 ⚖️ حالت دوگانه (سخت + آسان)\n🎯 Entry Type · 🤖 مانیتور خودکار\n\nاز منو:', mainMenu());
 }
-async function showSymbolMenu(t, c, mid) { await sendOrEdit(t, c, mid, '🎯 <b>نماد:</b>\n\n💱 فارکس · 🪙 کریپتو', symbolMenu()); }
+async function showSymbolMenu(t, c, mid) { await sendOrEdit(t, c, mid, '🎯 <b>نماد:</b>', symbolMenu()); }
 async function showTimeframeMenu(t, c, mid, sr) {
   const sym = normalizeSymbol(sr);
   const isCrypto = isCryptoSymbol(sym);
-  await sendOrEdit(t, c, mid, '⏰ <b>روش تحلیل ' + (isCrypto ? '🪙 ' : '💱 ') + sym + '</b>', timeframeMenu(sr));
+  await sendOrEdit(t, c, mid, '⏰ <b>' + (isCrypto ? '🪙' : '💱') + ' ' + sym + '</b>', timeframeMenu(sr));
 }
 async function showProviderMenu(t, c, mid, sr, tf, isMTF, env) {
   const av = getAvailableProviders(env);
@@ -1250,14 +1364,9 @@ async function showMonitorMenu(t, c, mid, env) {
       const m = list[i];
       const isCrypto = isCryptoSymbol(m.symbol);
       txt += (m.active ? '🟢' : '⏸️') + ' #' + (i + 1) + ' ' + (isCrypto ? '🪙' : '💱') + ' <b>' + m.symbol + '</b> ' + timeframeLabel(m.timeframe) + '\n';
-      if (m.signalCount) txt += '   📊 ' + m.signalCount + ' سیگنال';
-      if (m.kzSignalCount) txt += ' · ' + m.kzSignalCount + ' KZ';
-      txt += '\n';
     }
   } else {
-    txt += '⚪ <b>غیرفعال</b>\n\n';
-    txt += 'با فعال‌سازی، ربات هر کندل بسته، بازار را تحلیل می‌کند و در صورت ستاپ معتبر، سیگنال با <b>نوع ورود</b> می‌فرستد.\n\n';
-    txt += '<b>🆕 سیگنال شامل:</b>\n• 🔵 BUY LIMIT / 🟡 BUY STOP\n• ⚡ MARKET\n• 🎯 Entry + SL + TP + R/R\n';
+    txt += '⚪ <b>غیرفعال</b>\n\nدر صورت ستاپ معتبر، سیگنال با <b>نوع ورود</b> می‌آید.';
   }
   await sendOrEdit(t, c, mid, txt, monitorMenu());
 }
@@ -1265,20 +1374,9 @@ async function showMonitorMenu(t, c, mid, env) {
 async function showMonitorList(t, c, mid, env) {
   const list = await getMonitors(env, c);
   if (!list.length) { await sendOrEdit(t, c, mid, '📋 خالی', { inline_keyboard: [[{ text: '◀️', callback_data: 'menu_monitor' }]] }); return; }
-  const b = list.map((m, i) => [{
-    text: (m.active ? '🟢' : '⏸️') + ' #' + (i + 1) + ' ' + m.symbol + ' ' + timeframeLabel(m.timeframe),
-    callback_data: 'mon_view_' + i
-  }]);
-  b.push([{ text: '◀️ بازگشت', callback_data: 'menu_monitor' }]);
-  let txt = '📋 <b>لیست مانیتورها</b>\n\n';
-  for (let i = 0; i < list.length; i++) {
-    const m = list[i];
-    txt += '#' + (i + 1) + ' ' + (m.active ? '🟢' : '⏸️') + ' <b>' + m.symbol + '</b> ' + timeframeLabel(m.timeframe) + '\n';
-    txt += '   📊 ' + (m.signalCount || 0) + ' سیگنال';
-    if (m.lastSignal) txt += ' · آخرین: ' + m.lastSignal.dir;
-    txt += '\n';
-  }
-  await sendOrEdit(t, c, mid, txt, { inline_keyboard: b });
+  const b = list.map((m, i) => [{ text: (m.active ? '🟢' : '⏸️') + ' #' + (i + 1) + ' ' + m.symbol + ' ' + timeframeLabel(m.timeframe), callback_data: 'mon_view_' + i }]);
+  b.push([{ text: '◀️', callback_data: 'menu_monitor' }]);
+  await sendOrEdit(t, c, mid, '📋 <b>لیست مانیتورها</b>', { inline_keyboard: b });
 }
 
 async function showMonitorView(t, c, mid, env, idx) {
@@ -1287,9 +1385,10 @@ async function showMonitorView(t, c, mid, env, idx) {
   const m = list[idx];
   const isCrypto = isCryptoSymbol(m.symbol);
   const kzMode = await getKzMode(env, c);
-  const strict = await getStrictness(env, c);
-  const mode = await getUserMode(env, c);
+  const strict = m.strictness || await getStrictness(env, c);
+  const mode = m.mode || await getUserMode(env, c);
   const cfg = MODE_CONFIG[mode];
+  const stCfg = STRICTNESS_MODES[strict] || STRICTNESS_MODES.hard;
 
   let txt = '🤖 <b>مانیتور #' + (idx + 1) + '</b>\n\n';
   txt += '<b>نماد:</b> ' + (isCrypto ? '🪙' : '💱') + ' ' + m.symbol + '\n';
@@ -1298,11 +1397,9 @@ async function showMonitorView(t, c, mid, env, idx) {
   txt += '<b>منبع داده:</b> ' + ({ auto: '🔄 خودکار', binance: '🟡 Binance', twelve: '📊 Twelve' }[m.dataProvider] || m.dataProvider) + '\n';
   txt += '<b>وضعیت:</b> ' + (m.active ? '🟢 فعال' : '⏸️ متوقف') + '\n';
   txt += '<b>حالت:</b> ' + cfg.icon + ' ' + cfg.label + '\n';
-  txt += '<b>نوع:</b> ' + STRICTNESS_MODES[strict].icon + ' ' + STRICTNESS_MODES[strict].label + '\n';
+  txt += '<b>نوع:</b> ' + stCfg.icon + ' ' + stCfg.label + '\n';
   txt += '<b>KZ Mode:</b> ' + KZ_MODES[kzMode].icon + ' ' + KZ_MODES[kzMode].label + '\n\n';
-  txt += '<b>📊 آمار:</b>\n';
-  txt += '• سیگنال کل: <b>' + (m.signalCount || 0) + '</b>\n';
-  txt += '• سیگنال KZ: <b>' + (m.kzSignalCount || 0) + '</b>\n';
+  txt += '<b>📊 آمار:</b>\n• کل: <b>' + (m.signalCount || 0) + '</b>\n• KZ: <b>' + (m.kzSignalCount || 0) + '</b>\n';
   if (m.lastSignal) txt += '• آخرین: ' + m.lastSignal.dir + ' @ ' + m.lastSignal.entry + '\n';
   if (m.lastCheckAt) {
     const mins = Math.floor((Date.now() - m.lastCheckAt) / 60000);
@@ -1314,7 +1411,7 @@ async function showMonitorView(t, c, mid, env, idx) {
     [{ text: m.active ? '⏸️ توقف' : '▶️ شروع', callback_data: 'mon_toggle_' + idx }],
     [{ text: '🔄 شروع مجدد', callback_data: 'mon_restart_' + idx }],
     [{ text: '🗑️ حذف', callback_data: 'mon_del_' + idx }],
-    [{ text: '◀️ بازگشت', callback_data: 'mon_list' }]
+    [{ text: '◀️', callback_data: 'mon_list' }]
   ]});
 }
 
@@ -1328,10 +1425,12 @@ async function showSettingsMenu(t, c, mid, env) {
   const aL = aT === 'premium' ? '💎' : aT === 'deepseek' ? '🧠' : '🚀';
   const gL = gT === 'premium' ? '💎' : gT === 'deepseek' ? '🧠' : '🚀';
   const st = await getStrictness(env, c);
+  const stCfg = STRICTNESS_MODES[st];
   const kz = await getKzMode(env, c);
 
   const text = '⚙️ <b>تنظیمات</b>\n\n' +
-    '<b>🎚️ نوع:</b> ' + STRICTNESS_MODES[st].icon + ' ' + STRICTNESS_MODES[st].label + '\n' +
+    '<b>🎚️ نوع:</b> ' + stCfg.icon + ' ' + stCfg.label + '\n' +
+    '<i>' + stCfg.desc + '</i>\n\n' +
     '<b>⚙️ KZ Mode:</b> ' + KZ_MODES[kz].icon + ' ' + KZ_MODES[kz].label + '\n' +
     '<b>🎯 حالت:</b> ' + uc.icon + ' ' + uc.label + '\n' +
     '<b>🧠 هم‌گرایی:</b> ' + cl + '\n' +
@@ -1359,35 +1458,28 @@ async function showStatus(t, c, mid, env) {
     if (hk) act++;
     txt += (hk ? '✅' : '❌') + ' ' + PROVIDER_NAMES[p] + '\n';
   }
-  txt += '\n🎯 ' + act + '/' + all.length + '\n';
-  txt += '📊 Twelve: ' + (env.TWELVE_KEY ? '✅' : '❌') + '\n';
-  txt += '🪙 Binance: ✅ (رایگان)\n';
-  txt += '💾 KV: ' + (env.KV ? '✅' : '❌');
+  txt += '\n🎯 ' + act + '/' + all.length + '\n📊 Twelve: ' + (env.TWELVE_KEY ? '✅' : '❌') + '\n🪙 Binance: ✅';
   await sendOrEdit(t, c, mid, txt, { inline_keyboard: [[{ text: '🏠', callback_data: 'menu_main' }]] });
 }
 
 async function showHelp(t, c, mid) {
-  const txt = '📖 <b>راهنما v4.1</b>\n\n' +
-    '🆕 <b>Entry Type Detection:</b>\n' +
-    '🔵 <b>LIMIT</b> — منتظر پول‌بک\n' +
-    '⚡ <b>MARKET</b> — قیمت ≈ Entry\n' +
-    '🟡 <b>STOP</b> — منتظر شکست\n\n' +
-    '🤖 <b>مانیتور خودکار:</b>\nمنو → 🤖 مانیتور → ➕ جدید\nسیگنال‌ها با <b>نوع ورود</b> می‌آیند\n\n' +
-    '🎚️ <b>نوع:</b> 🔴 سختگیر · 🟢 آسان\n' +
-    '⚙️ <b>KZ Mode:</b> 🌐 ۲۴/۷ · ⭐ اولویت · 🔒 فقط KZ\n\n' +
-    '<b>دستورات:</b>\n/menu /monitor /analyze /journal /watch /status /myid';
+  const txt = '📖 <b>راهنما v4.2</b>\n\n' +
+    '🎚️ <b>نوع تحلیل (جدید):</b>\n' +
+    '🔴 سختگیر — همه فیلترها\n' +
+    '🟢 آسان — فیلتر سبک\n' +
+    '⚖️ <b>هر دو</b> — نمایش ✅/❌ برای هر دو حالت\n\n' +
+    '🆕 <b>Entry Type:</b>\n🔵 LIMIT · ⚡ MARKET · 🟡 STOP\n\n' +
+    '🤖 <b>مانیتور خودکار:</b>\nمنو → 🤖 مانیتور → ➕ جدید\n\n' +
+    '<b>دستورات:</b>\n/menu /monitor /analyze /journal /watch /status';
   await sendOrEdit(t, c, mid, txt, { inline_keyboard: [[{ text: '🏠', callback_data: 'menu_main' }]] });
 }
 
 async function showMonitorHelp(t, c, mid) {
   const txt = '📖 <b>راهنمای مانیتور</b>\n\n' +
-    '🤖 <b>چطور کار می‌کند؟</b>\n' +
-    'هر کندل بسته، ربات بازار را از منبع داده می‌گیرد، به AI می‌دهد، اعتبارسنجی می‌کند و اگر معتبر بود با <b>نوع ورود دقیق</b> می‌فرستد.\n\n' +
-    '🎯 <b>Entry Type در سیگنال:</b>\n' +
-    '• 🔵 <b>BUY LIMIT</b> @ 2645 — سفارش Limit بذار\n' +
-    '• 🟡 <b>BUY STOP</b> @ 2655 — منتظر شکست\n' +
-    '• ⚡ <b>MARKET</b> — قیمت = Entry\n\n' +
-    '⚙️ <b>پیشنهاد طلا:</b>\n• منبع: Twelve\n• AI: AIPrime\n• KZ: ⭐ اولویت\n• نوع: 🔴 سختگیر';
+    '🤖 هر کندل بسته، بازار تحلیل می‌شه و در صورت ستاپ معتبر، سیگنال می‌آد.\n\n' +
+    '⚖️ <b>در حالت «هر دو»:</b>\n' +
+    'سیگنال با نمایش ✅/❌ برای هرکدوم از (سخت/آسان) می‌آید.\n' +
+    'شما خودت تصمیم می‌گیری.';
   await sendOrEdit(t, c, mid, txt, { inline_keyboard: [[{ text: '◀️', callback_data: 'menu_monitor' }]] });
 }
 
@@ -1539,33 +1631,26 @@ async function finishMonitorSetup(t, c, mid, symbol, tf, ai, dp, env) {
   list.push({
     symbol, timeframe: tf, aiProvider: ai, dataProvider: dp,
     mode, strictness: strict, kzMode,
-    active: true,
-    startAt: Date.now(),
-    lastCheckAt: 0,
-    signalCount: 0,
-    kzSignalCount: 0,
-    lastSignal: null,
-    lastSignalKey: null,
-    lastError: null,
-    skippedCount: 0
+    active: true, startAt: Date.now(), lastCheckAt: 0,
+    signalCount: 0, kzSignalCount: 0,
+    lastSignal: null, lastSignalKey: null, lastError: null, skippedCount: 0
   });
   await saveMonitors(env, c, list);
 
   const isCrypto = isCryptoSymbol(symbol);
   const aiLabel = ai === 'auto' ? '🤖 خودکار' : (PROVIDER_NAMES[ai] || ai);
   const dpLabel = { auto: '🔄 خودکار', binance: '🟡 Binance', twelve: '📊 Twelve' }[dp] || dp;
+  const stCfg = STRICTNESS_MODES[strict];
 
   const msg = '✅ <b>مانیتور فعال شد</b>\n\n' +
     '<b>نماد:</b> ' + (isCrypto ? '🪙' : '💱') + ' ' + symbol + '\n' +
-    '<b>تایم‌فریم:</b> ' + timeframeLabel(tf) + '\n' +
-    '<b>سرویس AI:</b> ' + aiLabel + '\n' +
-    '<b>منبع داده:</b> ' + dpLabel + '\n' +
+    '<b>TF:</b> ' + timeframeLabel(tf) + '\n' +
+    '<b>AI:</b> ' + aiLabel + '\n' +
+    '<b>داده:</b> ' + dpLabel + '\n' +
     '<b>حالت:</b> ' + MODE_CONFIG[mode].icon + ' ' + MODE_CONFIG[mode].label + '\n' +
-    '<b>نوع:</b> ' + STRICTNESS_MODES[strict].icon + ' ' + STRICTNESS_MODES[strict].label + '\n' +
-    '<b>KZ Mode:</b> ' + KZ_MODES[kzMode].icon + ' ' + KZ_MODES[kzMode].label + '\n\n' +
-    '📩 سیگنال‌ها با <b>نوع ورود دقیق</b> می‌آیند:\n' +
-    '🔵 LIMIT · ⚡ MARKET · 🟡 STOP\n\n' +
-    '⏱️ هر ~' + TF_MINUTES[tf] + ' دقیقه چک می‌شود';
+    '<b>نوع:</b> ' + stCfg.icon + ' ' + stCfg.label + '\n' +
+    '<b>KZ:</b> ' + KZ_MODES[kzMode].icon + ' ' + KZ_MODES[kzMode].label + '\n\n' +
+    (strict === 'both' ? '⚖️ سیگنال‌ها با <b>ارزیابی دوگانه</b> می‌آیند' : '📩 سیگنال‌ها با نوع ورود دقیق');
 
   await sendOrEdit(t, c, mid, msg, { inline_keyboard: [
     [{ text: '📋 لیست', callback_data: 'mon_list' }],
@@ -1574,7 +1659,7 @@ async function finishMonitorSetup(t, c, mid, symbol, tf, ai, dp, env) {
 }
 
 // ============================================
-// CRON MONITOR CHECK
+// CRON MONITOR
 // ============================================
 
 async function checkAllMonitors(env) {
@@ -1615,7 +1700,7 @@ async function checkAllMonitors(env) {
           m.lastError = null;
           changed = true;
         } catch (e) {
-          console.error('Monitor for ' + chatId + ': ' + e.message);
+          console.error('Monitor ' + chatId + ': ' + e.message);
           m.lastCheckAt = Date.now();
           m.lastError = String(e.message).slice(0, 200);
           changed = true;
@@ -1666,8 +1751,7 @@ async function runMonitorForUser(env, token, chatId, m, strict, mode, cfg) {
   } else result = await callWithFallback(env, fullPrompt, null, null, chatId);
 
   const levels = validateSignal(extractLevels(result.text), {
-    strict, minRR: cfg.minRR, minConfidence: cfg.minConfidence,
-    atr, price: currentPrice
+    strict, minRR: cfg.minRR, minConfidence: cfg.minConfidence, atr, price: currentPrice
   });
   const confluence = await resolveConfluence(env, chatId, levels, result.text);
 
@@ -1683,7 +1767,6 @@ async function runMonitorForUser(env, token, chatId, m, strict, mode, cfg) {
     const kzActive = isCrypto ? getCryptoLiquidityWindow().active : getKillZoneInfo().active;
     if (kzActive) m.kzSignalCount = (m.kzSignalCount || 0) + 1;
     m.lastSignalKey = levels.direction + '_' + Math.round(levels.entry * 10) / 10;
-
     await sendMonitorSignal(token, chatId, levels, confluence, result, currentPrice, symbol, tf);
   }
 }
@@ -1692,6 +1775,16 @@ function isSignalConfirmed(levels, confluence, strict, cfg) {
   if (levels.direction !== 'BUY' && levels.direction !== 'SELL') return false;
   if (levels.confidence == null || levels.confidence < cfg.minConfidence) return false;
   if (!levels.entry || !levels.sl) return false;
+
+  // ⭐ حالت both — ارسال اگر حداقل آسان تأیید کرده
+  if (strict === 'both') {
+    if (!levels.dualEval) return false;
+    // اگه هیچ‌کدوم تایید نکرده بودن، direction خودکار WAIT شده
+    // پس اینجا فقط باید مطمئن شیم confluence معیار رو رعایت کرده
+    if (confluence && confluence.confluence != null && confluence.confluence < cfg.minConfluence) return false;
+    return true;
+  }
+
   if (strict === 'hard') {
     if (!levels.tp1) return false;
     const rr = parseFloat((levels.rr || '').replace('1:', ''));
@@ -1708,18 +1801,22 @@ async function sendMonitorSignal(token, chatId, levels, confluence, result, curr
   const dirIcon = d === 'BUY' ? '🟢' : '🔴';
   const kzBadge = getKZBadge(symbol);
   const et = detectEntryType(levels, currentPrice);
+  const isDual = levels.appliedStrictness === 'both' && levels.dualEval;
 
   let caption = '🚨 <b>سیگنال مانیتور</b>\n\n';
   caption += '<b>نماد:</b> ' + symIcon + ' ' + symbol + '\n';
   caption += '<b>تایم‌فریم:</b> ' + timeframeLabel(tf) + '\n';
   caption += '<b>وضعیت:</b> ' + kzBadge + '\n\n';
 
+  // ⭐ Dual eval badge
+  if (isDual) caption += buildDualEvalBadge(levels) + '\n';
+
   caption += '<b>جهت:</b> ' + dirIcon + ' ' + (d === 'BUY' ? 'خرید' : 'فروش') + '\n';
   caption += '<b>قیمت فعلی:</b> <code>' + currentPrice.toFixed(2) + '</code>\n';
   if (levels.confidence != null) caption += '<b>اطمینان:</b> ' + levels.confidence + '%\n';
   caption += '\n';
 
-  // Entry Type — prominent
+  // Entry Type
   caption += '━━━━━━━━━━━━━━━\n';
   caption += et.icon + ' <b>' + et.action + '</b>\n';
   caption += '<i>' + et.desc + '</i>\n';
@@ -1735,12 +1832,10 @@ async function sendMonitorSignal(token, chatId, levels, confluence, result, curr
 
   caption += buildConfBlock(confluence, levels);
 
-  const keyboard = { inline_keyboard: [
+  await sendMessage(token, chatId, caption, { inline_keyboard: [
     [{ text: '📖 تحلیل کامل', callback_data: 'mon_details' }],
     [{ text: '⏹️ توقف مانیتور', callback_data: 'mon_stop_all' }]
-  ]};
-
-  await sendMessage(token, chatId, caption, keyboard);
+  ]});
 
   const ft = tgFormat(result.text);
   if (ft.length > 100 && ft.length < 3500) {
@@ -1749,16 +1844,15 @@ async function sendMonitorSignal(token, chatId, levels, confluence, result, curr
 }
 
 // ============================================
-// JOURNAL / WATCH
+// JOURNAL/WATCH
 // ============================================
 
 async function showJournalList(t, c, env) {
   const j = await getJournal(env, c);
   if (!j.length) { await sendMessage(t, c, '📓 خالی', { inline_keyboard: [[{ text: '◀️', callback_data: 'menu_journal' }]] }); return; }
-  let txt = '<b>📓 لیست</b>\n\n';
+  let txt = '<b>📓</b>\n\n';
   for (let i = 0; i < Math.min(j.length, 15); i++) {
-    const x = j[i];
-    const s = x.result === 'win' ? '✅' : x.result === 'loss' ? '❌' : '⏳';
+    const x = j[i]; const s = x.result === 'win' ? '✅' : x.result === 'loss' ? '❌' : '⏳';
     txt += s + ' #' + x.id + ' ' + x.symbol + ' ' + x.direction + '\n';
   }
   await sendMessage(t, c, txt, { inline_keyboard: [[{ text: '◀️', callback_data: 'menu_journal' }]] });
@@ -1771,7 +1865,7 @@ async function showJournalStats(t, c, env) {
   const p = j.filter(x => !x.result).length;
   const cl = w + l;
   const wr = cl > 0 ? (w / cl * 100).toFixed(1) : '0';
-  await sendMessage(t, c, '<b>📊 آمار</b>\n\n📈 ' + j.length + '\n✅ ' + w + '\n❌ ' + l + '\n⏳ ' + p + '\n\nنرخ برد: <b>' + wr + '%</b>', { inline_keyboard: [[{ text: '◀️', callback_data: 'menu_journal' }]] });
+  await sendMessage(t, c, '<b>📊</b>\n\n📈 ' + j.length + '\n✅ ' + w + '\n❌ ' + l + '\n⏳ ' + p + '\n\nنرخ برد: <b>' + wr + '%</b>', { inline_keyboard: [[{ text: '◀️', callback_data: 'menu_journal' }]] });
 }
 async function showWatchList(t, c, env) {
   const l = await getWatchlist(env, c);
@@ -1800,8 +1894,8 @@ async function handleCallback(t, c, mid, data, env) {
   if (data === 'mon_help') { await showMonitorHelp(t, c, mid); return; }
   if (data === 'mon_list') { await showMonitorList(t, c, mid, env); return; }
   if (data === 'mon_add') { await startMonitorWizard(t, c, env); return; }
-  if (data === 'mon_stop_all') { await saveMonitors(env, c, []); await sendOrEdit(t, c, mid, '⏹️ همه مانیتورها حذف شدند', { inline_keyboard: [[{ text: '◀️', callback_data: 'menu_monitor' }]] }); return; }
-  if (data === 'mon_crypto_list') { await sendOrEdit(t, c, mid, '🪙 <b>کریپتو:</b>', monitorSymbolMenu(true)); return; }
+  if (data === 'mon_stop_all') { await saveMonitors(env, c, []); await sendOrEdit(t, c, mid, '⏹️ همه حذف شدند', { inline_keyboard: [[{ text: '◀️', callback_data: 'menu_monitor' }]] }); return; }
+  if (data === 'mon_crypto_list') { await sendOrEdit(t, c, mid, '🪙', monitorSymbolMenu(true)); return; }
 
   if (data.indexOf('mon_view_') === 0) { await showMonitorView(t, c, mid, env, parseInt(data.replace('mon_view_', ''))); return; }
   if (data.indexOf('mon_toggle_') === 0) {
@@ -1823,22 +1917,21 @@ async function handleCallback(t, c, mid, data, env) {
     const list = await getMonitors(env, c);
     list.splice(idx, 1);
     await saveMonitors(env, c, list);
-    await sendOrEdit(t, c, mid, '🗑️ حذف شد', { inline_keyboard: [[{ text: '◀️', callback_data: 'mon_list' }]] });
+    await sendOrEdit(t, c, mid, '🗑️', { inline_keyboard: [[{ text: '◀️', callback_data: 'mon_list' }]] });
     return;
   }
   if (data === 'mon_details') { await showMonitorMenu(t, c, mid, env); return; }
+  if (data === 'mon_cancel') { await clearUserState(env, c); await sendOrEdit(t, c, mid, '❌', { inline_keyboard: [[{ text: '🏠', callback_data: 'menu_main' }]] }); return; }
 
-  // Monitor wizard
-  if (data === 'mon_cancel') { await clearUserState(env, c); await sendOrEdit(t, c, mid, '❌ لغو', { inline_keyboard: [[{ text: '🏠', callback_data: 'menu_main' }]] }); return; }
   if (data.indexOf('msym_') === 0) {
     const symRaw = data.replace('msym_', '');
     if (symRaw === 'custom') {
       await setUserState(env, c, { action: 'mon_add', step: 'symbol_custom', data: {} });
-      await sendOrEdit(t, c, mid, '✏️ نماد:\n\nمثال: XAU/USD · BTC/USD', { inline_keyboard: [[{ text: '❌ لغو', callback_data: 'mon_cancel' }]] });
+      await sendOrEdit(t, c, mid, '✏️ نماد:', { inline_keyboard: [[{ text: '❌', callback_data: 'mon_cancel' }]] });
       return;
     }
     await setUserState(env, c, { action: 'mon_add', step: 'tf', data: { symbol: symRaw } });
-    await sendOrEdit(t, c, mid, '🤖 <b>مرحله ۲/۴ — تایم‌فریم:</b>\n\nنماد: ' + normalizeSymbol(symRaw), monitorTfMenu(symRaw));
+    await sendOrEdit(t, c, mid, '🤖 ۲/۴ TF:', monitorTfMenu(symRaw));
     return;
   }
   if (data.indexOf('mtf2_') === 0) {
@@ -1848,7 +1941,7 @@ async function handleCallback(t, c, mid, data, env) {
     const symRaw = rest.slice(0, -tfm[0].length);
     const tf = tfm[1];
     await setUserState(env, c, { action: 'mon_add', step: 'ai', data: { symbol: symRaw, timeframe: tf } });
-    await sendOrEdit(t, c, mid, '🤖 <b>مرحله ۳/۴ — سرویس AI:</b>', monitorAiMenu(symRaw, tf));
+    await sendOrEdit(t, c, mid, '🤖 ۳/۴ AI:', monitorAiMenu(symRaw, tf));
     return;
   }
   if (data.indexOf('mai_') === 0) {
@@ -1859,7 +1952,7 @@ async function handleCallback(t, c, mid, data, env) {
     const tf = parts[parts.length - 1];
     const sym = parts.slice(1, -1).join('_');
     await setUserState(env, c, { action: 'mon_add', step: 'dp', data: { symbol: sym, timeframe: tf, aiProvider: ai } });
-    await sendOrEdit(t, c, mid, '🤖 <b>مرحله ۴/۴ — منبع داده:</b>', monitorDataMenu(sym, tf, ai));
+    await sendOrEdit(t, c, mid, '🤖 ۴/۴ داده:', monitorDataMenu(sym, tf, ai));
     return;
   }
   if (data.indexOf('mdp_') === 0) {
@@ -1876,7 +1969,6 @@ async function handleCallback(t, c, mid, data, env) {
     return;
   }
 
-  // Symbol/analysis
   if (data === 'wizard_cancel') { await clearUserState(env, c); await sendOrEdit(t, c, mid, '❌', { inline_keyboard: [[{ text: '🏠', callback_data: 'menu_main' }]] }); return; }
   if (data === 'sym_custom') { await setUserState(env, c, { action: 'custom_symbol', step: 'input', data: {} }); await sendOrEdit(t, c, mid, '✏️ نماد:', { inline_keyboard: [[{ text: '❌', callback_data: 'wizard_cancel' }]] }); return; }
   if (data.indexOf('sym_') === 0) { await showTimeframeMenu(t, c, mid, data.replace('sym_', '')); return; }
@@ -1902,7 +1994,6 @@ async function handleCallback(t, c, mid, data, env) {
     return;
   }
 
-  // Journal/Watch
   if (data === 'journal_add') { await setUserState(env, c, { action: 'journal_add', step: 'symbol', data: {} }); await sendOrEdit(t, c, mid, '📝 ۱/۵ نماد:', { inline_keyboard: [[{ text: '❌', callback_data: 'wizard_cancel' }]] }); return; }
   if (data === 'journal_list') { await showJournalList(t, c, env); return; }
   if (data === 'journal_stats') { await showJournalStats(t, c, env); return; }
@@ -1928,23 +2019,32 @@ async function handleCallback(t, c, mid, data, env) {
   }
 
   // Settings
-  if (data === 'settings_strict') { const cur = await getStrictness(env, c); await sendOrEdit(t, c, mid, '🎚️ <b>نوع تحلیل</b>', strictnessMenu(cur)); return; }
-  if (data === 'strict_hard' || data === 'strict_easy') {
-    const m = data.replace('strict_', '');
-    await setStrictness(env, c, m);
-    const lbl = m === 'hard' ? '🔴 سختگیر' : '🟢 آسان';
-    await sendOrEdit(t, c, mid, '✅ ' + lbl, strictnessMenu(m));
+  if (data === 'settings_strict') {
+    const cur = await getStrictness(env, c);
+    await sendOrEdit(t, c, mid,
+      '🎚️ <b>نوع تحلیل</b>\n\n' +
+      '🔴 <b>سختگیر:</b> فیلتر کامل\n' +
+      '🟢 <b>آسان:</b> فیلتر سبک\n' +
+      '⚖️ <b>هر دو:</b> نمایش دوگانه — تو خودت تصمیم بگیر',
+      strictnessMenu(cur));
     return;
   }
-  if (data === 'settings_kz') { const cur = await getKzMode(env, c); await sendOrEdit(t, c, mid, '⚙️ <b>KZ Mode</b>', kzModeMenu(cur)); return; }
+  if (data === 'strict_hard' || data === 'strict_easy' || data === 'strict_both') {
+    const m = data.replace('strict_', '');
+    await setStrictness(env, c, m);
+    const sc = STRICTNESS_MODES[m];
+    await sendOrEdit(t, c, mid, '✅ <b>' + sc.icon + ' ' + sc.label + '</b>\n\n' + sc.desc, strictnessMenu(m));
+    return;
+  }
+  if (data === 'settings_kz') { const cur = await getKzMode(env, c); await sendOrEdit(t, c, mid, '⚙️ KZ Mode', kzModeMenu(cur)); return; }
   if (data === 'kz_off' || data === 'kz_priority' || data === 'kz_only') {
     const m = data.replace('kz_', '');
     await setKzMode(env, c, m);
     const kc = KZ_MODES[m];
-    await sendOrEdit(t, c, mid, '✅ ' + kc.icon + ' ' + kc.label + '\n\n' + kc.desc, kzModeMenu(m));
+    await sendOrEdit(t, c, mid, '✅ ' + kc.icon + ' ' + kc.label, kzModeMenu(m));
     return;
   }
-  if (data === 'settings_mode') { const cur = await getUserMode(env, c); await sendOrEdit(t, c, mid, '🎯 <b>حالت</b>', modeMenu(cur)); return; }
+  if (data === 'settings_mode') { const cur = await getUserMode(env, c); await sendOrEdit(t, c, mid, '🎯 حالت', modeMenu(cur)); return; }
   if (data.indexOf('mode_') === 0) {
     const m = data.replace('mode_', '');
     await setUserMode(env, c, m);
@@ -1952,32 +2052,31 @@ async function handleCallback(t, c, mid, data, env) {
     await sendOrEdit(t, c, mid, '✅ ' + cfg.icon + ' ' + cfg.label, modeMenu(m));
     return;
   }
-  if (data === 'settings_confluence') { const cur = await getConfluenceMode(env, c); await sendOrEdit(t, c, mid, '🧠 <b>هم‌گرایی</b>', confluenceModeMenu(cur)); return; }
+  if (data === 'settings_confluence') { const cur = await getConfluenceMode(env, c); await sendOrEdit(t, c, mid, '🧠', confluenceModeMenu(cur)); return; }
   if (data.indexOf('conf_') === 0) {
     const m = data.replace('conf_', '');
     await setConfluenceMode(env, c, m);
     await sendOrEdit(t, c, mid, '✅ ' + m, confluenceModeMenu(m));
     return;
   }
-  if (data === 'settings_tier') { await sendOrEdit(t, c, mid, '🎚️ <b>سطح مدل</b>', modelTierProviderMenu()); return; }
-  if (data === 'tier_prov_aiprime') { await env.KV.put('last_tier_prov:' + c, 'aiprime'); const cur = await getUserModelTier(env, c, 'aiprime'); await sendOrEdit(t, c, mid, '🅰️ ' + MODEL_TIERS.aiprime[cur].label, modelTierMenu(cur)); return; }
-  if (data === 'tier_prov_gapgpt') { await env.KV.put('last_tier_prov:' + c, 'gapgpt'); const cur = await getUserModelTier(env, c, 'gapgpt'); await sendOrEdit(t, c, mid, '💎 ' + MODEL_TIERS.gapgpt[cur].label, modelTierMenu(cur)); return; }
+  if (data === 'settings_tier') { await sendOrEdit(t, c, mid, '🎚️ مدل', modelTierProviderMenu()); return; }
+  if (data === 'tier_prov_aiprime') { await env.KV.put('last_tier_prov:' + c, 'aiprime'); const cur = await getUserModelTier(env, c, 'aiprime'); await sendOrEdit(t, c, mid, '🅰️', modelTierMenu(cur)); return; }
+  if (data === 'tier_prov_gapgpt') { await env.KV.put('last_tier_prov:' + c, 'gapgpt'); const cur = await getUserModelTier(env, c, 'gapgpt'); await sendOrEdit(t, c, mid, '💎', modelTierMenu(cur)); return; }
   if (data === 'tier_fast' || data === 'tier_premium' || data === 'tier_deepseek') {
     const nt = data.replace('tier_', '');
     const lp = await env.KV.get('last_tier_prov:' + c) || 'aiprime';
     await setUserModelTier(env, c, lp, nt);
-    const tl = nt === 'premium' ? '💎 قوی' : nt === 'deepseek' ? '🧠 DeepSeek' : '🚀 سریع';
-    await sendOrEdit(t, c, mid, '✅ ' + tl, modelTierMenu(nt));
+    await sendOrEdit(t, c, mid, '✅', modelTierMenu(nt));
     return;
   }
 }
 
 async function sendAccessDenied(t, c) {
-  await sendMessage(t, c, '🔒 <b>دسترسی محدود</b>\n\n<b>Chat ID:</b>\n<code>' + c + '</code>');
+  await sendMessage(t, c, '🔒 <code>' + c + '</code>');
 }
 
 // ============================================
-// MESSAGE HANDLER
+// MESSAGE
 // ============================================
 
 async function handleUpdate(update, env) {
@@ -2003,75 +2102,18 @@ async function handleUpdate(update, env) {
     if (st) {
       if (st.action === 'journal_add') {
         const d = st.data || {};
-        if (st.step === 'symbol') {
-          d.symbol = normalizeSymbol(text);
-          st.data = d; st.step = 'direction';
-          await setUserState(env, c, st);
-          await sendMessage(token, c, '📝 ۲/۵ جهت:', { inline_keyboard: [[{ text: '🟢 BUY', callback_data: 'wiz_dir_BUY' }, { text: '🔴 SELL', callback_data: 'wiz_dir_SELL' }]] });
-          return;
-        }
-        if (st.step === 'entry') {
-          const e = parseFloat(text.replace(/[^\d.\-]/g, ''));
-          if (isNaN(e)) { await sendMessage(token, c, '❌ عدد:'); return; }
-          d.entry = e; st.data = d; st.step = 'sl';
-          await setUserState(env, c, st);
-          await sendMessage(token, c, '📝 ۴/۵ SL:');
-          return;
-        }
-        if (st.step === 'sl') {
-          const s = parseFloat(text.replace(/[^\d.\-]/g, ''));
-          if (isNaN(s)) { await sendMessage(token, c, '❌ عدد:'); return; }
-          d.sl = s; st.data = d; st.step = 'tp';
-          await setUserState(env, c, st);
-          await sendMessage(token, c, '📝 ۵/۵ TP:');
-          return;
-        }
-        if (st.step === 'tp') {
-          const tp = parseFloat(text.replace(/[^\d.\-]/g, ''));
-          if (isNaN(tp)) { await sendMessage(token, c, '❌ عدد:'); return; }
-          d.tp = tp;
-          const j = await getJournal(env, c);
-          j.push({ id: j.length + 1, symbol: d.symbol, direction: d.direction, entry: d.entry, sl: d.sl, tp: d.tp, ts: Date.now(), result: null });
-          await saveJournal(env, c, j);
-          await clearUserState(env, c);
-          const rr = Math.abs(d.tp - d.entry) / Math.abs(d.entry - d.sl);
-          await sendMessage(token, c, '✅ #' + j.length + '\nR/R: 1:' + rr.toFixed(2), { inline_keyboard: [[{ text: '📓', callback_data: 'menu_journal' }]] });
-          return;
-        }
+        if (st.step === 'symbol') { d.symbol = normalizeSymbol(text); st.data = d; st.step = 'direction'; await setUserState(env, c, st); await sendMessage(token, c, '📝 ۲/۵:', { inline_keyboard: [[{ text: '🟢 BUY', callback_data: 'wiz_dir_BUY' }, { text: '🔴 SELL', callback_data: 'wiz_dir_SELL' }]] }); return; }
+        if (st.step === 'entry') { const e = parseFloat(text.replace(/[^\d.\-]/g, '')); if (isNaN(e)) { await sendMessage(token, c, '❌'); return; } d.entry = e; st.data = d; st.step = 'sl'; await setUserState(env, c, st); await sendMessage(token, c, '📝 ۴/۵ SL:'); return; }
+        if (st.step === 'sl') { const s = parseFloat(text.replace(/[^\d.\-]/g, '')); if (isNaN(s)) { await sendMessage(token, c, '❌'); return; } d.sl = s; st.data = d; st.step = 'tp'; await setUserState(env, c, st); await sendMessage(token, c, '📝 ۵/۵ TP:'); return; }
+        if (st.step === 'tp') { const tp = parseFloat(text.replace(/[^\d.\-]/g, '')); if (isNaN(tp)) { await sendMessage(token, c, '❌'); return; } d.tp = tp; const j = await getJournal(env, c); j.push({ id: j.length + 1, symbol: d.symbol, direction: d.direction, entry: d.entry, sl: d.sl, tp: d.tp, ts: Date.now(), result: null }); await saveJournal(env, c, j); await clearUserState(env, c); const rr = Math.abs(d.tp - d.entry) / Math.abs(d.entry - d.sl); await sendMessage(token, c, '✅ #' + j.length + ' R/R: 1:' + rr.toFixed(2), { inline_keyboard: [[{ text: '📓', callback_data: 'menu_journal' }]] }); return; }
       }
       if (st.action === 'watch_add') {
         const d = st.data || {};
-        if (st.step === 'symbol') {
-          d.symbol = normalizeSymbol(text); st.data = d; st.step = 'condition';
-          await setUserState(env, c, st);
-          await sendMessage(token, c, '🔔 ۲/۳ شرط:', { inline_keyboard: [[{ text: '⬆️', callback_data: 'wiz_cond_above' }, { text: '⬇️', callback_data: 'wiz_cond_below' }]] });
-          return;
-        }
-        if (st.step === 'price') {
-          const p = parseFloat(text.replace(/[^\d.\-]/g, ''));
-          if (isNaN(p)) { await sendMessage(token, c, '❌ عدد:'); return; }
-          d.price = p;
-          const l = await getWatchlist(env, c);
-          const nid = l.length ? Math.max(...l.map(w => w.id)) + 1 : 1;
-          l.push({ id: nid, symbol: d.symbol, condition: d.condition, price: d.price, ts: Date.now() });
-          await saveWatchlist(env, c, l);
-          await clearUserState(env, c);
-          await sendMessage(token, c, '✅ #' + nid, { inline_keyboard: [[{ text: '🔔', callback_data: 'menu_watch' }]] });
-          return;
-        }
+        if (st.step === 'symbol') { d.symbol = normalizeSymbol(text); st.data = d; st.step = 'condition'; await setUserState(env, c, st); await sendMessage(token, c, '🔔 ۲/۳:', { inline_keyboard: [[{ text: '⬆️', callback_data: 'wiz_cond_above' }, { text: '⬇️', callback_data: 'wiz_cond_below' }]] }); return; }
+        if (st.step === 'price') { const p = parseFloat(text.replace(/[^\d.\-]/g, '')); if (isNaN(p)) { await sendMessage(token, c, '❌'); return; } d.price = p; const l = await getWatchlist(env, c); const nid = l.length ? Math.max(...l.map(w => w.id)) + 1 : 1; l.push({ id: nid, symbol: d.symbol, condition: d.condition, price: d.price, ts: Date.now() }); await saveWatchlist(env, c, l); await clearUserState(env, c); await sendMessage(token, c, '✅ #' + nid, { inline_keyboard: [[{ text: '🔔', callback_data: 'menu_watch' }]] }); return; }
       }
-      if (st.action === 'custom_symbol') {
-        const s = normalizeSymbol(text);
-        await clearUserState(env, c);
-        await showTimeframeMenu(token, c, null, s.replace('/', ''));
-        return;
-      }
-      if (st.action === 'mon_add' && st.step === 'symbol_custom') {
-        const s = normalizeSymbol(text);
-        await setUserState(env, c, { action: 'mon_add', step: 'tf', data: { symbol: s } });
-        await sendMessage(token, c, '🤖 <b>مرحله ۲/۴ — تایم‌فریم:</b>\n\nنماد: ' + s, monitorTfMenu(s.replace('/', '')));
-        return;
-      }
+      if (st.action === 'custom_symbol') { const s = normalizeSymbol(text); await clearUserState(env, c); await showTimeframeMenu(token, c, null, s.replace('/', '')); return; }
+      if (st.action === 'mon_add' && st.step === 'symbol_custom') { const s = normalizeSymbol(text); await setUserState(env, c, { action: 'mon_add', step: 'tf', data: { symbol: s } }); await sendMessage(token, c, '🤖 ۲/۴ TF:', monitorTfMenu(s.replace('/', ''))); return; }
     }
 
     if (text === '/start' || text === '/menu') { await showMainMenu(token, c, null); return; }
@@ -2087,7 +2129,7 @@ async function handleUpdate(update, env) {
       return;
     }
 
-    await sendMessage(token, c, '❓ متوجه نشدم', mainMenu());
+    await sendMessage(token, c, '❓', mainMenu());
   }
 
   if (update.callback_query) {
@@ -2100,7 +2142,7 @@ async function handleUpdate(update, env) {
 }
 
 // ============================================
-// WATCHLIST CRON
+// WATCHLIST
 // ============================================
 
 async function checkWatchlist(env) {
@@ -2118,7 +2160,7 @@ async function checkWatchlist(env) {
           const price = await withTimeout(getCurrentPrice(w.symbol, env.TWELVE_KEY), 10000, 'Price');
           const hit = (w.condition === 'above' && price >= w.price) || (w.condition === 'below' && price <= w.price);
           if (hit) {
-            await sendMessage(token, cid, '🔔 <b>هشدار!</b>\n📌 ' + w.symbol + '\n💰 ' + price, { inline_keyboard: [[{ text: '📊 تحلیل', callback_data: 'sym_' + w.symbol.replace('/', '') }]] });
+            await sendMessage(token, cid, '🔔 <b>' + w.symbol + '</b> @ ' + price, { inline_keyboard: [[{ text: '📊', callback_data: 'sym_' + w.symbol.replace('/', '') }]] });
           } else rem.push(w);
         } catch (e) { rem.push(w); }
       }
@@ -2134,20 +2176,15 @@ async function checkWatchlist(env) {
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
-    if (url.pathname === '/' || url.pathname === '') return new Response('Everest Bot v4.1 — Entry Type + Auto Monitor', { status: 200 });
+    if (url.pathname === '/' || url.pathname === '') return new Response('Everest Bot v4.2 — Dual Eval', { status: 200 });
     if (request.method === 'POST' && url.pathname === '/webhook') {
-      try {
-        const update = await request.json();
-        ctx.waitUntil(handleUpdate(update, env));
-      } catch (e) { console.error('Webhook: ' + e.message); }
+      try { const update = await request.json(); ctx.waitUntil(handleUpdate(update, env)); }
+      catch (e) { console.error('Webhook: ' + e.message); }
       return new Response('OK', { status: 200 });
     }
     return new Response('Not found', { status: 404 });
   },
   async scheduled(event, env, ctx) {
-    ctx.waitUntil(Promise.all([
-      checkWatchlist(env),
-      checkAllMonitors(env)
-    ]));
+    ctx.waitUntil(Promise.all([checkWatchlist(env), checkAllMonitors(env)]));
   }
 };
