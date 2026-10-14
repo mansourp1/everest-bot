@@ -1,8 +1,9 @@
 // ============================================
-// EVEREST BOT v7.5
+// EVEREST BOT v7.6
 // + Auto Journal (silent, zero extra AI tokens)
 // + Daily Report (auto at 23:30 Tehran)
 // + Dual Eval + Entry Type + KZ Mode
+// + FIXED MONITOR SIGNAL GENERATION
 // ============================================
 
 const CONF_KEYS = ['structure', 'smc', 'ict', 'candle', 'liquidity', 'riskReward'];
@@ -42,14 +43,15 @@ const TF_MINUTES = { '1min':1,'3min':3,'5min':5,'15min':15,'1h':60,'4h':240 };
 const TF_LABELS = { '1min':'1 دقیقه','3min':'3 دقیقه','5min':'5 دقیقه','15min':'15 دقیقه','1h':'1 ساعت','4h':'4 ساعت' };
 const TD_INTERVALS = { '1min':'1min','3min':'5min','5min':'5min','15min':'15min','1h':'1h','4h':'4h' };
 
+// ✅ FIX #1: آستانه‌های confluence واقع‌بینانه‌تر
 const MODE_CONFIG = {
-  scalping: { label: 'اسکلپی', icon: '⚡', color: '#fbbf24', minConfidence: 70, minRR: 2.0, minConfluence: 7, allowedTFs: ['1min','3min','5min','15min'] },
-  medium: { label: 'متوسط', icon: '⚖️', color: '#6ea8fe', minConfidence: 65, minRR: 1.5, minConfluence: 6, allowedTFs: ['5min','15min','1h','4h'] },
-  confident: { label: 'مطمئن', icon: '🛡️', color: '#4ade80', minConfidence: 75, minRR: 2.5, minConfluence: 8, allowedTFs: ['15min','1h','4h'] }
+  scalping:  { label: 'اسکلپی', icon: '⚡', color: '#fbbf24', minConfidence: 70, minRR: 2.0, minConfluence: 5.0, allowedTFs: ['1min','3min','5min','15min'] },
+  medium:    { label: 'متوسط',  icon: '⚖️', color: '#6ea8fe', minConfidence: 65, minRR: 1.5, minConfluence: 4.5, allowedTFs: ['5min','15min','1h','4h'] },
+  confident: { label: 'مطمئن',  icon: '🛡️', color: '#4ade80', minConfidence: 75, minRR: 2.5, minConfluence: 6.0, allowedTFs: ['15min','1h','4h'] }
 };
 
 function getModelTierConfig(provider, tier, hasImage) {
-  const cfg = MODEL_TIERS[provider]?.[tier];
+  var cfg = MODEL_TIERS[provider] && MODEL_TIERS[provider][tier];
   if (!cfg) return { model: hasImage ? 'gpt-4o' : 'gpt-4o-mini', label: '' };
   return { model: hasImage ? cfg.vision : cfg.text, label: cfg.label };
 }
@@ -436,43 +438,57 @@ function extractScores(text) {
   }
   return null;
 }
+
+// ✅ FIX #2: نرمال‌سازی خروجی به بازه 4-9 تا با minConfluence جدید سازگار باشه
 function calculateConfluenceAuto(levels, rawText) {
   var t = String(rawText || '');
   var tClean = t.replace(/(?:FVG|OB|BOS|CHOCH|Order\s*Block|Sweep)\s*(?:وجود\s*ندارد|نیست|no|not|absent)/gi, '');
   var s = {};
-  var st = 50;
+  var st = 55;
   if (/\bBOS\b/i.test(tClean)) st += 12;
   if (/CHOCH|CHoCH/i.test(tClean)) st += 10;
   if (/Retest|پولبک/i.test(tClean)) st += 8;
   if (/TRENDING_UP|TRENDING_DOWN/i.test(tClean)) st += 10;
   if (/RANGING|رنج/i.test(tClean)) st -= 15;
   s.structure = Math.max(0, Math.min(100, st));
-  var smc = 50;
+
+  var smc = 55;
   if (/Order\s*Block|\bOB\b/i.test(tClean)) smc += 18;
   if (/Premium|Discount/i.test(tClean)) smc += 8;
   s.smc = Math.max(0, Math.min(100, smc));
-  var ict = 50;
+
+  var ict = 55;
   if (/FVG|Fair\s*Value\s*Gap/i.test(tClean)) ict += 22;
   if (/Imbalance/i.test(tClean)) ict += 12;
   s.ict = Math.max(0, Math.min(100, ict));
-  var cd = 50;
+
+  var cd = 55;
   if (/Engulf|پوششی/i.test(tClean)) cd += 18;
   if (/Pin\s*Bar/i.test(tClean)) cd += 15;
   s.candle = Math.max(0, Math.min(100, cd));
-  var lq = 50;
+
+  var lq = 55;
   if (/Liquidity\s*Sweep|Sweep/i.test(tClean)) lq += 20;
   if (/نقدینگی/i.test(tClean)) lq += 10;
   s.liquidity = Math.max(0, Math.min(100, lq));
-  var rr = 0;
+
+  var rr = 50;
   if (levels.entry && levels.sl && levels.tp1) {
     var r = Math.abs(levels.entry - levels.sl);
     var rw = Math.abs(levels.tp1 - levels.entry);
-    rr = Math.min(100, Math.round((r > 0 ? rw / r : 0) * 33));
+    var rrRatio = r > 0 ? rw / r : 0;
+    // مپ R/R: 1→50, 2→70, 3→85, 4+→95
+    rr = Math.min(100, Math.round(Math.min(rrRatio, 4) * 25 + 25));
   }
   s.riskReward = rr;
+
   var avg = (s.structure + s.smc + s.ict + s.candle + s.liquidity + s.riskReward) / 6;
-  return { scores: s, confluence: Math.round((avg / 10) * 10) / 10, auto: true };
+  // ✅ نرمال‌سازی: بازه 40-90 → 4-9
+  var normalized = 4 + ((avg - 40) / 50) * 5;
+  var confluence = Math.max(3, Math.min(9, Math.round(normalized * 10) / 10));
+  return { scores: s, confluence: confluence, auto: true };
 }
+
 async function resolveConfluence(env, chatId, levels, rawText) {
   var mode = await getConfluenceMode(env, chatId);
   var result = { mode: mode, scores: null, confluence: null, auto: false, warning: null };
@@ -879,7 +895,7 @@ function directionEmoji(d) {
 }
 
 // ============================================
-// ⭐ AUTO JOURNAL ENGINE
+// AUTO JOURNAL
 // ============================================
 
 async function autoJournalAdd(env, chatId, levels, provider, symbol, tf, currentPrice) {
@@ -892,8 +908,7 @@ async function autoJournalAdd(env, chatId, levels, provider, symbol, tf, current
     var tehran = new Date(Date.now() + 3.5 * 3600 * 1000);
     var day = tehran.toISOString().slice(0, 10);
     a.push({
-      id: id,
-      t: Date.now(),
+      id: id, t: Date.now(),
       sym: symbol, tf: tf,
       dir: levels.direction,
       entry: levels.entry, sl: levels.sl,
@@ -974,16 +989,12 @@ async function sendDailyReport(env, chatId, dayKey) {
     var closed = wins.length + losses.length;
     var wr = closed ? Math.round(wins.length / closed * 100) : 0;
     var rSum = 0;
-    daySignals.forEach(function(s) {
-      if (s.status === 'WIN') rSum += (s.rr || 0);
-      else if (s.status === 'LOSS') rSum -= 1;
-    });
+    daySignals.forEach(function(s) { if (s.status === 'WIN') rSum += (s.rr || 0); else if (s.status === 'LOSS') rSum -= 1; });
     var bothOK = daySignals.filter(function(s) { return s.dual && s.dual.h && s.dual.e; }).length;
     var onlyEasy = daySignals.filter(function(s) { return s.dual && s.dual.e && !s.dual.h; }).length;
     var onlyHard = daySignals.filter(function(s) { return s.dual && s.dual.h && !s.dual.e; }).length;
     var wrIcon = wr >= 60 ? '🟢' : wr >= 45 ? '🟡' : '🔴';
     var rIcon = rSum >= 0 ? '📈' : '📉';
-
     var txt = '📊 <b>گزارش روزانه — ' + dayKey + '</b>\n\n';
     txt += '━━━━━━━━━━━━━━━\n';
     txt += '<b>📈 کل سیگنال:</b> ' + daySignals.length + '\n';
@@ -1267,7 +1278,6 @@ function buildCaption(levels, symbol, tf, provider, conf, currentPrice) {
   var symIcon = isCrypto ? '🪙' : '💱';
   var c = '<b>📊 تحلیل</b>\n\n<b>نماد:</b> ' + symIcon + ' ' + esc(symbol) + '\n<b>TF:</b> ' + timeframeLabel(tf) + '\n';
   if (provider) c += '<b>سرویس:</b> ' + esc(provider) + '\n';
-  var st = getStrictness();
   c += '<b>وضعیت:</b> ' + getKZBadge(symbol) + '\n\n';
   if (levels.dualEval) c += buildDualEvalBlock(levels);
   var d = levels.direction || 'WAIT';
@@ -1340,7 +1350,7 @@ function buildImageCaption(levels, provider, conf, currentPrice) {
 // ============================================
 
 async function showMainMenu(token, chatId, mid) {
-  await sendOrEdit(token, chatId, mid, '🎯 <b>Everest v7.5</b>\n\n📊 Auto Journal + گزارش شبانه\n🌐 KZ Mode · 🪙 کریپتو · 🎯 Entry Type\n\nاز منو انتخاب کنید:', mainMenu());
+  await sendOrEdit(token, chatId, mid, '🎯 <b>Everest v7.6</b>\n\n📊 Auto Journal + گزارش شبانه\n🌐 KZ Mode · 🪙 کریپتو · 🎯 Entry Type\n✅ مانیتورینگ اصلاح‌شده\n\nاز منو انتخاب کنید:', mainMenu());
 }
 async function showSymbolMenu(token, chatId, mid) {
   await sendOrEdit(token, chatId, mid, '🎯 <b>نماد:</b>\n\n💱 فارکس · 🪙 کریپتو', symbolMenu());
@@ -1430,7 +1440,7 @@ async function showMonitorView(token, chatId, mid, env, idx) {
   if (!list[idx]) { await sendOrEdit(token, chatId, mid, '❌', { inline_keyboard: [[{ text: '◀️', callback_data: 'mon_list' }]] }); return; }
   var m = list[idx];
   var isCrypto = isCryptoSymbol(m.symbol);
-  var kzMode = await getKzMode(env, chatId);
+  var kzMode = m.kzMode || await getKzMode(env, chatId);
   var strict = m.strictness || await getStrictness(env, chatId);
   var mode = m.mode || await getUserMode(env, chatId);
   var cfg = MODE_CONFIG[mode];
@@ -1508,7 +1518,7 @@ async function showStatus(token, chatId, mid, env) {
 }
 
 async function showHelp(token, chatId, mid) {
-  var t = '📖 <b>راهنما v7.5</b>\n\n' +
+  var t = '📖 <b>راهنما v7.6</b>\n\n' +
     '📊 <b>Auto Journal:</b>\nهر سیگنال تأییدشده خودکار ثبت می‌شه. پایان شب ۲۳:۳۰ گزارش روزانه با وین ریت و مجموع R می‌آد.\n\n' +
     '🎚️ <b>نوع تحلیل:</b>\n🔴 سختگیر · 🟢 آسان · ⚖️ هر دو\n\n' +
     '🆕 <b>Entry Type:</b>\n🔵 LIMIT · ⚡ MARKET · 🟡 STOP\n\n' +
@@ -1522,8 +1532,12 @@ async function showMonitorHelp(token, chatId, mid) {
   var t = '📖 <b>راهنمای مانیتور</b>\n\n' +
     '🤖 هر کندل بسته، بازار تحلیل می‌شه و در صورت ستاپ معتبر، سیگنال با <b>نوع ورود دقیق</b> می‌آد.\n\n' +
     '📓 <b>Auto Journal:</b>\nسیگنال‌ها خودکار ثبت می‌شن و با هر بررسی، وضعیت WIN/LOSS آپدیت می‌شه.\n\n' +
-    '🌙 <b>گزارش شبانه:</b>\nساعت ۲۳:۳۰ تهران، آمار کامل روز (وین ریت، R، تفکیک سخت/آسان) فرستاده می‌شه.\n\n' +
-    '⚡ <b>مصرف:</b>\nهیچ تماس AI اضافه نمی‌شه — از همون تحلیل مانیتور استفاده می‌شه.';
+    '🌙 <b>گزارش شبانه:</b>\nساعت ۲۳:۳۰ تهران، آمار کامل روز فرستاده می‌شه.\n\n' +
+    '🎯 <b>آستانه‌های فعلی:</b>\n' +
+    '• اسکلپی: CF ≥ 5.0\n' +
+    '• متوسط: CF ≥ 4.5\n' +
+    '• مطمئن: CF ≥ 6.0\n\n' +
+    '⚡ <b>مصرف:</b>\nهیچ تماس AI اضافه نمی‌شه.';
   await sendOrEdit(token, chatId, mid, t, { inline_keyboard: [[{ text: '◀️', callback_data: 'menu_monitor' }]] });
 }
 
@@ -1736,14 +1750,16 @@ async function finishMonitorSetup(token, chatId, mid, symbol, tf, ai, dp, env) {
   var aiLabel = ai === 'auto' ? '🤖 خودکار' : (PROVIDER_NAMES[ai] || ai);
   var dpLabel = { auto: '🔄 خودکار', binance: '🟡 Binance', twelve: '📊 Twelve' }[dp] || dp;
   var stCfg = STRICTNESS_MODES[strict];
+  var cfg = MODE_CONFIG[mode];
   var msg = '✅ <b>مانیتور فعال شد</b>\n\n' +
     '<b>نماد:</b> ' + (isCrypto ? '🪙' : '💱') + ' ' + symbol + '\n' +
     '<b>TF:</b> ' + timeframeLabel(tf) + '\n' +
     '<b>AI:</b> ' + aiLabel + '\n' +
     '<b>داده:</b> ' + dpLabel + '\n' +
-    '<b>حالت:</b> ' + MODE_CONFIG[mode].icon + ' ' + MODE_CONFIG[mode].label + '\n' +
+    '<b>حالت:</b> ' + cfg.icon + ' ' + cfg.label + '\n' +
     '<b>نوع:</b> ' + stCfg.icon + ' ' + stCfg.label + '\n' +
     '<b>KZ:</b> ' + KZ_MODES[kzMode].icon + ' ' + KZ_MODES[kzMode].label + '\n\n' +
+    '🎯 آستانه CF: <b>' + cfg.minConfluence + '</b>\n' +
     '📓 سیگنال‌ها خودکار در ژورنال ثبت می‌شن\n🌙 پایان شب گزارش روزانه می‌آد';
   await sendOrEdit(token, chatId, mid, msg, { inline_keyboard: [
     [{ text: '📋 لیست', callback_data: 'mon_list' }],
@@ -1752,7 +1768,7 @@ async function finishMonitorSetup(token, chatId, mid, symbol, tf, ai, dp, env) {
 }
 
 // ============================================
-// ⭐ CRON MONITOR CHECK
+// ✅ CRON MONITOR CHECK — FIXED
 // ============================================
 
 async function checkAllMonitors(env) {
@@ -1761,7 +1777,6 @@ async function checkAllMonitors(env) {
     var list = await env.KV.list({ prefix: 'monitors:' });
     var now = Date.now();
 
-    // ⭐ چک زمان برای گزارش شبانه
     var tehran = new Date(Date.now() + 3.5 * 3600 * 1000);
     var tehranH = tehran.getUTCHours();
     var tehranM = tehran.getUTCMinutes();
@@ -1774,10 +1789,10 @@ async function checkAllMonitors(env) {
       var monitors = await env.KV.get(key, 'json') || [];
       if (!monitors.length) continue;
 
-      var strict = await getStrictness(env, chatId);
-      var mode = await getUserMode(env, chatId);
-      var kzMode = await getKzMode(env, chatId);
-      var cfg = MODE_CONFIG[mode];
+      // ✅ FIX #3: fallback فقط اگه مانیتور تنظیمات خودش رو نداره
+      var defaultStrict = await getStrictness(env, chatId);
+      var defaultMode = await getUserMode(env, chatId);
+      var defaultKzMode = await getKzMode(env, chatId);
 
       var changed = false;
       for (var i = 0; i < monitors.length; i++) {
@@ -1786,6 +1801,12 @@ async function checkAllMonitors(env) {
 
         var tfMs = (TF_MINUTES[m.timeframe] || 5) * 60 * 1000;
         if (m.lastCheckAt && (now - m.lastCheckAt) < tfMs * 0.9) continue;
+
+        // ✅ از تنظیمات خود مانیتور استفاده کن
+        var strict = m.strictness || defaultStrict;
+        var mode = m.mode || defaultMode;
+        var kzMode = m.kzMode || defaultKzMode;
+        var cfg = MODE_CONFIG[mode];
 
         var kzCheck = shouldCheckNow(m.symbol, kzMode);
         if (!kzCheck.ok) {
@@ -1811,7 +1832,6 @@ async function checkAllMonitors(env) {
 
       if (changed) await env.KV.put(key, JSON.stringify(monitors));
 
-      // ⭐ گزارش شبانه
       if (shouldReport) {
         var reportKey = 'dailyreport:' + chatId + ':' + dayKey;
         var already = await env.KV.get(reportKey);
@@ -1836,8 +1856,10 @@ async function runMonitorForUser(env, token, chatId, m, strict, mode, cfg) {
   if (!klines || klines.length < 30) return;
   klines = dropForming(klines, tf);
 
-  // ⭐ Resolve open signals از همین klines (بدون fetch اضافه)
-  await resolveJournalForChat(env, chatId, klines, symbol, tf);
+  // ✅ FIX #5: resolve journal در try/catch جدا تا مانع اصلی نشه
+  try {
+    await resolveJournalForChat(env, chatId, klines, symbol, tf);
+  } catch (e) { console.error('resolveJournal in monitor: ' + e.message); }
 
   var currentPrice = klines[klines.length - 1].close;
   var atr = calcATR(klines, 14);
@@ -1875,9 +1897,13 @@ async function runMonitorForUser(env, token, chatId, m, strict, mode, cfg) {
 
   var ok = isSignalConfirmed(levels, confluence, strict, cfg);
 
+  // ✅ FIX #4: پنجره duplicate کمتر شد (2x به‌جای 6x)
   var tol = (atr || 0) * 0.5;
   var p = m.lastSignal;
-  var dup = ok && p && p.dir === levels.direction && Math.abs(p.entry - levels.entry) <= tol && (Date.now() - p.t) < (TF_MINUTES[tf] || 5) * 60000 * 6;
+  var dup = ok && p && p.dir === levels.direction && Math.abs(p.entry - levels.entry) <= tol && (Date.now() - p.t) < (TF_MINUTES[tf] || 5) * 60000 * 2;
+
+  // ✅ لاگ دیباگ کامل
+  console.log('[MON ' + chatId + '] ' + symbol + ' ' + tf + ' | dir=' + levels.direction + ' conf=' + levels.confidence + ' rr=' + (levels.rr || '—') + ' cf=' + (confluence && confluence.confluence != null ? confluence.confluence : '—') + ' strict=' + strict + ' minCF=' + cfg.minConfluence + ' | ' + (ok ? (dup ? 'DUP' : 'SIGNAL ✅') : 'skip'));
 
   if (ok && !dup) {
     m.lastSignal = { dir: levels.direction, entry: levels.entry, t: Date.now() };
@@ -1886,29 +1912,54 @@ async function runMonitorForUser(env, token, chatId, m, strict, mode, cfg) {
     if (kzActive) m.kzSignalCount = (m.kzSignalCount || 0) + 1;
     m.lastSignalKey = levels.direction + '_' + Math.round(levels.entry * 10) / 10;
 
-    // ⭐ AUTO JOURNAL
     await autoJournalAdd(env, chatId, levels, result.provider, symbol, tf, currentPrice);
-
     await sendMonitorSignal(token, chatId, levels, confluence, result, currentPrice, symbol, tf);
   }
 }
 
+// ✅ FIX #1 + #4: isSignalConfirmed با تعدیل کامل برای easy/both
 function isSignalConfirmed(levels, confluence, strict, cfg) {
   if (levels.direction !== 'BUY' && levels.direction !== 'SELL') return false;
-  if (levels.confidence == null || levels.confidence < cfg.minConfidence) return false;
   if (!levels.entry || !levels.sl) return false;
+
+  // آستانه‌ها رو متناسب با strict تنظیم کن
+  var minConf = cfg.minConfidence;
+  var minRR = cfg.minRR;
+  var minCF = cfg.minConfluence;
+
+  if (strict === 'easy') {
+    minConf = Math.max(55, minConf - 5);
+    minRR = Math.max(1.0, minRR * 0.7);
+    minCF = Math.max(3.5, minCF - 2);
+  }
+
+  // چک اطمینان
+  if (levels.confidence == null || levels.confidence < minConf) return false;
+
+  // چک R/R
+  if (levels.rr) {
+    var rr = parseFloat(String(levels.rr).replace('1:', ''));
+    if (!isNaN(rr) && rr < minRR) return false;
+  } else if (strict === 'hard') {
+    return false;
+  }
+
+  // حالت دوگانه
   if (strict === 'both') {
     if (!levels.dualEval) return false;
-    if (!levels.dualEval.hard.approved && !levels.dualEval.easy.approved) return false;
-    if (confluence && confluence.confluence != null && confluence.confluence < cfg.minConfluence) return false;
+    if (!levels.dualEval.easy.approved && !levels.dualEval.hard.approved) return false;
+    var isEasyOnly = levels.dualEval.easy.approved && !levels.dualEval.hard.approved;
+    var cfThreshold = isEasyOnly ? Math.max(3.0, minCF - 2.5) : minCF;
+    if (confluence && confluence.confluence != null && confluence.confluence < cfThreshold) return false;
     return true;
   }
-  if (strict === 'hard') {
-    if (!levels.tp1) return false;
-    var rr = parseFloat((levels.rr || '').replace('1:', ''));
-    if (isNaN(rr) || rr < cfg.minRR) return false;
-    if (confluence && confluence.confluence != null && confluence.confluence < cfg.minConfluence) return false;
-  }
+
+  // hard: TP1 الزامی
+  if (strict === 'hard' && !levels.tp1) return false;
+
+  // چک confluence
+  if (confluence && confluence.confluence != null && confluence.confluence < minCF) return false;
+
   return true;
 }
 
@@ -1925,7 +1976,6 @@ async function sendMonitorSignal(token, chatId, levels, confluence, result, curr
   caption += '<b>TF:</b> ' + timeframeLabel(tf) + '\n';
   caption += '<b>وضعیت:</b> ' + kzBadge + '\n';
 
-  // ⭐ Dual Eval
   if (levels.dualEval) caption += buildDualEvalBlock(levels);
 
   caption += '\n<b>جهت:</b> ' + dirIcon + ' ' + (d === 'BUY' ? 'خرید' : 'فروش') + '\n';
@@ -2090,7 +2140,6 @@ async function handleCallback(token, chatId, mid, data, env) {
     return;
   }
 
-  // Symbols
   if (data === 'wizard_cancel') { await clearUserState(env, chatId); await sendOrEdit(token, chatId, mid, '❌', { inline_keyboard: [[{ text: '🏠', callback_data: 'menu_main' }]] }); return; }
   if (data === 'sym_custom') { await setUserState(env, chatId, { action: 'custom_symbol', step: 'input', data: {} }); await sendOrEdit(token, chatId, mid, '✏️ نماد:', { inline_keyboard: [[{ text: '❌', callback_data: 'wizard_cancel' }]] }); return; }
   if (data.indexOf('sym_') === 0) { await showTimeframeMenu(token, chatId, mid, data.replace('sym_', '')); return; }
@@ -2116,13 +2165,11 @@ async function handleCallback(token, chatId, mid, data, env) {
     return;
   }
 
-  // Journal
   if (data === 'journal_list') { await showJournalList(token, chatId, env); return; }
   if (data === 'journal_stats') { await showJournalStats(token, chatId, env); return; }
   if (data === 'journal_daily') { await showJournalDaily(token, chatId, env); return; }
   if (data === 'journal_clear') { await saveJournal(env, chatId, []); await sendOrEdit(token, chatId, mid, '🗑️', { inline_keyboard: [[{ text: '◀️', callback_data: 'menu_journal' }]] }); return; }
 
-  // Watch
   if (data === 'watch_add') { await setUserState(env, chatId, { action: 'watch_add', step: 'symbol', data: {} }); await sendOrEdit(token, chatId, mid, '🔔 ۱/۳ نماد:', { inline_keyboard: [[{ text: '❌', callback_data: 'wizard_cancel' }]] }); return; }
   if (data === 'watch_list') { await showWatchList(token, chatId, env); return; }
   if (data === 'watch_clear') { await saveWatchlist(env, chatId, []); await sendOrEdit(token, chatId, mid, '🗑️', { inline_keyboard: [[{ text: '◀️', callback_data: 'menu_watch' }]] }); return; }
@@ -2135,7 +2182,6 @@ async function handleCallback(token, chatId, mid, data, env) {
     return;
   }
 
-  // Settings
   if (data === 'settings_strict') {
     var curSt = await getStrictness(env, chatId);
     await sendOrEdit(token, chatId, mid, '🎚️ <b>نوع تحلیل</b>\n\n🔴 سختگیر · 🟢 آسان · ⚖️ هر دو', strictnessMenu(curSt));
@@ -2182,10 +2228,6 @@ async function handleCallback(token, chatId, mid, data, env) {
     return;
   }
 }
-
-// ============================================
-// ACCESS DENIED
-// ============================================
 
 async function sendAccessDenied(token, chatId) {
   await sendMessage(token, chatId, '🔒 <b>دسترسی محدود</b>\n\n<b>Chat ID:</b>\n<code>' + chatId + '</code>');
@@ -2283,7 +2325,7 @@ async function handleUpdate(update, env) {
 export default {
   async fetch(request, env, ctx) {
     var url = new URL(request.url);
-    if (url.pathname === '/' || url.pathname === '') return new Response('Everest Bot v7.5', { status: 200 });
+    if (url.pathname === '/' || url.pathname === '') return new Response('Everest Bot v7.6 — Fixed Monitor', { status: 200 });
     if (request.method === 'POST' && url.pathname === '/webhook') {
       try {
         var update = await request.json();
