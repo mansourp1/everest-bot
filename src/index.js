@@ -577,7 +577,7 @@ async function resolveConfluence(env, chatId, levels, rawText) {
 async function callGeminiText(env, prompt, imgB64, imgMime) {
   var keys = getGeminiKeys(env);
   if (!keys.length) throw new Error('no key');
-  var models = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash'];
+  var models = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-3.5-flash'];
   var parts = [{ text: prompt }];
   if (imgB64) parts.push({ inline_data: { mime_type: imgMime, data: imgB64 } });
   var last = '';
