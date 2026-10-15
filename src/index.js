@@ -21,10 +21,17 @@ const MODEL_TIERS = {
     deepseek: { label: '🧠 DeepSeek', text: 'deepseek-v4.1-flash', vision: 'deepseek-v4.1-flash' }
   },
   gapgpt: {
-    fast: { label: '🚀 سریع', text: 'gpt-4o-mini', vision: 'gemini-2.0-flash' },
+    fast: { label: '🚀 سریع', text: 'gpt-4o-mini', vision: 'gpt-4o' },
     premium: { label: '💎 قوی', text: 'claude-sonnet-5', vision: 'claude-sonnet-5' },
     deepseek: { label: '🧠 DeepSeek', text: 'deepseek-v4.1-flash', vision: 'deepseek-v4.1-flash' }
   }
+};
+
+// ⭐ جدید: لیست مدل‌های Vision به ترتیب اولویت برای هر provider
+const VISION_MODELS_BY_PROVIDER = {
+  gemini: ['gemini-2.5-flash', 'gemini-2.0-flash'],
+  aiprime: ['gpt-4o', 'gpt-4o-mini'],
+  gapgpt: ['gpt-4o', 'gpt-4o-mini']
 };
 
 const STRICTNESS_MODES = {
@@ -593,17 +600,24 @@ async function callCustomVisionText(env, prompt, imgB64, imgMime) {
 
 async function callGeminiText(env, prompt, imgB64, imgMime) {
   var keys = getGeminiKeys(env);
-  if (!keys.length) throw new Error('no key');
-  var models = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash'];
+  if (!keys.length) throw new Error('no Gemini key');
+  
+  // ⭐ فقط مدل‌های فعال (gemini-1.5 حذف شد)
+  var models = ['gemini-2.5-flash', 'gemini-2.0-flash'];
   var parts = [{ text: prompt }];
   if (imgB64) parts.push({ inline_data: { mime_type: imgMime, data: imgB64 } });
+  
   var last = '';
   for (var ki = 0; ki < keys.length; ki++) {
     for (var mi = 0; mi < models.length; mi++) {
       try {
         var r = await fetch('https://generativelanguage.googleapis.com/v1beta/models/' + models[mi] + ':generateContent', {
-          method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': keys[ki] },
-          body: JSON.stringify({ contents: [{ parts: parts }], generationConfig: { temperature: 0.15, topP: 0.9, maxOutputTokens: 12000 } })
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-goog-api-key': keys[ki] },
+          body: JSON.stringify({
+            contents: [{ parts: parts }],
+            generationConfig: { temperature: 0.15, topP: 0.9, maxOutputTokens: 12000 }
+          })
         });
         var d = await r.json();
         if (r.ok) {
@@ -615,7 +629,10 @@ async function callGeminiText(env, prompt, imgB64, imgMime) {
               if (pt.text && !pt.thought) t = (t || '') + pt.text;
             }
           }
-          if (t) return t;
+          if (t) {
+            console.log('[Gemini] ✅ Success with: ' + models[mi]);
+            return t;
+          }
         }
         last = d && d.error ? d.error.message : 'HTTP ' + r.status;
         if (r.status === 404 || /not found/i.test(last)) continue;
@@ -641,17 +658,82 @@ async function callAIPrimeText(env, prompt, imgB64, imgMime, chatId) {
 }
 
 async function callGapGPTText(env, prompt, imgB64, imgMime, chatId) {
-  var key = env.GAPGPT_KEY; if (!key) throw new Error('no key');
-  var tier = chatId ? await getUserModelTier(env, chatId, 'gapgpt') : 'fast';
-  var cfg = getModelTierConfig('gapgpt', tier, !!imgB64);
-  var c = imgB64 ? [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: 'data:' + imgMime + ';base64,' + imgB64 } }] : prompt;
-  var r = await fetch('https://api.gapgpt.app/v1/chat/completions', {
-    method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + key },
-    body: JSON.stringify({ model: cfg.model, messages: [{ role: 'user', content: c }], temperature: 0.15, max_tokens: 10000 })
-  });
-  var d = await r.json();
-  if (!r.ok) throw new Error(d && d.error ? d.error.message : 'HTTP ' + r.status);
-  return d && d.choices && d.choices[0] && d.choices[0].message ? d.choices[0].message.content : '';
+  var key = env.GAPGPT_KEY; 
+  if (!key) throw new Error('no GAPGPT_KEY');
+  
+  var hasImage = !!imgB64;
+  
+  // ساخت content
+  var content = hasImage
+    ? [
+        { type: 'text', text: prompt },
+        { type: 'image_url', image_url: { url: 'data:' + imgMime + ';base64,' + imgB64 } }
+      ]
+    : prompt;
+  
+  // انتخاب مدل: برای تصویر از لیست vision استفاده کن، برای متن از tier
+  var modelsToTry;
+  if (hasImage) {
+    modelsToTry = VISION_MODELS_BY_PROVIDER.gapgpt;  // ['gpt-4o', 'gpt-4o-mini']
+  } else {
+    var tier = chatId ? await getUserModelTier(env, chatId, 'gapgpt') : 'fast';
+    var cfg = getModelTierConfig('gapgpt', tier, false);
+    modelsToTry = [cfg.model];  // ['gpt-4o-mini'] برای متن
+  }
+  
+  var lastErr = '';
+  for (var mi = 0; mi < modelsToTry.length; mi++) {
+    var model = modelsToTry[mi];
+    try {
+      var r = await fetch('https://api.gapgpt.app/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer ' + key
+        },
+        body: JSON.stringify({
+          model: model,
+          messages: [{ role: 'user', content: content }],
+          temperature: 0.15,
+          max_tokens: 10000
+        })
+      });
+      var d = await r.json();
+      
+      if (r.ok) {
+        var t = d && d.choices && d.choices[0] && d.choices[0].message
+          ? d.choices[0].message.content
+          : null;
+        if (t && t.length > 10) {
+          console.log('[GapGPT] ✅ Success with: ' + model + (hasImage ? ' (vision)' : ' (text)'));
+          return t;
+        }
+        lastErr = model + ': empty response';
+        continue;
+      }
+      
+      // خطا
+      var errMsg = d && d.error ? (d.error.message || JSON.stringify(d.error)) : 'HTTP ' + r.status;
+      lastErr = model + ': ' + errMsg;
+      
+      if (/vision|not support|does not support|model.*not found|invalid.*model/i.test(errMsg)) {
+        console.log('[GapGPT] ⏭️ Skipping ' + model + ' — ' + errMsg);
+        continue;
+      }
+      
+      if (r.status === 401 || r.status === 403) {
+        throw new Error('GapGPT auth: ' + errMsg);
+      }
+      
+      continue;
+      
+    } catch (e) {
+      lastErr = model + ': ' + e.message;
+      continue;
+    }
+  }
+  
+  throw new Error('GapGPT (همه مدل‌ها fail): ' + lastErr);
 }
 
 async function callGroqText(env, prompt, imgB64, imgMime) {
@@ -837,35 +919,48 @@ var PROVIDER_FUNCS = {
 async function callWithFallback(env, prompt, imgB64, imgMime, chatId, forcedProvider) {
   var hasImg = !!imgB64;
   var providers;
-
+  
+  // اگه provider صریح انتخاب شده
   if (forcedProvider && forcedProvider !== 'auto' && PROVIDER_FUNCS[forcedProvider] &&
       (forcedProvider === 'gemini' ? getGeminiKeys(env).length > 0 : getKey(env, forcedProvider))) {
     providers = [forcedProvider];
-  } else if (hasImg && isCustomVisionReady(env)) {
-    // ✅ NEW: تصویر → Custom Vision اول
-    providers = ['customvision'];
+  }
+  // اگه تصویر داریم → Gemini اول، بعد GapGPT
+  else if (hasImg) {
+    providers = [];
+    // ۱. Gemini
+    if (getGeminiKeys(env).length > 0) providers.push('gemini');
+    // ۲. GapGPT
+    if (env.GAPGPT_KEY) providers.push('gapgpt');
+    // ۳. AIPrime (اگه کلید داره)
+    if (env.AIPRIME_KEY) providers.push('aiprime');
+    // ۴. بقیه
     if (!VISION_STRICT) {
-      var others = getAvailableProviders(env).filter(function(p) { return p !== 'customvision'; });
-      var pri2 = { gemini:1, aiprime:2, gapgpt:3, groq:4, openrouter:5, mistral:6, together:7, nvidia:8, huggingface:9, github:10, cloudflare:11, avalai:12, metis:13, onexai:14, llm7:15 };
-      others.sort(function(a, b) { return (pri2[a] || 50) - (pri2[b] || 50); });
+      var others = getAvailableProviders(env).filter(function(p) {
+        return ['gemini', 'gapgpt', 'aiprime', 'customvision'].indexOf(p) === -1;
+      });
+      var pri = { groq: 1, openrouter: 2, mistral: 3, together: 4, nvidia: 5, huggingface: 6, github: 7, cloudflare: 8, avalai: 9, metis: 10, onexai: 11, llm7: 12 };
+      others.sort(function(a, b) { return (pri[a] || 50) - (pri[b] || 50); });
       providers = providers.concat(others);
     }
-  } else {
-    providers = getAvailableProviders(env);
-    var pri = hasImg
-      ? { customvision:0, gemini:1, aiprime:2, gapgpt:3, groq:4, openrouter:5, mistral:6, together:7, nvidia:8, huggingface:9, github:10, cloudflare:11, avalai:12, metis:13, onexai:14, llm7:15 }
-      : { aiprime:1, gapgpt:2, github:3, groq:4, together:5, openrouter:6, mistral:7, llm7:8, avalai:9, metis:10, onexai:11, huggingface:12, nvidia:13, cloudflare:14, gemini:99, customvision:100 };
-    providers.sort(function(a, b) { return (pri[a] || 50) - (pri[b] || 50); });
   }
+  // برای متن
+  else {
+    providers = getAvailableProviders(env);
+    var pri2 = { aiprime: 1, gapgpt: 2, github: 3, groq: 4, together: 5, openrouter: 6, mistral: 7, llm7: 8, avalai: 9, metis: 10, onexai: 11, huggingface: 12, nvidia: 13, cloudflare: 14, gemini: 99 };
+    providers.sort(function(a, b) { return (pri2[a] || 50) - (pri2[b] || 50); });
+  }
+  
   if (!providers.length) throw new Error('هیچ سرویس فعال نیست');
+  
   var errs = [];
   for (var i = 0; i < providers.length; i++) {
     var p = providers[i];
     try {
-      var timeout = (p === 'gapgpt' || p === 'aiprime' || p === 'customvision') ? 30000 : 18000;
+      var timeout = (p === 'gapgpt' || p === 'aiprime' || p === 'gemini') ? 30000 : 18000;
       var r = await withTimeout(PROVIDER_FUNCS[p](env, prompt, imgB64, imgMime, chatId), timeout, p);
       if (r && r.length > 10) return { text: r, provider: PROVIDER_NAMES[p] };
-      errs.push(p + ': کوتاه');
+      errs.push(p + ': short');
     } catch (e) { errs.push(p + ': ' + e.message); }
   }
   throw new Error('همه سرویس‌ها خطا:\n' + errs.slice(0, 6).join('\n'));
