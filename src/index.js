@@ -1,10 +1,9 @@
 // ============================================
-// EVEREST BOT v7.9
-// + Expiry Watchdog (نوتیفیکیشن انقضای سفارش‌های معلق)
-// + UNFILLED status (جدا از EXPIRED)
+// EVEREST BOT v8.0
+// + Expiry Watchdog (UNFILLED vs EXPIRED)
 // + Text: AIPrime | Image: Gemini → GapGPT → AIPrime
-// + Custom Vision API
-// + Local Filter MSS/BOS
+// + Custom Vision API + Local Filter MSS/BOS
+// + TP1 Final (never reverses to LOSS)
 // ============================================
 
 const CONF_KEYS = ['structure', 'smc', 'ict', 'candle', 'liquidity', 'riskReward'];
@@ -28,19 +27,23 @@ const MODEL_TIERS = {
   }
 };
 
-// ⭐ لیست مدل‌های vision
 const VISION_MODELS_BY_PROVIDER = {
   gemini: ['gemini-2.5-flash', 'gemini-2.0-flash'],
   aiprime: ['gpt-4o', 'gpt-4o-mini'],
   gapgpt: ['gpt-4o', 'gpt-4o-mini']
 };
 
-// ✅ جدید: TTL انقضا بر اساس TF
+// TTL انقضا بر اساس TF
 const EXPIRY_TTL_BY_TF = {
   '1min': 20, '3min': 15, '5min': 12, '15min': 10, '1h': 8, '4h': 6
 };
 const EXPIRY_TTL_DEFAULT = 12;
 const EXPIRY_WARN_PCT = 0.75;
+
+// Filled timeout (سفارش پر شده که به TP/SL نرسید)
+const FILLED_TIMEOUT_BY_TF = {
+  '1min': 40, '3min': 30, '5min': 24, '15min': 20, '1h': 16, '4h': 12
+};
 
 const STRICTNESS_MODES = {
   hard: { label: '🔴 سختگیر', icon: '🔴', desc: 'همه فیلترها + TP1 الزامی + R/R سخت' },
@@ -72,11 +75,8 @@ function getModelTierConfig(provider, tier, hasImage) {
   return { model: hasImage ? cfg.vision : cfg.text, label: cfg.label };
 }
 
-const FORCE_DIRECTIVE = "\n\n" +
-"⚠️ **اجباری**: JSON انتهای پاسخ:\n" +
-"```json\n" +
-"{\"direction\":\"BUY|SELL|WAIT\",\"confluenceScore\":0.0,\"scores\":{\"structure\":0,\"smc\":0,\"ict\":0,\"candle\":0,\"liquidity\":0,\"riskReward\":0},\"confidence\":0,\"entry\":0,\"stopLoss\":0,\"tp1\":0,\"tp2\":0,\"tp3\":0,\"rr\":\"1:0\"}\n" +
-"```";
+const FORCE_DIRECTIVE = "\n\n⚠️ **اجباری**: JSON انتهای پاسخ:\n```json\n" +
+"{\"direction\":\"BUY|SELL|WAIT\",\"confluenceScore\":0.0,\"scores\":{\"structure\":0,\"smc\":0,\"ict\":0,\"candle\":0,\"liquidity\":0,\"riskReward\":0},\"confidence\":0,\"entry\":0,\"stopLoss\":0,\"tp1\":0,\"tp2\":0,\"tp3\":0,\"rr\":\"1:0\"}\n```";
 
 function buildPromptForMode(basePrompt, mode) {
   if (mode === 'force') return basePrompt + FORCE_DIRECTIVE;
@@ -158,10 +158,10 @@ function dropForming(klines, tf) {
   return a;
 }
 
-// ✅ جدید: TTL و expiry info
-function getExpiryTTL(tf) {
-  return EXPIRY_TTL_BY_TF[tf] || EXPIRY_TTL_DEFAULT;
-}
+// ✅ v8: TTL و expiry info
+function getExpiryTTL(tf) { return EXPIRY_TTL_BY_TF[tf] || EXPIRY_TTL_DEFAULT; }
+function getFilledTimeoutTTL(tf) { return FILLED_TIMEOUT_BY_TF[tf] || 24; }
+
 function getExpiryInfo(signal) {
   var ttl = getExpiryTTL(signal.tf);
   var tfm = (TF_MINUTES[signal.tf] || 5) * 60000;
@@ -178,6 +178,24 @@ function getExpiryInfo(signal) {
     warning: elapsedCandles >= ttl * EXPIRY_WARN_PCT
   };
 }
+
+function getFilledExpiryInfo(signal) {
+  var ttl = getFilledTimeoutTTL(signal.tf);
+  var tfm = (TF_MINUTES[signal.tf] || 5) * 60000;
+  var startT = signal.fillT || signal.t;
+  var elapsed = Date.now() - startT;
+  var elapsedCandles = elapsed / tfm;
+  var remainingCandles = Math.max(0, ttl - elapsedCandles);
+  var remainingMs = Math.max(0, ttl * tfm - elapsed);
+  return {
+    ttl: ttl,
+    elapsedCandles: Math.round(elapsedCandles * 10) / 10,
+    remainingCandles: Math.round(remainingCandles * 10) / 10,
+    remainingMs: remainingMs,
+    expired: elapsedCandles >= ttl
+  };
+}
+
 function formatRemainingTime(ms) {
   if (ms <= 0) return '0';
   var sec = Math.floor(ms / 1000);
@@ -319,9 +337,7 @@ function getGeminiKeys(env) {
   if (env.GEMINI_KEY) k.push(env.GEMINI_KEY);
   return k;
 }
-function isCustomVisionReady(env) {
-  return !!(env.CUSTOM_VISION_URL && env.CUSTOM_VISION_KEY && env.CUSTOM_VISION_MODEL);
-}
+function isCustomVisionReady(env) { return !!(env.CUSTOM_VISION_URL && env.CUSTOM_VISION_KEY && env.CUSTOM_VISION_MODEL); }
 function getAvailableProviders(env) {
   return ['customvision','gemini','aiprime','groq','github','together','gapgpt','openrouter','mistral','huggingface','cloudflare','nvidia','llm7','avalai','metis','onexai'].filter(function(p) {
     if (p === 'customvision') return isCustomVisionReady(env);
@@ -491,9 +507,7 @@ function validateSignal(levels, opts) {
   opts = opts || {};
   var mode = opts.strict || 'hard';
 
-  if (mode === 'hard' || mode === 'easy') {
-    return validateSignalSingle(levels, opts);
-  }
+  if (mode === 'hard' || mode === 'easy') return validateSignalSingle(levels, opts);
 
   if (mode === 'both') {
     var hardLv = JSON.parse(JSON.stringify(levels));
@@ -614,9 +628,7 @@ async function callCustomVisionText(env, prompt, imgB64, imgMime) {
   var model = env.CUSTOM_VISION_MODEL;
   if (!baseUrl || !key || !model) throw new Error('Custom Vision config ناقص');
   if (!/\/chat\/completions\/?$/.test(baseUrl)) baseUrl = baseUrl.replace(/\/+$/, '') + '/chat/completions';
-  var c = imgB64
-    ? [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: 'data:' + imgMime + ';base64,' + imgB64 } }]
-    : prompt;
+  var c = imgB64 ? [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: 'data:' + imgMime + ';base64,' + imgB64 } }] : prompt;
   var r = await fetchWithTimeout(baseUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + key },
@@ -652,10 +664,7 @@ async function callGeminiText(env, prompt, imgB64, imgMime) {
               if (pt.text && !pt.thought) t = (t || '') + pt.text;
             }
           }
-          if (t && t.length > 10) {
-            console.log('[Gemini] ✅ ' + models[mi] + (hasImage ? ' (vision)' : ' (text)'));
-            return t;
-          }
+          if (t && t.length > 10) return t;
         }
         last = d && d.error ? d.error.message : 'HTTP ' + r.status;
         if (r.status === 404 || /not found|not supported/i.test(last)) continue;
@@ -670,13 +679,10 @@ async function callAIPrimeText(env, prompt, imgB64, imgMime, chatId) {
   var key = env.AIPRIME_KEY;
   if (!key) throw new Error('no AIPRIME_KEY');
   var hasImage = !!imgB64;
-  var content = hasImage
-    ? [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: 'data:' + imgMime + ';base64,' + imgB64 } }]
-    : prompt;
+  var content = hasImage ? [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: 'data:' + imgMime + ';base64,' + imgB64 } }] : prompt;
   var modelsToTry;
-  if (hasImage) {
-    modelsToTry = VISION_MODELS_BY_PROVIDER.aiprime;
-  } else {
+  if (hasImage) modelsToTry = VISION_MODELS_BY_PROVIDER.aiprime;
+  else {
     var tier = chatId ? await getUserModelTier(env, chatId, 'aiprime') : 'fast';
     var cfg = getModelTierConfig('aiprime', tier, false);
     modelsToTry = [cfg.model];
@@ -692,19 +698,13 @@ async function callAIPrimeText(env, prompt, imgB64, imgMime, chatId) {
       var d = await r.json();
       if (r.ok) {
         var t = d && d.choices && d.choices[0] && d.choices[0].message ? d.choices[0].message.content : null;
-        if (t && t.length > 10) {
-          console.log('[AIPrime] ✅ ' + model + (hasImage ? ' (vision)' : ' (text)'));
-          return t;
-        }
+        if (t && t.length > 10) return t;
         lastErr = model + ': empty';
         continue;
       }
       var errMsg = d && d.error ? (d.error.message || JSON.stringify(d.error)) : 'HTTP ' + r.status;
       lastErr = model + ': ' + errMsg;
-      if (/vision|not support|does not support|model.*not found|invalid.*model/i.test(errMsg)) {
-        console.log('[AIPrime] ⏭️ skip ' + model + ' — ' + errMsg);
-        continue;
-      }
+      if (/vision|not support|does not support|model.*not found|invalid.*model/i.test(errMsg)) continue;
       if (r.status === 401 || r.status === 403) throw new Error('AIPrime auth: ' + errMsg);
       continue;
     } catch (e) { lastErr = model + ': ' + e.message; continue; }
@@ -716,13 +716,10 @@ async function callGapGPTText(env, prompt, imgB64, imgMime, chatId) {
   var key = env.GAPGPT_KEY;
   if (!key) throw new Error('no GAPGPT_KEY');
   var hasImage = !!imgB64;
-  var content = hasImage
-    ? [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: 'data:' + imgMime + ';base64,' + imgB64 } }]
-    : prompt;
+  var content = hasImage ? [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: 'data:' + imgMime + ';base64,' + imgB64 } }] : prompt;
   var modelsToTry;
-  if (hasImage) {
-    modelsToTry = VISION_MODELS_BY_PROVIDER.gapgpt;
-  } else {
+  if (hasImage) modelsToTry = VISION_MODELS_BY_PROVIDER.gapgpt;
+  else {
     var tier = chatId ? await getUserModelTier(env, chatId, 'gapgpt') : 'fast';
     var cfg = getModelTierConfig('gapgpt', tier, false);
     modelsToTry = [cfg.model];
@@ -738,19 +735,13 @@ async function callGapGPTText(env, prompt, imgB64, imgMime, chatId) {
       var d = await r.json();
       if (r.ok) {
         var t = d && d.choices && d.choices[0] && d.choices[0].message ? d.choices[0].message.content : null;
-        if (t && t.length > 10) {
-          console.log('[GapGPT] ✅ ' + model + (hasImage ? ' (vision)' : ' (text)'));
-          return t;
-        }
+        if (t && t.length > 10) return t;
         lastErr = model + ': empty';
         continue;
       }
       var errMsg = d && d.error ? (d.error.message || JSON.stringify(d.error)) : 'HTTP ' + r.status;
       lastErr = model + ': ' + errMsg;
-      if (/vision|not support|does not support|no available channel|not found|invalid.*model/i.test(errMsg)) {
-        console.log('[GapGPT] ⏭️ skip ' + model + ' — ' + errMsg);
-        continue;
-      }
+      if (/vision|not support|does not support|no available channel|not found|invalid.*model/i.test(errMsg)) continue;
       if (r.status === 401 || r.status === 403) throw new Error('GapGPT auth: ' + errMsg);
       continue;
     } catch (e) { lastErr = model + ': ' + e.message; continue; }
@@ -946,7 +937,6 @@ async function callWithFallback(env, prompt, imgB64, imgMime, chatId, forcedProv
       (forcedProvider === 'gemini' ? getGeminiKeys(env).length > 0 : getKey(env, forcedProvider))) {
     providers = [forcedProvider];
   } else if (hasImg) {
-    // ⭐ تصویر: Gemini → GapGPT → AIPrime → Custom Vision → بقیه
     providers = [];
     if (getGeminiKeys(env).length > 0) providers.push('gemini');
     if (env.GAPGPT_KEY) providers.push('gapgpt');
@@ -1141,6 +1131,7 @@ function calcRRR(s, tpNum) {
   return risk > 0 ? reward / risk : 0;
 }
 
+// ✅ v8: TP1 نهایی + ارتقا به TP2/TP3
 async function resolveJournalForChat(env, chatId, klines, symbol, tf) {
   try {
     var a = await getJournal(env, chatId) || [];
@@ -1192,14 +1183,14 @@ async function resolveJournalForChat(env, chatId, klines, symbol, tf) {
   } catch (e) { console.error('resolveJournal:', e.message); return false; }
 }
 
-// ✅ جدید: EXPIRY WATCHDOG (مستقل از مانیتور)
+// ✅ v8: EXPIRY WATCHDOG — UNFILLED جدا از EXPIRED
 async function runExpiryWatchdog(env) {
   try {
     var token = env.TG_TOKEN;
     if (!token) return;
     var list = await env.KV.list({ prefix: 'journal:' });
     var now = Date.now();
-    var totalExpired = 0, totalWarned = 0;
+    var totalUnfilled = 0, totalExpired = 0, totalWarned = 0;
 
     for (var ki = 0; ki < list.keys.length; ki++) {
       var key = list.keys[ki].name;
@@ -1208,71 +1199,97 @@ async function runExpiryWatchdog(env) {
       if (!journal.length) continue;
 
       var changed = false;
+      var unfilledSignals = [];
       var expiredSignals = [];
       var warnedSignals = [];
 
       for (var i = 0; i < journal.length; i++) {
         var s = journal[i];
         if (s.status !== 'OPEN') continue;
-        if (s.filled) continue;
 
-        var info = getExpiryInfo(s);
-
-        if (info.expired) {
-          s.status = 'EXPIRED';
-          s.closeT = now;
-          s.closeReason = 'unfilled_timeout';
-          s.expiredAt = now;
-          changed = true;
-          expiredSignals.push(s);
-        } else if (info.warning && !s.warned) {
-          s.warned = true;
-          changed = true;
-          warnedSignals.push({ s: s, info: info });
+        // سفارش پر نشده
+        if (!s.filled) {
+          var info = getExpiryInfo(s);
+          if (info.expired) {
+            s.status = 'UNFILLED';
+            s.closeT = now;
+            s.closeReason = 'unfilled_timeout';
+            changed = true;
+            unfilledSignals.push(s);
+          } else if (info.warning && !s.warned) {
+            s.warned = true;
+            changed = true;
+            warnedSignals.push({ s: s, info: info });
+          }
+        }
+        // سفارش پر شده که به TP/SL نرسید
+        else if (s.fillT) {
+          var finfo = getFilledExpiryInfo(s);
+          if (finfo.expired) {
+            s.status = 'EXPIRED';
+            s.closeT = now;
+            s.closeReason = 'filled_no_tp_sl';
+            changed = true;
+            expiredSignals.push(s);
+          }
         }
       }
 
       if (changed) {
         await env.KV.put(key, JSON.stringify(journal));
+        totalUnfilled += unfilledSignals.length;
         totalExpired += expiredSignals.length;
         totalWarned += warnedSignals.length;
       }
 
-      // نوتیفیکیشن انقضا
-      for (var k = 0; k < expiredSignals.length; k++) {
-        var es = expiredSignals[k];
-        var msg = '⌛ <b>سیگنال منقضی شد</b>\n\n';
-        msg += '<b>نماد:</b> ' + (es.isCrypto ? '🪙' : '💱') + ' ' + esc(es.sym) + '\n';
-        msg += '<b>TF:</b> ' + timeframeLabel(es.tf) + '\n';
-        msg += '<b>جهت:</b> ' + (es.dir === 'BUY' ? '🟢 خرید' : '🔴 فروش') + '\n';
-        msg += '<b>Entry انتظار:</b> <code>' + esc(es.entry) + '</code>\n';
-        if (es.currentPrice) msg += '<b>قیمت فعلی:</b> <code>' + esc(es.currentPrice) + '</code>\n';
+      // نوتیفیکیشن سفارش پر نشده
+      for (var k = 0; k < unfilledSignals.length; k++) {
+        var us = unfilledSignals[k];
+        var msg = '🚫 <b>سفارش لیمیت پر نشد — کنسل شد</b>\n\n';
+        msg += '<b>نماد:</b> ' + (us.isCrypto ? '🪙' : '💱') + ' ' + esc(us.sym) + '\n';
+        msg += '<b>TF:</b> ' + timeframeLabel(us.tf) + '\n';
+        msg += '<b>جهت:</b> ' + (us.dir === 'BUY' ? '🟢 خرید' : '🔴 فروش') + '\n';
+        msg += '<b>Entry انتظار:</b> <code>' + esc(us.entry) + '</code>\n';
+        if (us.currentPrice) msg += '<b>قیمت فعلی:</b> <code>' + esc(us.currentPrice) + '</code>\n';
         msg += '\n━━━━━━━━━━━━━━━\n';
-        msg += '⚠️ سفارش لیمیت در <b>' + getExpiryTTL(es.tf) + ' کندل</b> پر نشد\n';
-        msg += 'قیمت به Entry نرسید — ستاپ کنسل شد';
+        msg += '⚠️ قیمت در <b>' + getExpiryTTL(us.tf) + ' کندل</b> به Entry نرسید\n';
+        msg += '📝 ثبت‌شده به عنوان <b>UNFILLED</b> — خارج از وین‌ریت';
         var kb = { inline_keyboard: [
           [{ text: '📓 ژورنال', callback_data: 'menu_journal' }],
           [{ text: '📊 تحلیل جدید', callback_data: 'menu_analyze' }]
         ]};
-        try { await sendMessage(token, chatId, msg, kb); } catch(e) { console.error('Expiry notif: ' + e.message); }
+        try { await sendMessage(token, chatId, msg, kb); } catch(e) { console.error('Unfilled notif: ' + e.message); }
+      }
+
+      // نوتیفیکیشن سفارش پر شده که بسته نشد
+      for (var m = 0; m < expiredSignals.length; m++) {
+        var es = expiredSignals[m];
+        var msg2 = '⌛ <b>سیگنال منقضی شد (بسته نشد)</b>\n\n';
+        msg2 += '<b>نماد:</b> ' + (es.isCrypto ? '🪙' : '💱') + ' ' + esc(es.sym) + '\n';
+        msg2 += '<b>جهت:</b> ' + (es.dir === 'BUY' ? '🟢 خرید' : '🔴 فروش') + '\n';
+        msg2 += '<b>Entry:</b> <code>' + esc(es.entry) + '</code>\n';
+        msg2 += '<b>وضعیت:</b> پر شده در ' + new Date(es.fillT).toLocaleTimeString('fa-IR').slice(0,5) + '\n';
+        msg2 += '\n━━━━━━━━━━━━━━━\n';
+        msg2 += '⚠️ بعد از پر شدن، در <b>' + getFilledTimeoutTTL(es.tf) + ' کندل</b> به TP/SL نرسید';
+        try { await sendMessage(token, chatId, msg2); } catch(e) {}
       }
 
       // هشدار نزدیک انقضا
-      for (var m = 0; m < warnedSignals.length; m++) {
-        var ws = warnedSignals[m].s;
-        var wi = warnedSignals[m].info;
+      for (var n = 0; n < warnedSignals.length; n++) {
+        var ws = warnedSignals[n].s;
+        var wi = warnedSignals[n].info;
         var wMsg = '⚠️ <b>نزدیک انقضا</b>\n\n';
         wMsg += '<b>نماد:</b> ' + (ws.isCrypto ? '🪙' : '💱') + ' ' + esc(ws.sym) + '\n';
         wMsg += '<b>جهت:</b> ' + (ws.dir === 'BUY' ? '🟢 خرید' : '🔴 فروش') + '\n';
         wMsg += '<b>Entry:</b> <code>' + esc(ws.entry) + '</code>\n';
         if (ws.currentPrice) wMsg += '<b>قیمت فعلی:</b> <code>' + esc(ws.currentPrice) + '</code>\n';
-        wMsg += '\n⏳ <b>' + wi.remainingCandles + ' کندل</b> تا انقضا مونده';
+        wMsg += '\n⏳ <b>' + wi.remainingCandles + ' کندل</b> تا کنسلی سفارش مونده';
         try { await sendMessage(token, chatId, wMsg); } catch(e) {}
       }
     }
 
-    if (totalExpired || totalWarned) {
-      console.log('[WATCHDOG] expired=' + totalExpired + ' warned=' + totalWarned);
+    if (totalUnfilled || totalExpired || totalWarned) {
+      console.log('[WATCHDOG] unfilled=' + totalUnfilled + ' expired=' + totalExpired + ' warned=' + totalWarned);
     }
   } catch (e) { console.error('runExpiryWatchdog: ' + e.message); }
 }
@@ -1303,8 +1320,8 @@ async function sendDailyReport(env, chatId, dayKey) {
     txt += '✅ برد: <b>' + wins.length + '</b>\n';
     txt += '❌ باخت: <b>' + losses.length + '</b>\n';
     txt += '⏳ باز: ' + open.length + '\n';
-    txt += '⌛ منقضی (پر شده): ' + expired.length + '\n';
     txt += '🚫 پر نشده (کنسل): ' + unfilled.length + '\n';
+    txt += '⌛ منقضی (پر شده): ' + expired.length + '\n';
     txt += '━━━━━━━━━━━━━━━\n';
     txt += wrIcon + ' <b>وین ریت:</b> ' + wr + '% <i>(از ' + closed + ' معامله)</i>\n';
     txt += rIcon + ' <b>مجموع R:</b> ' + rSum.toFixed(2) + '\n';
@@ -1658,7 +1675,7 @@ function buildImageCaption(levels, provider, conf, currentPrice) {
 // ============================================
 
 async function showMainMenu(token, chatId, mid) {
-  await sendOrEdit(token, chatId, mid, '🎯 <b>Everest v7.9</b>\n\n📊 Auto Journal + گزارش شبانه\n🌐 KZ Mode · 🪙 کریپتو · 🎯 Entry Type\n🔍 فیلتر محلی MSS/BOS\n⏳ Expiry Watchdog\n⭐ Custom Vision API\n\nاز منو انتخاب کنید:', mainMenu());
+  await sendOrEdit(token, chatId, mid, '🎯 <b>Everest v8.0</b>\n\n📊 Auto Journal + گزارش شبانه\n🌐 KZ Mode · 🪙 کریپتو · 🎯 Entry Type\n🔍 فیلتر محلی MSS/BOS\n⏳ Expiry Watchdog (UNFILLED/EXPIRED)\n⭐ Custom Vision API\n\nاز منو انتخاب کنید:', mainMenu());
 }
 async function showSymbolMenu(token, chatId, mid) {
   await sendOrEdit(token, chatId, mid, '🎯 <b>نماد:</b>\n\n💱 فارکس · 🪙 کریپتو', symbolMenu());
@@ -1703,7 +1720,9 @@ async function showJournalMenu(token, chatId, mid, env) {
       else if (j[i].status === 'OPEN') { op++; if (!j[i].filled) pending++; }
       else if (j[i].status === 'UNFILLED') uf++;
     }
-    t += '📈 ' + j.length + ' سیگنال ثبت‌شده\n✅ ' + w + ' برد · ❌ ' + l + ' باخت · ⏳ ' + op + ' باز (🚫 ' + pending + ' معلق)\n\n';
+    t += '📈 ' + j.length + ' سیگنال ثبت‌شده\n✅ ' + w + ' برد · ❌ ' + l + ' باخت · ⏳ ' + op + ' باز';
+    if (pending) t += ' (🚫 ' + pending + ' معلق)';
+    t += '\n🚫 ' + uf + ' پر نشده\n\n';
     t += '<i>سیگنال‌های مانیتور خودکار ثبت می‌شن</i>';
   } else t += '<i>خالی — منتظر سیگنال مانیتور</i>';
   await sendOrEdit(token, chatId, mid, t, journalMenu());
@@ -1731,7 +1750,7 @@ async function showMonitorMenu(token, chatId, mid, env) {
     }
     t += '\n' + lfLabel + '\n\n<i>هر سیگنال تأییدشده خودکار در ژورنال ثبت می‌شه</i>';
   } else {
-    t += '⚪ <b>غیرفعال</b>\n\nهر کندل بسته بررسی می‌شه و در صورت ستاپ معتبر، سیگنال با نوع ورود دقیق می‌آید.\n\n' + lfLabel + '\n\n🆕 <b>Auto Journal + Expiry Watchdog:</b> همه سیگنال‌ها خودکار ثبت و در صورت انقضا بهت اطلاع داده می‌شه.';
+    t += '⚪ <b>غیرفعال</b>\n\nهر کندل بسته بررسی می‌شه و در صورت ستاپ معتبر، سیگنال با نوع ورود دقیق می‌آید.\n\n' + lfLabel + '\n\n🆕 <b>Auto Journal + Expiry Watchdog:</b> همه سیگنال‌ها خودکار ثبت می‌شن. سفارش پر نشده → UNFILLED. سفارش پر شده که بسته نشه → EXPIRED.';
   }
   await sendOrEdit(token, chatId, mid, t, monitorMenu());
 }
@@ -1793,7 +1812,7 @@ async function showSettingsMenu(token, chatId, mid, env) {
   var lf = await getLocalFilter(env, chatId);
   var lfIcon = lf === 'on' ? '🔍 فعال' : '🔍 غیرفعال';
   var cvReady = isCustomVisionReady(env) ? '⭐ ✅' : '⭐ ❌';
-  var text = '⚙️ <b>تنظیمات</b>\n\n' +
+  var text = '⚙️ <b>تنظیمات v8.0</b>\n\n' +
     '<b>🎚️ نوع:</b> ' + stCfg.icon + ' ' + stCfg.label + '\n' +
     '<i>' + stCfg.desc + '</i>\n\n' +
     '<b>⚙️ KZ Mode:</b> ' + KZ_MODES[kz].icon + ' ' + KZ_MODES[kz].label + '\n' +
@@ -1817,7 +1836,7 @@ async function showSettingsMenu(token, chatId, mid, env) {
 
 async function showStatus(token, chatId, mid, env) {
   var all = ['customvision','gemini','aiprime','groq','github','together','gapgpt','openrouter','mistral','huggingface','cloudflare','nvidia','llm7','avalai','metis','onexai'];
-  var text = '📈 <b>وضعیت v7.9</b>\n\n';
+  var text = '📈 <b>وضعیت v8.0</b>\n\n';
   var active = 0;
   for (var i = 0; i < all.length; i++) {
     var p = all[i]; var hasKey;
@@ -1841,26 +1860,32 @@ async function showStatus(token, chatId, mid, env) {
 }
 
 async function showHelp(token, chatId, mid) {
-  var t = '📖 <b>راهنما v7.9</b>\n\n' +
+  var t = '📖 <b>راهنما v8.0</b>\n\n' +
     '📊 <b>Auto Journal:</b>\nهر سیگنال تأییدشده خودکار ثبت می‌شه.\n\n' +
-    '⏳ <b>Expiry Watchdog:</b>\nاگه سفارش لیمیت در TTL مشخص پر نشه، خودکار بهت اطلاع می‌ده:\n' +
-    '• 1m→20 · 3m→15 · 5m→12 · 15m→10 · 1h→8 · 4h→6 کندل\n' +
-    '• ۷۵٪ زمان → هشدار\n' +
-    '• ۱۰۰٪ → انقضا\n\n' +
-    '⭐ <b>Custom Vision API:</b>\nاول Gemini → بعد GapGPT → AIPrime\n\n' +
-    '🚫 <b>وضعیت UNFILLED:</b>\nسفارش پرنشده → خارج از وین‌ریت\n\n' +
+    '⏳ <b>Expiry Watchdog:</b>\nدو نوع انقضا داریم:\n' +
+    '• 🚫 <b>UNFILLED</b> = سفارش لیمیت که پر نشد\n' +
+    '  TTL: 1m→20 · 3m→15 · 5m→12 · 15m→10 · 1h→8 · 4h→6 کندل\n' +
+    '• ⌛ <b>EXPIRED</b> = سفارش پر شد ولی SL/TP نزد\n' +
+    '  TTL: 1m→40 · 5m→24 · 15m→20 · 1h→16 · 4h→12 کندل\n\n' +
+    '📈 <b>وین‌ریت:</b> فقط از WIN+LOSS محاسبه می‌شه\n' +
+    '(UNFILLED و EXPIRED خارج از آمار)\n\n' +
+    '⭐ <b>Vision:</b> Gemini → GapGPT → AIPrime\n\n' +
     '🎚️ <b>نوع:</b> 🔴 سختگیر · 🟢 آسان · ⚖️ هر دو\n\n' +
-    '⚙️ <b>KZ:</b> 🌐 ۲۴/۷ · ⭐ اولویت · 🔒 فقط\n\n' +
     '<b>دستورات:</b>\n/menu /monitor /analyze /journal /watch /status';
   await sendOrEdit(token, chatId, mid, t, { inline_keyboard: [[{ text: '🏠', callback_data: 'menu_main' }]] });
 }
 
 async function showMonitorHelp(token, chatId, mid) {
-  var t = '📖 <b>راهنمای مانیتور</b>\n\n' +
+  var t = '📖 <b>راهنمای مانیتور v8.0</b>\n\n' +
     '🤖 هر کندل بسته، بازار تحلیل می‌شه.\n\n' +
     '🔍 <b>فیلتر محلی MSS/BOS:</b>\nصرفه‌جویی زیاد توکن.\n\n' +
-    '📓 <b>Auto Journal + Watchdog:</b>\nسیگنال‌ها خودکار ثبت + انقضا خودکار.\n\n' +
-    '⏳ <b>TTL بر اساس TF:</b>\n• 1m: ۲۰ کندل\n• 5m: ۱۲ کندل\n• 15m: ۱۰ کندل\n• 1h: ۸ کندل\n• 4h: ۶ کندل\n\n' +
+    '📓 <b>Auto Journal + Watchdog:</b>\nسیگنال‌ها خودکار ثبت می‌شن:\n' +
+    '• سفارش لیمیت پر نشد → 🚫 UNFILLED\n' +
+    '• سفارش پر شد ولی به TP/SL نرسید → ⌛ EXPIRED\n\n' +
+    '⏳ <b>TTL انقضای سفارش پر نشده:</b>\n' +
+    '• 1m: ۲۰ کندل\n• 3m: ۱۵\n• 5m: ۱۲\n• 15m: ۱۰\n• 1h: ۸\n• 4h: ۶\n\n' +
+    '⏰ <b>TTL سفارش پرشده:</b>\n' +
+    '• 1m: ۴۰\n• 5m: ۲۴\n• 15m: ۲۰\n• 1h: ۱۶\n• 4h: ۱۲\n\n' +
     '🎯 <b>آستانه‌ها:</b>\n• اسکلپی: CF ≥ 5.0\n• متوسط: CF ≥ 4.5\n• مطمئن: CF ≥ 6.0';
   await sendOrEdit(token, chatId, mid, t, { inline_keyboard: [[{ text: '◀️', callback_data: 'menu_monitor' }]] });
 }
@@ -1878,16 +1903,18 @@ async function showJournalList(token, chatId, env) {
   if (!j.length) { await sendMessage(token, chatId, '📓 خالی', { inline_keyboard: [[{ text: '◀️', callback_data: 'menu_journal' }]] }); return; }
   var t = '<b>📓 آخرین سیگنال‌ها</b>\n\n';
   var recent = j.slice(-15).reverse();
-  var now = Date.now();
   for (var i = 0; i < recent.length; i++) {
     var x = recent[i];
     var ic = x.status === 'WIN' ? '✅' : x.status === 'LOSS' ? '❌' : x.status === 'OPEN' ? '⏳' : x.status === 'UNFILLED' ? '🚫' : '⌛';
     var time = new Date(x.t).toLocaleTimeString('fa-IR').slice(0, 5);
     t += ic + ' ' + time + ' ' + esc(x.sym) + ' ' + esc(x.dir) + ' @' + x.entry;
-    // اگه سفارش معلقه، زمان باقیمونده نشون بده
     if (x.status === 'OPEN' && !x.filled) {
       var info = getExpiryInfo(x);
       if (info.remainingMs > 0) t += ' <i>(' + formatRemainingTime(info.remainingMs) + ' مونده)</i>';
+    }
+    if (x.status === 'OPEN' && x.filled) {
+      var finfo = getFilledExpiryInfo(x);
+      if (finfo.remainingMs > 0) t += ' <i>(open · ' + formatRemainingTime(finfo.remainingMs) + ')</i>';
     }
     if (x.rr != null) t += ' (' + (x.rr >= 0 ? '+' : '') + x.rr.toFixed(2) + 'R)';
     t += '\n';
@@ -1909,7 +1936,7 @@ async function showJournalStats(token, chatId, env) {
   }
   var cl = w + l;
   var wr = cl ? Math.round(w / cl * 100) : 0;
-  var t = '<b>📊 آمار کل</b>\n\n📈 کل: <b>' + j.length + '</b>\n✅ برد: <b>' + w + '</b>\n❌ باخت: <b>' + l + '</b>\n⏳ باز: <b>' + op + '</b>\n🚫 کنسل: <b>' + uf + '</b>\n⌛ منقضی: <b>' + ex + '</b>\n\n🎯 وین ریت: <b>' + wr + '%</b> <i>(از ' + cl + ' معامله)</i>\n⚖️ مجموع R: <b>' + rSum.toFixed(2) + '</b>';
+  var t = '<b>📊 آمار کل</b>\n\n📈 کل: <b>' + j.length + '</b>\n✅ برد: <b>' + w + '</b>\n❌ باخت: <b>' + l + '</b>\n⏳ باز: <b>' + op + '</b>\n🚫 پر نشده: <b>' + uf + '</b>\n⌛ منقضی: <b>' + ex + '</b>\n\n🎯 وین ریت: <b>' + wr + '%</b> <i>(از ' + cl + ' معامله)</i>\n⚖️ مجموع R: <b>' + rSum.toFixed(2) + '</b>';
   await sendMessage(token, chatId, t, { inline_keyboard: [[{ text: '◀️', callback_data: 'menu_journal' }]] });
 }
 
@@ -1922,11 +1949,12 @@ async function showJournalDaily(token, chatId, env) {
   var l = day.filter(function(s) { return s.status === 'LOSS'; }).length;
   var op = day.filter(function(s) { return s.status === 'OPEN'; }).length;
   var uf = day.filter(function(s) { return s.status === 'UNFILLED'; }).length;
+  var ex = day.filter(function(s) { return s.status === 'EXPIRED'; }).length;
   var rSum = 0;
   day.forEach(function(s) { if (s.status === 'WIN') rSum += (s.rr || 0); else if (s.status === 'LOSS') rSum -= 1; });
   var cl = w + l;
   var wr = cl ? Math.round(w / cl * 100) : 0;
-  var t = '<b>📅 گزارش امروز — ' + todayTehran + '</b>\n\n📈 کل: <b>' + day.length + '</b>\n✅ برد: ' + w + '\n❌ باخت: ' + l + '\n⏳ باز: ' + op + '\n🚫 کنسل: ' + uf + '\n\n🎯 وین ریت: <b>' + wr + '%</b>\n⚖️ مجموع R: <b>' + rSum.toFixed(2) + '</b>';
+  var t = '<b>📅 گزارش امروز — ' + todayTehran + '</b>\n\n📈 کل: <b>' + day.length + '</b>\n✅ برد: ' + w + '\n❌ باخت: ' + l + '\n⏳ باز: ' + op + '\n🚫 پر نشده: ' + uf + '\n⌛ منقضی: ' + ex + '\n\n🎯 وین ریت: <b>' + wr + '%</b>\n⚖️ مجموع R: <b>' + rSum.toFixed(2) + '</b>';
   await sendMessage(token, chatId, t, { inline_keyboard: [[{ text: '◀️', callback_data: 'menu_journal' }]] });
 }
 
@@ -2094,9 +2122,10 @@ async function finishMonitorSetup(token, chatId, mid, symbol, tf, ai, dp, env) {
     '<b>نوع:</b> ' + stCfg.icon + ' ' + stCfg.label + '\n' +
     '<b>KZ:</b> ' + KZ_MODES[kzMode].icon + ' ' + KZ_MODES[kzMode].label + '\n\n' +
     '🎯 آستانه CF: <b>' + cfg.minConfluence + '</b>\n' +
-    '⏳ TTL انقضا: <b>' + getExpiryTTL(tf) + ' کندل</b>\n' +
+    '⏳ کنسلی سفارش پر نشده: <b>' + getExpiryTTL(tf) + ' کندل</b>\n' +
+    '⏰ انقضای سفارش پرشده: <b>' + getFilledTimeoutTTL(tf) + ' کندل</b>\n' +
     '📓 سیگنال‌ها خودکار در ژورنال ثبت می‌شن\n' +
-    '🔔 اگه سفارش پر نشه، خودکار بهت اطلاع می‌دیم';
+    '🔔 در هر دو حالت بهت اطلاع می‌دیم';
   await sendOrEdit(token, chatId, mid, msg, { inline_keyboard: [
     [{ text: '📋 لیست', callback_data: 'mon_list' }],
     [{ text: '🏠 منو', callback_data: 'menu_main' }]
@@ -2134,7 +2163,6 @@ async function checkAllMonitors(env) {
           if (hasYesterday) {
             await sendDailyReport(env, chatId, yesterdayKey);
             await env.KV.put(yKey, '1', { expirationTtl: 86400 * 7 });
-            console.log('[CATCHUP] Daily report sent for ' + yesterdayKey + ' to ' + chatId);
           }
         } catch (e) { console.error('Catchup report: ' + e.message); }
       }
@@ -2190,7 +2218,6 @@ async function checkAllMonitors(env) {
           try {
             await sendDailyReport(env, chatId, dayKey);
             await env.KV.put(reportKey, '1', { expirationTtl: 86400 * 7 });
-            console.log('[NIGHT] Daily report sent to ' + chatId);
           } catch (e) { console.error('Night report: ' + e.message); }
         }
       }
@@ -2215,7 +2242,6 @@ async function runMonitorForUser(env, token, chatId, m, strict, mode, cfg, local
     var ls = localStructure(klines, 5);
     if (!ls.fresh) {
       m.skippedCount = (m.skippedCount || 0) + 1;
-      console.log('[MON skip] ' + chatId + ' ' + symbol + ' ' + tf + ' — no recent MSS/BOS');
       return;
     }
   }
@@ -2275,7 +2301,6 @@ async function runMonitorForUser(env, token, chatId, m, strict, mode, cfg, local
   }
 }
 
-// ✅ تابع isSignalConfirmed (در HTML به اسم checkSignalConfirmed شناخته می‌شه)
 function isSignalConfirmed(levels, confluence, strict, cfg) {
   if (levels.direction !== 'BUY' && levels.direction !== 'SELL') return false;
   if (!levels.entry || !levels.sl) return false;
@@ -2348,7 +2373,6 @@ async function sendMonitorSignal(token, chatId, levels, confluence, result, curr
 
   caption += buildConfBlock(confluence, levels);
 
-  // اگه لیمیت بود، TTL نشون بده
   if (et.type && et.type.indexOf('LIMIT') !== -1) {
     caption += '\n⏳ <b>سفارش معلق:</b> تا ' + getExpiryTTL(tf) + ' کندل اعتبار داره';
     caption += '\n🔔 اگه پر نشه، خودکار بهت اطلاع می‌دیم';
@@ -2691,7 +2715,7 @@ async function handleUpdate(update, env) {
 export default {
   async fetch(request, env, ctx) {
     var url = new URL(request.url);
-    if (url.pathname === '/' || url.pathname === '') return new Response('Everest Bot v7.9 — Expiry Watchdog + Vision', { status: 200 });
+    if (url.pathname === '/' || url.pathname === '') return new Response('Everest Bot v8.0 — UNFILLED/EXPIRED Watchdog', { status: 200 });
     if (request.method === 'POST' && url.pathname === '/webhook') {
       try {
         var update = await request.json();
@@ -2702,7 +2726,6 @@ export default {
     return new Response('Not found', { status: 404 });
   },
   async scheduled(event, env, ctx) {
-    // ✅ Watchdog حالا در cron هم اجرا می‌شه
     ctx.waitUntil(Promise.all([
       checkWatchlist(env),
       checkAllMonitors(env),
