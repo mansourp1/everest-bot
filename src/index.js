@@ -1,11 +1,8 @@
 // ============================================
-// EVEREST BOT v7.7
-// + Auto Journal (silent, zero extra AI tokens)
-// + Daily Report (auto at 23:30 Tehran + catch-up)
-// + Dual Eval + Entry Type + KZ Mode
-// + FIXED: Local MSS/BOS filter, TP1 Final, Timezone UTC,
-//          Gemini thought filter, ATR-based MARKET, 60 candles,
-//          Fetch timeouts, Unfilled expiry 12 candles
+// EVEREST BOT v7.8
+// + Custom Vision API (paid) — priority for images
+// + UNFILLED status (separate from EXPIRED)
+// + All v7.7 fixes (Local Filter, Timezone UTC, TP1 Final, etc.)
 // ============================================
 
 const CONF_KEYS = ['structure', 'smc', 'ict', 'candle', 'liquidity', 'riskReward'];
@@ -13,6 +10,9 @@ const CONF_LABELS = {
   structure: 'Market Structure', smc: 'SMC / Order Blocks', ict: 'ICT / FVG',
   candle: 'Candlestick', liquidity: 'Liquidity Sweep', riskReward: 'R/R'
 };
+
+// ✅ NEW: VISION_STRICT flag
+const VISION_STRICT = false; // true = فقط Custom Vision برای تصاویر، بدون fallback
 
 const MODEL_TIERS = {
   aiprime: {
@@ -43,10 +43,8 @@ const CRYPTO_BASES = ['BTC','ETH','SOL','BNB','XRP','ADA','DOGE','DOT','AVAX','M
 const BINANCE_INTERVALS = { '1min':'1m','3min':'3m','5min':'5m','15min':'15m','1h':'1h','4h':'4h' };
 const TF_MINUTES = { '1min':1,'3min':3,'5min':5,'15min':15,'1h':60,'4h':240 };
 const TF_LABELS = { '1min':'1 دقیقه','3min':'3 دقیقه','5min':'5 دقیقه','15min':'15 دقیقه','1h':'1 ساعت','4h':'4 ساعت' };
-// ✅ FIX: 3min → 5min برای Twelve (Twelve از 3min پشتیبانی نمی‌کنه)
 const TD_INTERVALS = { '1min':'1min','3min':'5min','5min':'5min','15min':'15min','1h':'1h','4h':'4h' };
 
-// ✅ FIX #1: آستانه‌های confluence واقع‌بینانه‌تر
 const MODE_CONFIG = {
   scalping:  { label: 'اسکلپی', icon: '⚡', color: '#fbbf24', minConfidence: 70, minRR: 2.0, minConfluence: 5.0, allowedTFs: ['1min','3min','5min','15min'] },
   medium:    { label: 'متوسط',  icon: '⚖️', color: '#6ea8fe', minConfidence: 65, minRR: 1.5, minConfluence: 4.5, allowedTFs: ['5min','15min','1h','4h'] },
@@ -100,7 +98,6 @@ function withTimeout(p, ms, l) {
 }
 function sleep(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
 
-// ✅ FIX: fetch با timeout سراسری
 async function fetchWithTimeout(url, opts, timeoutMs, label) {
   var ctrl = new AbortController();
   var t = setTimeout(function() { ctrl.abort(); }, timeoutMs || 12000);
@@ -150,7 +147,6 @@ function dropForming(klines, tf) {
   return a;
 }
 
-// ✅ FIX: localStructure برای فیلتر محلی MSS/BOS
 function localStructure(kl, L) {
   L = L || 5;
   var ph = null, pl = null, state = 0, events = [];
@@ -179,7 +175,6 @@ function localStructure(kl, L) {
   return { state: state, ph: ph, pl: pl, fresh: recent };
 }
 
-// ✅ FIX: MARKET threshold بر اساس ATR
 function detectEntryType(levels, currentPrice) {
   if (!levels.entry || !currentPrice || levels.direction === 'WAIT') {
     return { type: 'N/A', action: '—', icon: '⚪️', cls: '', desc: '', pct: 0, currentPrice: currentPrice || 0 };
@@ -265,7 +260,8 @@ const PROVIDER_NAMES = {
   gemini: 'Google Gemini', aiprime: 'AIPrime', github: 'GitHub Models', groq: 'Groq',
   together: 'Together AI', gapgpt: 'GapGPT', openrouter: 'OpenRouter', mistral: 'Mistral AI',
   huggingface: 'HuggingFace', cloudflare: 'Cloudflare AI', nvidia: 'NVIDIA NIM',
-  llm7: 'LLM7.io', avalai: 'AvalAI', metis: 'Metis', onexai: '1xAi'
+  llm7: 'LLM7.io', avalai: 'AvalAI', metis: 'Metis', onexai: '1xAi',
+  customvision: '⭐ Custom Vision'
 };
 function getKey(env, p) {
   var m = {
@@ -273,7 +269,8 @@ function getKey(env, p) {
     groq: env.GROQ_KEY, together: env.TOGETHER_KEY, gapgpt: env.GAPGPT_KEY, openrouter: env.OPENROUTER_KEY,
     mistral: env.MISTRAL_KEY, huggingface: env.HUGGINGFACE_KEY, cloudflare: env.CLOUDFLARE_KEY,
     nvidia: env.NVIDIA_KEY, llm7: env.LLM7_KEY || 'unused', avalai: env.AVALAI_KEY,
-    metis: env.METIS_KEY, onexai: env.ONEXAI_KEY
+    metis: env.METIS_KEY, onexai: env.ONEXAI_KEY,
+    customvision: env.CUSTOM_VISION_KEY
   };
   return m[p] || '';
 }
@@ -285,8 +282,12 @@ function getGeminiKeys(env) {
   if (env.GEMINI_KEY) k.push(env.GEMINI_KEY);
   return k;
 }
+function isCustomVisionReady(env) {
+  return !!(env.CUSTOM_VISION_URL && env.CUSTOM_VISION_KEY && env.CUSTOM_VISION_MODEL);
+}
 function getAvailableProviders(env) {
-  return ['gemini','aiprime','groq','github','together','gapgpt','openrouter','mistral','huggingface','cloudflare','nvidia','llm7','avalai','metis','onexai'].filter(function(p) {
+  return ['customvision','gemini','aiprime','groq','github','together','gapgpt','openrouter','mistral','huggingface','cloudflare','nvidia','llm7','avalai','metis','onexai'].filter(function(p) {
+    if (p === 'customvision') return isCustomVisionReady(env);
     if (p === 'gemini') return getGeminiKeys(env).length > 0;
     if (p === 'llm7') return true;
     return !!getKey(env, p);
@@ -317,8 +318,6 @@ async function getKzMode(env, c) { try { return (await env.KV.get('kzmode:' + c)
 async function setKzMode(env, c, m) { if (!KZ_MODES[m]) m = 'priority'; await env.KV.put('kzmode:' + c, m); }
 async function getMonitors(env, c) { try { return await env.KV.get('monitors:' + c, 'json') || []; } catch (e) { return []; } }
 async function saveMonitors(env, c, l) { await env.KV.put('monitors:' + c, JSON.stringify(l)); }
-
-// ✅ FIX: Local Filter Setting per user
 async function getLocalFilter(env, c) { try { var v = await env.KV.get('localfilter:' + c); return v === null ? 'on' : v; } catch (e) { return 'on'; } }
 async function setLocalFilter(env, c, v) { await env.KV.put('localfilter:' + c, v); }
 
@@ -495,7 +494,6 @@ function extractScores(text) {
   return null;
 }
 
-// ✅ FIX #2: نرمال‌سازی خروجی به بازه 4-9
 function calculateConfluenceAuto(levels, rawText) {
   var t = String(rawText || '');
   var tClean = t.replace(/(?:FVG|OB|BOS|CHOCH|Order\s*Block|Sweep)\s*(?:وجود\s*ندارد|نیست|no|not|absent)/gi, '');
@@ -573,11 +571,30 @@ async function resolveConfluence(env, chatId, levels, rawText) {
 // AI CALLERS
 // ============================================
 
-// ✅ FIX: Gemini — فیلتر part های thought + درست کردن انتخاب parts
+// ✅ NEW: Custom Vision caller
+async function callCustomVisionText(env, prompt, imgB64, imgMime) {
+  var baseUrl = env.CUSTOM_VISION_URL;
+  var key = env.CUSTOM_VISION_KEY;
+  var model = env.CUSTOM_VISION_MODEL;
+  if (!baseUrl || !key || !model) throw new Error('Custom Vision config ناقص (URL/KEY/MODEL)');
+  if (!/\/chat\/completions\/?$/.test(baseUrl)) baseUrl = baseUrl.replace(/\/+$/, '') + '/chat/completions';
+  var c = imgB64
+    ? [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: 'data:' + imgMime + ';base64,' + imgB64 } }]
+    : prompt;
+  var r = await fetchWithTimeout(baseUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + key },
+    body: JSON.stringify({ model: model, messages: [{ role: 'user', content: c }], temperature: 0.15, max_tokens: 10000 })
+  }, 30000, 'CustomVision');
+  var d = await r.json();
+  if (!r.ok) throw new Error(d && d.error ? d.error.message : 'HTTP ' + r.status);
+  return d && d.choices && d.choices[0] && d.choices[0].message ? d.choices[0].message.content : '';
+}
+
 async function callGeminiText(env, prompt, imgB64, imgMime) {
   var keys = getGeminiKeys(env);
   if (!keys.length) throw new Error('no key');
-  var models = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-3.5-flash'];
+  var models = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash'];
   var parts = [{ text: prompt }];
   if (imgB64) parts.push({ inline_data: { mime_type: imgMime, data: imgB64 } });
   var last = '';
@@ -810,6 +827,7 @@ async function callOneXAiText(env, prompt, imgB64, imgMime) {
 }
 
 var PROVIDER_FUNCS = {
+  customvision: callCustomVisionText,
   gemini: callGeminiText, aiprime: callAIPrimeText, groq: callGroqText, github: callGitHubText,
   together: callTogetherText, gapgpt: callGapGPTText, openrouter: callOpenRouterText,
   mistral: callMistralText, huggingface: callHuggingFaceText, cloudflare: callCloudflareText,
@@ -817,16 +835,26 @@ var PROVIDER_FUNCS = {
 };
 
 async function callWithFallback(env, prompt, imgB64, imgMime, chatId, forcedProvider) {
+  var hasImg = !!imgB64;
   var providers;
+
   if (forcedProvider && forcedProvider !== 'auto' && PROVIDER_FUNCS[forcedProvider] &&
       (forcedProvider === 'gemini' ? getGeminiKeys(env).length > 0 : getKey(env, forcedProvider))) {
     providers = [forcedProvider];
+  } else if (hasImg && isCustomVisionReady(env)) {
+    // ✅ NEW: تصویر → Custom Vision اول
+    providers = ['customvision'];
+    if (!VISION_STRICT) {
+      var others = getAvailableProviders(env).filter(function(p) { return p !== 'customvision'; });
+      var pri2 = { gemini:1, aiprime:2, gapgpt:3, groq:4, openrouter:5, mistral:6, together:7, nvidia:8, huggingface:9, github:10, cloudflare:11, avalai:12, metis:13, onexai:14, llm7:15 };
+      others.sort(function(a, b) { return (pri2[a] || 50) - (pri2[b] || 50); });
+      providers = providers.concat(others);
+    }
   } else {
     providers = getAvailableProviders(env);
-    var hasImg = !!imgB64;
     var pri = hasImg
-      ? { gemini:1, aiprime:2, gapgpt:3, groq:4, openrouter:5, mistral:6, together:7, nvidia:8, huggingface:9, github:10, cloudflare:11, avalai:12, metis:13, onexai:14, llm7:15 }
-      : { aiprime:1, gapgpt:2, github:3, groq:4, together:5, openrouter:6, mistral:7, llm7:8, avalai:9, metis:10, onexai:11, huggingface:12, nvidia:13, cloudflare:14, gemini:99 };
+      ? { customvision:0, gemini:1, aiprime:2, gapgpt:3, groq:4, openrouter:5, mistral:6, together:7, nvidia:8, huggingface:9, github:10, cloudflare:11, avalai:12, metis:13, onexai:14, llm7:15 }
+      : { aiprime:1, gapgpt:2, github:3, groq:4, together:5, openrouter:6, mistral:7, llm7:8, avalai:9, metis:10, onexai:11, huggingface:12, nvidia:13, cloudflare:14, gemini:99, customvision:100 };
     providers.sort(function(a, b) { return (pri[a] || 50) - (pri[b] || 50); });
   }
   if (!providers.length) throw new Error('هیچ سرویس فعال نیست');
@@ -834,7 +862,7 @@ async function callWithFallback(env, prompt, imgB64, imgMime, chatId, forcedProv
   for (var i = 0; i < providers.length; i++) {
     var p = providers[i];
     try {
-      var timeout = (p === 'gapgpt' || p === 'aiprime') ? 30000 : 18000;
+      var timeout = (p === 'gapgpt' || p === 'aiprime' || p === 'customvision') ? 30000 : 18000;
       var r = await withTimeout(PROVIDER_FUNCS[p](env, prompt, imgB64, imgMime, chatId), timeout, p);
       if (r && r.length > 10) return { text: r, provider: PROVIDER_NAMES[p] };
       errs.push(p + ': کوتاه');
@@ -872,7 +900,6 @@ async function fetchBinanceData(symbol, tf) {
   throw new Error('Binance: ' + last);
 }
 
-// ✅ FIX: timezone=UTC + AbortController timeout
 async function fetchTwelveData(symbol, interval, apiKey, size) {
   var url = new URL('https://api.twelvedata.com/time_series');
   url.searchParams.set('symbol', symbol);
@@ -932,7 +959,6 @@ async function fetchMarketData(symbol, tf, env, provider) {
   throw new Error('Twelve Key لازم است (فارکس/طلا)');
 }
 
-// ✅ FIX: 60 کندل به جای 25
 function klinesToText(klines, symbol, tfName) {
   if (!klines || !klines.length) return '';
   var last = klines[klines.length - 1];
@@ -1007,7 +1033,7 @@ function calcRRR(s, tpNum) {
   return risk > 0 ? reward / risk : 0;
 }
 
-// ✅ FIX: TP1 WIN نهایی + ارتقا به TP2/TP3 + انقضای ۱۲ کندل
+// ✅ FIX v7.8: UNFILLED جدا از EXPIRED
 async function resolveJournalForChat(env, chatId, klines, symbol, tf) {
   try {
     var a = await getJournal(env, chatId) || [];
@@ -1026,7 +1052,6 @@ async function resolveJournalForChat(env, chatId, klines, symbol, tf) {
         if (!Number.isFinite(kt)) continue;
         if (kt < s.t - tfm) continue;
 
-        // اگر WIN شده، فقط ارتقا به TP بالاتر (هرگز LOSS نمی‌شه)
         if (s.status === 'WIN') {
           if (s.whichTP < 3 && s.tp3 != null) {
             var tp3Up = s.dir === 'BUY' ? k.high >= s.tp3 : k.low <= s.tp3;
@@ -1038,7 +1063,6 @@ async function resolveJournalForChat(env, chatId, klines, symbol, tf) {
           continue;
         }
 
-        // OPEN — بررسی پر شدن سفارش
         if (!s.filled) {
           if (!(k.low <= s.entry && k.high >= s.entry)) continue;
           s.filled = true; s.fillT = kt; ch = true;
@@ -1056,9 +1080,19 @@ async function resolveJournalForChat(env, chatId, klines, symbol, tf) {
         else if (tp1Hit) { s.status = 'WIN'; s.closeT = kt; s.closeP = s.tp1; s.whichTP = 1; s.rr = calcRRR(s, 1); ch = true; }
       }
 
-      // ✅ FIX: انقضای سفارش پر نشده بعد از ۱۲ کندل (قبلاً ۳۰۰)
-      if (s.status === 'OPEN' && (Date.now() - s.t) / tfm > 12) {
-        s.status = 'EXPIRED'; s.closeT = Date.now(); ch = true;
+      // ✅ FIX v7.8: دو نوع انقضای جدا
+      if (s.status === 'OPEN') {
+        if (!s.filled && (Date.now() - s.t) / tfm > 12) {
+          // سفارش لیمیت که هرگز پر نشد → UNFILLED (خارج از وین‌ریت)
+          s.status = 'UNFILLED';
+          s.closeT = Date.now();
+          ch = true;
+        } else if (s.filled && s.fillT && (Date.now() - s.fillT) / tfm > 100) {
+          // پر شد ولی SL/TP نزد → EXPIRED (خارج از وین‌ریت)
+          s.status = 'EXPIRED';
+          s.closeT = Date.now();
+          ch = true;
+        }
       }
     }
     if (ch) { await saveJournal(env, chatId, a); console.log('[RESOLVE] ' + chatId + ' journal updated'); }
@@ -1076,7 +1110,8 @@ async function sendDailyReport(env, chatId, dayKey) {
     var losses = daySignals.filter(function(s) { return s.status === 'LOSS'; });
     var open = daySignals.filter(function(s) { return s.status === 'OPEN'; });
     var expired = daySignals.filter(function(s) { return s.status === 'EXPIRED'; });
-    var closed = wins.length + losses.length;
+    var unfilled = daySignals.filter(function(s) { return s.status === 'UNFILLED'; });
+    var closed = wins.length + losses.length; // ✅ فقط WIN+LOSS در مخرج
     var wr = closed ? Math.round(wins.length / closed * 100) : 0;
     var rSum = 0;
     daySignals.forEach(function(s) { if (s.status === 'WIN') rSum += (s.rr || 0); else if (s.status === 'LOSS') rSum -= 1; });
@@ -1091,9 +1126,10 @@ async function sendDailyReport(env, chatId, dayKey) {
     txt += '✅ برد: <b>' + wins.length + '</b>\n';
     txt += '❌ باخت: <b>' + losses.length + '</b>\n';
     txt += '⏳ باز: ' + open.length + '\n';
-    txt += '⌛ منقضی: ' + expired.length + '\n';
+    txt += '⌛ منقضی (پر شده): ' + expired.length + '\n';
+    txt += '🚫 پر نشده (کنسل): ' + unfilled.length + '\n';
     txt += '━━━━━━━━━━━━━━━\n';
-    txt += wrIcon + ' <b>وین ریت:</b> ' + wr + '%\n';
+    txt += wrIcon + ' <b>وین ریت:</b> ' + wr + '% <i>(از ' + closed + ' معامله)</i>\n';
     txt += rIcon + ' <b>مجموع R:</b> ' + rSum.toFixed(2) + '\n';
     txt += '━━━━━━━━━━━━━━━\n';
     if (bothOK || onlyEasy || onlyHard) {
@@ -1104,7 +1140,7 @@ async function sendDailyReport(env, chatId, dayKey) {
     }
     txt += '\n📋 <b>آخرین سیگنال‌ها:</b>\n';
     daySignals.slice(-10).forEach(function(s) {
-      var ic = s.status === 'WIN' ? '✅' : s.status === 'LOSS' ? '❌' : s.status === 'OPEN' ? '⏳' : '⌛';
+      var ic = s.status === 'WIN' ? '✅' : s.status === 'LOSS' ? '❌' : s.status === 'OPEN' ? '⏳' : s.status === 'UNFILLED' ? '🚫' : '⌛';
       var t = new Date(s.t).toLocaleTimeString('fa-IR').slice(0, 5);
       txt += ic + ' ' + t + ' ' + s.sym + ' ' + s.dir + ' @' + s.entry;
       if (s.rr != null) txt += ' (' + (s.rr >= 0 ? '+' : '') + s.rr.toFixed(2) + 'R)';
@@ -1150,7 +1186,7 @@ function providerMenu(list, sr, tf, isMTF) {
   var b = []; var row = [];
   for (var i = 0; i < list.length; i++) {
     var p = list[i];
-    var ic = { gemini:'🌟',aiprime:'🅰️',groq:'⚡',openrouter:'🔀',mistral:'🌬️',github:'🐙',together:'🤝',gapgpt:'💎',huggingface:'🤗',cloudflare:'☁️',nvidia:'🟢',llm7:'🎁',avalai:'🇮🇷',metis:'🇮🇷',onexai:'🇮🇷' }[p] || '🤖';
+    var ic = { customvision:'⭐',gemini:'🌟',aiprime:'🅰️',groq:'⚡',openrouter:'🔀',mistral:'🌬️',github:'🐙',together:'🤝',gapgpt:'💎',huggingface:'🤗',cloudflare:'☁️',nvidia:'🟢',llm7:'🎁',avalai:'🇮🇷',metis:'🇮🇷',onexai:'🇮🇷' }[p] || '🤖';
     row.push({ text: ic + ' ' + (PROVIDER_NAMES[p] || p), callback_data: 'pvd_' + p + '_' + sr + '_' + (isMTF ? 'MTF' : tf) });
     if (row.length === 2) { b.push(row); row = []; }
   }
@@ -1194,7 +1230,6 @@ function kzModeMenu(cur) { var m = function(x) { return cur === x ? ' ✅' : '';
   [{ text: '🔒 فقط KZ' + m('only'), callback_data: 'kz_only' }],
   [{ text: '◀️ بازگشت', callback_data: 'menu_settings' }]
 ]}; }
-// ✅ FIX: Local Filter Menu
 function localFilterMenu(cur) { var m = function(x) { return cur === x ? ' ✅' : ''; }; return { inline_keyboard: [
   [{ text: '✅ فعال (صرفه‌جویی توکن)' + m('on'), callback_data: 'lf_on' }],
   [{ text: '❌ غیرفعال (هر کندل)' + m('off'), callback_data: 'lf_off' }],
@@ -1446,7 +1481,7 @@ function buildImageCaption(levels, provider, conf, currentPrice) {
 // ============================================
 
 async function showMainMenu(token, chatId, mid) {
-  await sendOrEdit(token, chatId, mid, '🎯 <b>Everest v7.7</b>\n\n📊 Auto Journal + گزارش شبانه\n🌐 KZ Mode · 🪙 کریپتو · 🎯 Entry Type\n🔍 فیلتر محلی MSS/BOS\n\nاز منو انتخاب کنید:', mainMenu());
+  await sendOrEdit(token, chatId, mid, '🎯 <b>Everest v7.8</b>\n\n📊 Auto Journal + گزارش شبانه\n🌐 KZ Mode · 🪙 کریپتو · 🎯 Entry Type\n🔍 فیلتر محلی MSS/BOS\n⭐ Custom Vision API\n\nاز منو انتخاب کنید:', mainMenu());
 }
 async function showSymbolMenu(token, chatId, mid) {
   await sendOrEdit(token, chatId, mid, '🎯 <b>نماد:</b>\n\n💱 فارکس · 🪙 کریپتو', symbolMenu());
@@ -1484,13 +1519,14 @@ async function showJournalMenu(token, chatId, mid, env) {
   var j = await getJournal(env, chatId) || [];
   var t = '📓 <b>ژورنال (Auto)</b>\n\n';
   if (j.length) {
-    var w = 0, l = 0, op = 0;
+    var w = 0, l = 0, op = 0, uf = 0;
     for (var i = 0; i < j.length; i++) {
       if (j[i].status === 'WIN') w++;
       else if (j[i].status === 'LOSS') l++;
       else if (j[i].status === 'OPEN') op++;
+      else if (j[i].status === 'UNFILLED') uf++;
     }
-    t += '📈 ' + j.length + ' سیگنال ثبت‌شده\n✅ ' + w + ' برد · ❌ ' + l + ' باخت · ⏳ ' + op + ' باز\n\n';
+    t += '📈 ' + j.length + ' سیگنال ثبت‌شده\n✅ ' + w + ' برد · ❌ ' + l + ' باخت · ⏳ ' + op + ' باز · 🚫 ' + uf + ' کنسل\n\n';
     t += '<i>سیگنال‌های مانیتور خودکار ثبت می‌شن</i>';
   } else t += '<i>خالی — منتظر سیگنال مانیتور</i>';
   await sendOrEdit(token, chatId, mid, t, journalMenu());
@@ -1579,6 +1615,7 @@ async function showSettingsMenu(token, chatId, mid, env) {
   var kz = await getKzMode(env, chatId);
   var lf = await getLocalFilter(env, chatId);
   var lfIcon = lf === 'on' ? '🔍 فعال' : '🔍 غیرفعال';
+  var cvReady = isCustomVisionReady(env) ? '⭐ ✅' : '⭐ ❌';
   var text = '⚙️ <b>تنظیمات</b>\n\n' +
     '<b>🎚️ نوع:</b> ' + stCfg.icon + ' ' + stCfg.label + '\n' +
     '<i>' + stCfg.desc + '</i>\n\n' +
@@ -1586,6 +1623,7 @@ async function showSettingsMenu(token, chatId, mid, env) {
     '<b>🎯 حالت:</b> ' + uc.icon + ' ' + uc.label + '\n' +
     '<b>🧠 هم‌گرایی:</b> ' + cl + '\n' +
     '<b>' + lfIcon + '</b>\n' +
+    '<b>Custom Vision:</b> ' + cvReady + '\n' +
     '<b>مدل:</b> A ' + aL + ' · G ' + gL;
   await sendOrEdit(token, chatId, mid, text, {
     inline_keyboard: [
@@ -1601,12 +1639,13 @@ async function showSettingsMenu(token, chatId, mid, env) {
 }
 
 async function showStatus(token, chatId, mid, env) {
-  var all = ['gemini','aiprime','groq','github','together','gapgpt','openrouter','mistral','huggingface','cloudflare','nvidia','llm7','avalai','metis','onexai'];
+  var all = ['customvision','gemini','aiprime','groq','github','together','gapgpt','openrouter','mistral','huggingface','cloudflare','nvidia','llm7','avalai','metis','onexai'];
   var text = '📈 <b>وضعیت</b>\n\n';
   var active = 0;
   for (var i = 0; i < all.length; i++) {
     var p = all[i]; var hasKey;
-    if (p === 'gemini') hasKey = getGeminiKeys(env).length > 0;
+    if (p === 'customvision') hasKey = isCustomVisionReady(env);
+    else if (p === 'gemini') hasKey = getGeminiKeys(env).length > 0;
     else if (p === 'llm7') hasKey = true;
     else hasKey = !!getKey(env, p);
     if (hasKey) active++;
@@ -1618,38 +1657,35 @@ async function showStatus(token, chatId, mid, env) {
   text += '💾 KV: ' + (env.KV ? '✅' : '❌') + '\n';
   text += '📓 Journal: ' + (env.KV ? '✅ Auto' : '❌') + '\n';
   var lf = await getLocalFilter(env, chatId);
-  text += '🔍 Local Filter: ' + (lf === 'on' ? '✅' : '❌');
+  text += '🔍 Local Filter: ' + (lf === 'on' ? '✅' : '❌') + '\n';
+  text += '⭐ Vision Strict: ' + (VISION_STRICT ? '✅' : '❌');
   await sendOrEdit(token, chatId, mid, text, { inline_keyboard: [[{ text: '🏠', callback_data: 'menu_main' }]] });
 }
 
 async function showHelp(token, chatId, mid) {
-  var t = '📖 <b>راهنما v7.7</b>\n\n' +
-    '📊 <b>Auto Journal:</b>\nهر سیگنال تأییدشده خودکار ثبت می‌شه. پایان شب ۲۳:۳۰ گزارش روزانه با وین ریت و مجموع R می‌آد.\n\n' +
+  var t = '📖 <b>راهنما v7.8</b>\n\n' +
+    '📊 <b>Auto Journal:</b>\nهر سیگنال تأییدشده خودکار ثبت می‌شه. پایان شب ۲۳:۳۰ گزارش روزانه.\n\n' +
+    '⭐ <b>Custom Vision API:</b>\nبرای تحلیل تصویر، اول از API پولی استفاده می‌شه.\n\n' +
+    '🚫 <b>وضعیت UNFILLED:</b>\nسفارش لیمیت پرنشده → خارج از وین‌ریت\n\n' +
     '🎚️ <b>نوع تحلیل:</b>\n🔴 سختگیر · 🟢 آسان · ⚖️ هر دو\n\n' +
-    '🆕 <b>Entry Type:</b>\n🔵 LIMIT · ⚡ MARKET · 🟡 STOP\n\n' +
     '⚙️ <b>KZ Mode:</b>\n🌐 ۲۴/۷ · ⭐ اولویت · 🔒 فقط KZ\n\n' +
-    '🔍 <b>فیلتر محلی:</b>\nMSS/BOS جدید در ۶ کندل اخیر — صرفه‌جویی توکن\n\n' +
-    '🪙 <b>کریپتو:</b> BTC/USD، ETH/USD، ... خودکار + Binance\n\n' +
+    '🔍 <b>فیلتر محلی:</b>\nMSS/BOS جدید در ۶ کندل اخیر\n\n' +
     '<b>دستورات:</b>\n/menu /monitor /analyze /journal /watch /status';
   await sendOrEdit(token, chatId, mid, t, { inline_keyboard: [[{ text: '🏠', callback_data: 'menu_main' }]] });
 }
 
 async function showMonitorHelp(token, chatId, mid) {
   var t = '📖 <b>راهنمای مانیتور</b>\n\n' +
-    '🤖 هر کندل بسته، بازار تحلیل می‌شه و در صورت ستاپ معتبر، سیگنال با <b>نوع ورود دقیق</b> می‌آد.\n\n' +
-    '🔍 <b>فیلتر محلی MSS/BOS:</b>\nاگه فعال باشه، AI فقط وقتی صدا زده می‌شه که در ۶ کندل اخیر BOS یا MSS جدید شکل گرفته باشه — صرفه‌جویی زیاد توکن.\n\n' +
-    '📓 <b>Auto Journal:</b>\nسیگنال‌ها خودکار ثبت می‌شن و با هر بررسی، وضعیت WIN/LOSS آپدیت می‌شه.\n\n' +
-    '🌙 <b>گزارش شبانه:</b>\nساعت ۲۳:۳۰ تهران، آمار کامل روز فرستاده می‌شه.\n\n' +
-    '🎯 <b>آستانه‌های فعلی:</b>\n' +
-    '• اسکلپی: CF ≥ 5.0\n' +
-    '• متوسط: CF ≥ 4.5\n' +
-    '• مطمئن: CF ≥ 6.0\n\n' +
-    '⚡ <b>مصرف:</b>\nبا فیلتر محلی فعال، مصرف AI به‌شدت کمتره.';
+    '🤖 هر کندل بسته، بازار تحلیل می‌شه.\n\n' +
+    '🔍 <b>فیلتر محلی MSS/BOS:</b>\nصرفه‌جویی زیاد توکن.\n\n' +
+    '📓 <b>Auto Journal:</b>\nسیگنال‌ها خودکار ثبت + وضعیت WIN/LOSS/UNFILLED/EXPIRED.\n\n' +
+    '🌙 <b>گزارش شبانه:</b> ۲۳:۳۰ تهران\n\n' +
+    '🎯 <b>آستانه‌ها:</b>\n• اسکلپی: CF ≥ 5.0\n• متوسط: CF ≥ 4.5\n• مطمئن: CF ≥ 6.0';
   await sendOrEdit(token, chatId, mid, t, { inline_keyboard: [[{ text: '◀️', callback_data: 'menu_monitor' }]] });
 }
 
 async function showImageGuide(token, chatId, mid) {
-  await sendOrEdit(token, chatId, mid, '📸 <b>تحلیل تصویر</b>\n\nعکس چارت بفرستید!', { inline_keyboard: [[{ text: '🏠', callback_data: 'menu_main' }]] });
+  await sendOrEdit(token, chatId, mid, '📸 <b>تحلیل تصویر</b>\n\nعکس چارت بفرستید!\n\n⭐ از Custom Vision API استفاده می‌شه.', { inline_keyboard: [[{ text: '🏠', callback_data: 'menu_main' }]] });
 }
 
 // ============================================
@@ -1663,7 +1699,7 @@ async function showJournalList(token, chatId, env) {
   var recent = j.slice(-15).reverse();
   for (var i = 0; i < recent.length; i++) {
     var x = recent[i];
-    var ic = x.status === 'WIN' ? '✅' : x.status === 'LOSS' ? '❌' : x.status === 'OPEN' ? '⏳' : '⌛';
+    var ic = x.status === 'WIN' ? '✅' : x.status === 'LOSS' ? '❌' : x.status === 'OPEN' ? '⏳' : x.status === 'UNFILLED' ? '🚫' : '⌛';
     var time = new Date(x.t).toLocaleTimeString('fa-IR').slice(0, 5);
     t += ic + ' ' + time + ' ' + esc(x.sym) + ' ' + esc(x.dir) + ' @' + x.entry;
     if (x.rr != null) t += ' (' + (x.rr >= 0 ? '+' : '') + x.rr.toFixed(2) + 'R)';
@@ -1675,17 +1711,18 @@ async function showJournalList(token, chatId, env) {
 async function showJournalStats(token, chatId, env) {
   var j = await getJournal(env, chatId) || [];
   if (!j.length) { await sendMessage(token, chatId, '📓 خالی', { inline_keyboard: [[{ text: '◀️', callback_data: 'menu_journal' }]] }); return; }
-  var w = 0, l = 0, op = 0, ex = 0, rSum = 0;
+  var w = 0, l = 0, op = 0, ex = 0, uf = 0, rSum = 0;
   for (var i = 0; i < j.length; i++) {
     var x = j[i];
     if (x.status === 'WIN') { w++; rSum += (x.rr || 0); }
     else if (x.status === 'LOSS') { l++; rSum -= 1; }
     else if (x.status === 'OPEN') op++;
+    else if (x.status === 'UNFILLED') uf++;
     else ex++;
   }
   var cl = w + l;
   var wr = cl ? Math.round(w / cl * 100) : 0;
-  var t = '<b>📊 آمار کل</b>\n\n📈 کل: <b>' + j.length + '</b>\n✅ برد: <b>' + w + '</b>\n❌ باخت: <b>' + l + '</b>\n⏳ باز: <b>' + op + '</b>\n⌛ منقضی: <b>' + ex + '</b>\n\n🎯 وین ریت: <b>' + wr + '%</b>\n⚖️ مجموع R: <b>' + rSum.toFixed(2) + '</b>';
+  var t = '<b>📊 آمار کل</b>\n\n📈 کل: <b>' + j.length + '</b>\n✅ برد: <b>' + w + '</b>\n❌ باخت: <b>' + l + '</b>\n⏳ باز: <b>' + op + '</b>\n🚫 کنسل (پر نشد): <b>' + uf + '</b>\n⌛ منقضی: <b>' + ex + '</b>\n\n🎯 وین ریت: <b>' + wr + '%</b> <i>(از ' + cl + ' معامله)</i>\n⚖️ مجموع R: <b>' + rSum.toFixed(2) + '</b>';
   await sendMessage(token, chatId, t, { inline_keyboard: [[{ text: '◀️', callback_data: 'menu_journal' }]] });
 }
 
@@ -1697,11 +1734,12 @@ async function showJournalDaily(token, chatId, env) {
   var w = day.filter(function(s) { return s.status === 'WIN'; }).length;
   var l = day.filter(function(s) { return s.status === 'LOSS'; }).length;
   var op = day.filter(function(s) { return s.status === 'OPEN'; }).length;
+  var uf = day.filter(function(s) { return s.status === 'UNFILLED'; }).length;
   var rSum = 0;
   day.forEach(function(s) { if (s.status === 'WIN') rSum += (s.rr || 0); else if (s.status === 'LOSS') rSum -= 1; });
   var cl = w + l;
   var wr = cl ? Math.round(w / cl * 100) : 0;
-  var t = '<b>📅 گزارش امروز — ' + todayTehran + '</b>\n\n📈 کل: <b>' + day.length + '</b>\n✅ برد: ' + w + '\n❌ باخت: ' + l + '\n⏳ باز: ' + op + '\n\n🎯 وین ریت: <b>' + wr + '%</b>\n⚖️ مجموع R: <b>' + rSum.toFixed(2) + '</b>';
+  var t = '<b>📅 گزارش امروز — ' + todayTehran + '</b>\n\n📈 کل: <b>' + day.length + '</b>\n✅ برد: ' + w + '\n❌ باخت: ' + l + '\n⏳ باز: ' + op + '\n🚫 کنسل: ' + uf + '\n\n🎯 وین ریت: <b>' + wr + '%</b>\n⚖️ مجموع R: <b>' + rSum.toFixed(2) + '</b>';
   await sendMessage(token, chatId, t, { inline_keyboard: [[{ text: '◀️', callback_data: 'menu_journal' }]] });
 }
 
@@ -1818,7 +1856,8 @@ async function runImageAnalysis(token, chatId, photoFileId, env) {
     await sendMessage(token, chatId, '📸 دریافت تصویر...');
     var pd = await downloadTelegramPhoto(token, photoFileId);
     if (pd.size > 5 * 1024 * 1024) { await sendMessage(token, chatId, '❌ > ۵MB'); return; }
-    await sendMessage(token, chatId, '🧠 تحلیل...');
+    var visionMsg = isCustomVisionReady(env) ? '⭐ تحلیل با Custom Vision...' : '🧠 تحلیل...';
+    await sendMessage(token, chatId, visionMsg);
 
     var fullPrompt = buildPromptForMode(IMAGE_PROMPT, mode);
     var result = await callWithFallback(env, fullPrompt, pd.base64, 'image/jpeg', chatId);
@@ -1877,7 +1916,7 @@ async function finishMonitorSetup(token, chatId, mid, symbol, tf, ai, dp, env) {
 }
 
 // ============================================
-// ✅ CRON MONITOR CHECK
+// CRON MONITOR CHECK
 // ============================================
 
 async function checkAllMonitors(env) {
@@ -1898,7 +1937,6 @@ async function checkAllMonitors(env) {
       var chatId = key.replace('monitors:', '');
       var monitors = await env.KV.get(key, 'json') || [];
 
-      // ✅ FIX: Catch-up گزارش دیروز اگر ارسال نشده
       var yKey = 'dailyreport:' + chatId + ':' + yesterdayKey;
       var ySent = await env.KV.get(yKey);
       if (!ySent) {
@@ -1981,12 +2019,10 @@ async function runMonitorForUser(env, token, chatId, m, strict, mode, cfg, local
   if (!klines || klines.length < 30) return;
   klines = dropForming(klines, tf);
 
-  // ✅ Resolve journal در try/catch جدا (بدون AI)
   try {
     await resolveJournalForChat(env, chatId, klines, symbol, tf);
   } catch (e) { console.error('resolveJournal in monitor: ' + e.message); }
 
-  // ✅ FIX: فیلتر محلی MSS/BOS — قبل از صدا زدن AI
   if (localFilter === 'on') {
     var ls = localStructure(klines, 5);
     if (!ls.fresh) {
@@ -2033,7 +2069,6 @@ async function runMonitorForUser(env, token, chatId, m, strict, mode, cfg, local
 
   var ok = isSignalConfirmed(levels, confluence, strict, cfg);
 
-  // ✅ پنجره duplicate (2x TF)
   var tol = (atr || 0) * 0.5;
   var p = m.lastSignal;
   var dup = ok && p && p.dir === levels.direction && Math.abs(p.entry - levels.entry) <= tol && (Date.now() - p.t) < (TF_MINUTES[tf] || 5) * 60000 * 2;
@@ -2045,7 +2080,6 @@ async function runMonitorForUser(env, token, chatId, m, strict, mode, cfg, local
     m.signalCount = (m.signalCount || 0) + 1;
     var kzActive = isCrypto ? getCryptoLiquidityWindow().active : getKillZoneInfo().active;
     if (kzActive) m.kzSignalCount = (m.kzSignalCount || 0) + 1;
-    // ✅ FIX: حذف گردکردن sigKey — مقدار دقیق
     m.lastSignalKey = levels.direction + '_' + levels.entry + '_' + levels.sl;
 
     await autoJournalAdd(env, chatId, levels, result.provider, symbol, tf, currentPrice);
@@ -2053,7 +2087,6 @@ async function runMonitorForUser(env, token, chatId, m, strict, mode, cfg, local
   }
 }
 
-// ✅ FIX #1 + #4: isSignalConfirmed با تعدیل کامل برای easy/both
 function isSignalConfirmed(levels, confluence, strict, cfg) {
   if (levels.direction !== 'BUY' && levels.direction !== 'SELL') return false;
   if (!levels.entry || !levels.sl) return false;
@@ -2332,8 +2365,7 @@ async function handleCallback(token, chatId, mid, data, env) {
     await sendOrEdit(token, chatId, mid, '✅ ' + kc.icon + ' ' + kc.label, kzModeMenu(mK));
     return;
   }
-  // ✅ NEW: Local Filter settings
-  if (data === 'settings_localfilter') { var curLF = await getLocalFilter(env, chatId); await sendOrEdit(token, chatId, mid, '🔍 <b>فیلتر محلی MSS/BOS</b>\n\nاگه فعال باشه، AI فقط وقتی صدا زده می‌شه که در ۶ کندل اخیر BOS/MSS جدید شکل گرفته باشه — صرفه‌جویی زیاد توکن.', localFilterMenu(curLF)); return; }
+  if (data === 'settings_localfilter') { var curLF = await getLocalFilter(env, chatId); await sendOrEdit(token, chatId, mid, '🔍 <b>فیلتر محلی MSS/BOS</b>\n\nاگه فعال باشه، AI فقط وقتی صدا زده می‌شه که در ۶ کندل اخیر BOS/MSS جدید شکل گرفته باشه.', localFilterMenu(curLF)); return; }
   if (data === 'lf_on' || data === 'lf_off') {
     var mLF = data.replace('lf_', '');
     await setLocalFilter(env, chatId, mLF);
@@ -2463,7 +2495,7 @@ async function handleUpdate(update, env) {
 export default {
   async fetch(request, env, ctx) {
     var url = new URL(request.url);
-    if (url.pathname === '/' || url.pathname === '') return new Response('Everest Bot v7.7 — Fixed Monitor + Local Filter', { status: 200 });
+    if (url.pathname === '/' || url.pathname === '') return new Response('Everest Bot v7.8 — Custom Vision + UNFILLED fix', { status: 200 });
     if (request.method === 'POST' && url.pathname === '/webhook') {
       try {
         var update = await request.json();
