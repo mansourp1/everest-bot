@@ -1,5 +1,12 @@
 // ============================================
-// EVEREST BOT v8.0
+// EVEREST BOT v8.2
+// + Calibration Engine (Brier + Reliability)
+// + Regime Router (local deterministic)
+// + Adversarial Reviewer
+// + Portfolio Risk Gate
+// + Opportunity Cost Ledger
+// + Schema Validator (strict)
+// + Signal Passport
 // + Expiry Watchdog (UNFILLED vs EXPIRED)
 // + Text: AIPrime | Image: Gemini → GapGPT → AIPrime
 // + Custom Vision API + Local Filter MSS/BOS
@@ -33,14 +40,12 @@ const VISION_MODELS_BY_PROVIDER = {
   gapgpt: ['gpt-4o', 'gpt-4o-mini']
 };
 
-// TTL انقضا بر اساس TF
 const EXPIRY_TTL_BY_TF = {
   '1min': 20, '3min': 15, '5min': 12, '15min': 10, '1h': 8, '4h': 6
 };
 const EXPIRY_TTL_DEFAULT = 12;
 const EXPIRY_WARN_PCT = 0.75;
 
-// Filled timeout (سفارش پر شده که به TP/SL نرسید)
 const FILLED_TIMEOUT_BY_TF = {
   '1min': 40, '3min': 30, '5min': 24, '15min': 20, '1h': 16, '4h': 12
 };
@@ -96,6 +101,19 @@ const IMAGE_PROMPT = "شما یک تحلیل‌گر ارشد هستید.\n\n**ت
 "**فرمت:**\n---\nDirection: [BUY/SELL/WAIT]\nSymbol: [نماد یا UNKNOWN]\nTimeframe: [TF یا UNKNOWN]\nRegime: [...]\nConfidenceScore: [0-100]\nEntry: [عدد یا N/A]\nStop Loss: [عدد یا N/A]\nTP1: [عدد یا N/A]\nTP2: [عدد یا N/A]\nTP3: [عدد یا N/A]\nR/R: [نسبت یا N/A]\n---";
 
 const CRYPTO_NOTE = "\n\n**🪙 کریپتو:** بازار ۲۴/۷. ساعات لیکویید بالا (US/EU) بهترین فرصت";
+
+// ============================================
+// v8.2 CONSTANTS
+// ============================================
+const CALIB_MIN_SAMPLES = 20;
+const CALIB_BUCKET_MIN = 8;
+const PORTFOLIO_DEFAULTS = {
+  maxDailyLossRR: -3,
+  maxPerSymbol: 2,
+  maxPerMarket: 5,
+  maxTotal: 8,
+  maxCorrelatedAlts: 2
+};
 
 // ============================================
 // UTILS
@@ -158,7 +176,6 @@ function dropForming(klines, tf) {
   return a;
 }
 
-// ✅ v8: TTL و expiry info
 function getExpiryTTL(tf) { return EXPIRY_TTL_BY_TF[tf] || EXPIRY_TTL_DEFAULT; }
 function getFilledTimeoutTTL(tf) { return FILLED_TIMEOUT_BY_TF[tf] || 24; }
 
@@ -308,6 +325,160 @@ function shouldCheckNow(symbol, kzMode) {
 }
 
 // ============================================
+// v8.2 — PROVIDER KEY NORMALIZER
+// ============================================
+function normalizeProviderKey(providerName) {
+  var s = String(providerName || '').toLowerCase();
+  if (s.indexOf('aiprime') !== -1) return 'aiprime';
+  if (s.indexOf('gemini') !== -1) return 'gemini';
+  if (s.indexOf('gapgpt') !== -1) return 'gapgpt';
+  if (s.indexOf('groq') !== -1) return 'groq';
+  if (s.indexOf('github') !== -1) return 'github';
+  if (s.indexOf('together') !== -1) return 'together';
+  if (s.indexOf('openrouter') !== -1) return 'openrouter';
+  if (s.indexOf('mistral') !== -1) return 'mistral';
+  if (s.indexOf('avalai') !== -1) return 'avalai';
+  if (s.indexOf('metis') !== -1) return 'metis';
+  if (s.indexOf('onexai') !== -1) return 'onexai';
+  if (s.indexOf('customvision') !== -1) return 'customvision';
+  if (s.indexOf('huggingface') !== -1) return 'huggingface';
+  if (s.indexOf('cloudflare') !== -1) return 'cloudflare';
+  if (s.indexOf('nvidia') !== -1) return 'nvidia';
+  if (s.indexOf('llm7') !== -1) return 'llm7';
+  return 'unknown';
+}
+
+// ============================================
+// v8.2 — REGIME DETECTION
+// ============================================
+function calcEMA(arr, period) {
+  if (!arr.length || period < 1) return [];
+  var k = 2 / (period + 1);
+  var ema = [arr[0]];
+  for (var i = 1; i < arr.length; i++) ema.push(arr[i] * k + ema[i - 1] * (1 - k));
+  return ema;
+}
+
+function computeLocalRegime(kl) {
+  if (!kl || kl.length < 30) return { regime: 'UNKNOWN', emaSlope: 0, atrPct: 50, adx: 0, lastAtr: 0 };
+  var closes = kl.map(function(k) { return k.close; });
+  var ema20 = calcEMA(closes, 20);
+  var slope20 = ema20.length > 2 ? ((ema20[ema20.length - 1] - ema20[ema20.length - 3]) / ema20[ema20.length - 3]) * 100 : 0;
+  var atrs = [];
+  for (var i = 20; i <= kl.length; i += 3) {
+    var a = calcATR(kl.slice(0, i), 14);
+    if (a) atrs.push(a);
+  }
+  var lastAtr = calcATR(kl, 14) || 0;
+  var atrPct = 50;
+  if (atrs.length >= 5) {
+    var below = atrs.filter(function(x) { return x < lastAtr; }).length;
+    atrPct = Math.round(below / atrs.length * 100);
+  }
+  var trSum = 0, dmP = 0, dmM = 0, window = Math.min(kl.length - 1, 30);
+  for (var j = kl.length - window; j < kl.length; j++) {
+    if (j < 1) continue;
+    var up = kl[j].high - kl[j - 1].high;
+    var dn = kl[j - 1].low - kl[j].low;
+    if (up > dn && up > 0) dmP += up;
+    if (dn > up && dn > 0) dmM += dn;
+    trSum += Math.max(kl[j].high - kl[j].low, Math.abs(kl[j].high - kl[j - 1].close), Math.abs(kl[j].low - kl[j - 1].close));
+  }
+  var diP = trSum ? dmP / trSum * 100 : 0;
+  var diM = trSum ? dmM / trSum * 100 : 0;
+  var dx = (diP + diM) ? (Math.abs(diP - diM) / (diP + diM)) * 100 : 0;
+  var adx = Math.round(dx);
+  var regime = 'RANGING';
+  if (atrPct > 85) regime = 'HIGH_VOL';
+  else if (atrPct < 20 && adx < 15) regime = 'COMPRESSION';
+  else if (Math.abs(slope20) > 0.03 && adx > 20) regime = slope20 > 0 ? 'TRENDING_UP' : 'TRENDING_DOWN';
+  return { regime: regime, emaSlope: Math.round(slope20 * 100) / 100, atrPct: atrPct, adx: adx, lastAtr: lastAtr };
+}
+
+// ============================================
+// v8.2 — ADVERSARIAL CHECK
+// ============================================
+function adversarialCheck(levels, klines, regime, atr) {
+  var issues = [];
+  if (levels.direction !== 'BUY' && levels.direction !== 'SELL') return { passed: true, issues: [] };
+  var last = klines[klines.length - 1];
+  if (levels.entry != null && levels.sl != null && atr > 0) {
+    var risk = Math.abs(levels.entry - levels.sl);
+    if (risk < 0.35 * atr) issues.push('SL < 0.35×ATR (شکار استاپ)');
+    if (risk > 3.5 * atr) issues.push('SL > 3.5×ATR (ریسک زیاد)');
+  }
+  if (levels.entry != null && levels.sl != null && levels.tp1 != null) {
+    var rr = Math.abs(levels.tp1 - levels.entry) / Math.abs(levels.entry - levels.sl);
+    if (rr < 1.2) issues.push('R/R < 1.2');
+  }
+  if (regime.regime === 'TRENDING_UP' && levels.direction === 'SELL') issues.push('فروش در روند صعودی');
+  if (regime.regime === 'TRENDING_DOWN' && levels.direction === 'BUY') issues.push('خرید در روند نزولی');
+  if (levels.entry != null && last && atr > 0 && Math.abs(levels.entry - last.close) > 4.5 * atr) issues.push('Entry > 4.5×ATR از قیمت');
+  var recent = klines.slice(-5);
+  if (recent.length >= 5) {
+    var net = recent[recent.length - 1].close - recent[0].close;
+    var range = Math.max.apply(null, recent.map(function(k) { return k.high; })) - Math.min.apply(null, recent.map(function(k) { return k.low; }));
+    if (range > 0) {
+      var m = net / range;
+      if (levels.direction === 'BUY' && m < -0.65) issues.push('مومنتوم نزولی شدید');
+      if (levels.direction === 'SELL' && m > 0.65) issues.push('مومنتوم صعودی شدید');
+    }
+  }
+  if (regime.atrPct > 92) issues.push('نوسان >92 پرسنتیل');
+  return { passed: issues.length === 0, issues: issues };
+}
+
+// ============================================
+// v8.2 — SCHEMA VALIDATOR
+// ============================================
+function strictSchemaValidate(levels) {
+  var issues = [];
+  if (!levels || typeof levels !== 'object') return { passed: false, issues: ['levels null'] };
+  var dir = levels.direction;
+  if (!dir) issues.push('direction missing');
+  else if (['BUY', 'SELL', 'WAIT'].indexOf(dir) === -1) issues.push('direction invalid: ' + dir);
+  if (levels.confidence != null) {
+    if (!isFinite(levels.confidence)) issues.push('confidence not finite');
+    else if (levels.confidence < 0 || levels.confidence > 100) issues.push('confidence out of [0,100]: ' + levels.confidence);
+  }
+  ['entry', 'sl', 'tp1', 'tp2', 'tp3'].forEach(function(k) {
+    var v = levels[k];
+    if (v == null) return;
+    if (typeof v !== 'number' || !isFinite(v)) { issues.push(k + ' invalid number'); return; }
+    if (v < 0) issues.push(k + ' negative: ' + v);
+    if (v === 0) issues.push(k + ' is zero');
+  });
+  if (levels.entry != null && levels.sl != null && levels.entry > 0 && levels.sl > 0) {
+    if (levels.entry === levels.sl) issues.push('entry equals SL');
+    var ratio = Math.max(levels.entry, levels.sl) / Math.min(levels.entry, levels.sl);
+    if (ratio > 50) issues.push('entry/SL ratio >50');
+  }
+  ['tp1', 'tp2', 'tp3'].forEach(function(k) {
+    var v = levels[k];
+    if (v == null || levels.entry == null) return;
+    if (levels.entry <= 0) return;
+    var r = v / levels.entry;
+    if (r > 100 || r < 0.01) issues.push(k + ' extreme ratio vs entry');
+  });
+  if (levels.direction === 'BUY' && levels.entry != null && levels.sl != null && levels.sl >= levels.entry) issues.push('BUY sl>=entry');
+  if (levels.direction === 'SELL' && levels.entry != null && levels.sl != null && levels.sl <= levels.entry) issues.push('SELL sl<=entry');
+  if (levels.direction === 'BUY' && levels.entry != null && levels.tp1 != null && levels.tp1 <= levels.entry) issues.push('BUY tp1<=entry');
+  if (levels.direction === 'SELL' && levels.entry != null && levels.tp1 != null && levels.tp1 >= levels.entry) issues.push('SELL tp1>=entry');
+  return { passed: issues.length === 0, issues: issues };
+}
+
+function validateSignalStrict(levels, opts) {
+  var schema = strictSchemaValidate(levels);
+  if (!schema.passed) {
+    levels.direction = 'WAIT';
+    levels.validationIssues = (levels.validationIssues || []).concat(schema.issues.map(function(i) { return '🔴 Schema: ' + i; }));
+    levels._schemaFailed = true;
+    return levels;
+  }
+  return validateSignal(levels, opts);
+}
+
+// ============================================
 // PROVIDERS
 // ============================================
 
@@ -373,6 +544,214 @@ async function getMonitors(env, c) { try { return await env.KV.get('monitors:' +
 async function saveMonitors(env, c, l) { await env.KV.put('monitors:' + c, JSON.stringify(l)); }
 async function getLocalFilter(env, c) { try { var v = await env.KV.get('localfilter:' + c); return v === null ? 'on' : v; } catch (e) { return 'on'; } }
 async function setLocalFilter(env, c, v) { await env.KV.put('localfilter:' + c, v); }
+
+// ============================================
+// v8.2 — CALIBRATION (KV)
+// ============================================
+async function calibrationLoad(env, chatId) {
+  try { return await env.KV.get('calib:' + chatId, 'json') || {}; } catch (e) { return {}; }
+}
+async function calibrationSave(env, chatId, data) {
+  try { await env.KV.put('calib:' + chatId, JSON.stringify(data)); } catch (e) {}
+}
+async function calibrationRecord(env, chatId, provider, tier, regime, predictedConf, outcome) {
+  if (predictedConf == null || !isFinite(predictedConf)) return;
+  var d = await calibrationLoad(env, chatId);
+  var key = normalizeProviderKey(provider) + '|' + (tier || 'fast') + '|' + (regime || 'UNKNOWN');
+  if (!d[key]) d[key] = { records: [] };
+  d[key].records.push({ c: predictedConf, o: outcome ? 1 : 0, t: Date.now() });
+  if (d[key].records.length > 500) d[key].records = d[key].records.slice(-500);
+  await calibrationSave(env, chatId, d);
+}
+async function calibrationStats(env, chatId, provider, tier, regime) {
+  var d = await calibrationLoad(env, chatId);
+  var key = normalizeProviderKey(provider) + '|' + (tier || 'fast') + '|' + (regime || 'UNKNOWN');
+  var records = (d[key] && d[key].records) || [];
+  if (!records.length) return null;
+  var n = records.length;
+  var brier = records.reduce(function(s, r) { return s + Math.pow(r.c / 100 - r.o, 2); }, 0) / n;
+  var buckets = {};
+  records.forEach(function(r) {
+    var bin = Math.floor(r.c / 10) * 10;
+    if (!buckets[bin]) buckets[bin] = { n: 0, wins: 0 };
+    buckets[bin].n++;
+    buckets[bin].wins += r.o;
+  });
+  return { n: n, brier: brier, buckets: buckets };
+}
+async function isCalibApplyOn(env, chatId) {
+  try { var v = await env.KV.get('calibtoggle:' + chatId); return v !== '0'; } catch (e) { return true; }
+}
+async function setCalibApply(env, chatId, on) {
+  await env.KV.put('calibtoggle:' + chatId, on ? '1' : '0');
+}
+async function calibrateConfidence(env, chatId, provider, tier, regime, rawConf) {
+  if (!(await isCalibApplyOn(env, chatId))) return { conf: rawConf, adjusted: false, n: 0 };
+  if (rawConf == null) return { conf: rawConf, adjusted: false, n: 0 };
+  var stats = await calibrationStats(env, chatId, provider, tier, regime);
+  if (!stats || stats.n < CALIB_MIN_SAMPLES) return { conf: rawConf, adjusted: false, n: stats ? stats.n : 0 };
+  var bin = Math.floor(rawConf / 10) * 10;
+  var b = stats.buckets[bin];
+  if (!b || b.n < CALIB_BUCKET_MIN) return { conf: rawConf, adjusted: false, n: b ? b.n : 0 };
+  var actual = b.wins / b.n * 100;
+  return { conf: Math.round(actual), adjusted: true, n: b.n, raw: rawConf };
+}
+async function renderCalibrationSummary(env, chatId) {
+  var d = await calibrationLoad(env, chatId);
+  var keys = Object.keys(d);
+  if (!keys.length) return '⚪ هنوز داده‌ای نیست';
+  var byProv = {};
+  keys.forEach(function(k) {
+    var parts = k.split('|');
+    var prov = parts[0];
+    var recs = (d[k].records || []);
+    if (!byProv[prov]) byProv[prov] = [];
+    byProv[prov] = byProv[prov].concat(recs);
+  });
+  var lines = [];
+  Object.keys(byProv).forEach(function(prov) {
+    var recs = byProv[prov];
+    if (!recs.length) return;
+    var n = recs.length;
+    var brier = recs.reduce(function(s, r) { return s + Math.pow(r.c / 100 - r.o, 2); }, 0) / n;
+    var bIcon = brier < 0.15 ? '🟢' : brier < 0.22 ? '🟡' : '🔴';
+    lines.push(bIcon + ' <b>' + esc(prov) + '</b>: n=' + n + ' Brier=' + brier.toFixed(3));
+  });
+  return lines.join('\n');
+}
+
+// ============================================
+// v8.2 — OPPORTUNITY LEDGER (KV)
+// ============================================
+async function opLedgerLoad(env, chatId) {
+  try { return await env.KV.get('oppledger:' + chatId, 'json') || []; } catch (e) { return []; }
+}
+async function opLedgerSave(env, chatId, arr) {
+  try { await env.KV.put('oppledger:' + chatId, JSON.stringify(arr.slice(-300))); } catch (e) {}
+}
+async function logRejectedSignal(env, chatId, levels, reason, currentPrice, opts) {
+  try {
+    if (!levels || (levels.direction !== 'BUY' && levels.direction !== 'SELL')) return;
+    if (levels.entry == null || levels.sl == null || levels.tp1 == null) return;
+    opts = opts || {};
+    var a = await opLedgerLoad(env, chatId);
+    var sym = opts.symbol || '?';
+    var tf = opts.tf || '?';
+    var id = a.length ? (a[a.length - 1].id || 0) + 1 : 1;
+    a.push({
+      id: id, t: Date.now(), sym: sym, tf: tf,
+      dir: levels.direction, entry: levels.entry, sl: levels.sl,
+      tp1: levels.tp1, tp2: levels.tp2, tp3: levels.tp3,
+      confidence: levels.confidence, provider: opts.provider || '?',
+      reason: reason, status: 'OPEN', filled: false, currentPrice: currentPrice,
+      isCrypto: isCryptoSymbol(sym),
+      day: new Date(Date.now() + 3.5 * 3600 * 1000).toISOString().slice(0, 10)
+    });
+    await opLedgerSave(env, chatId, a);
+  } catch (e) { console.error('logRejectedSignal:', e.message); }
+}
+async function resolveRejectedSignals(env, chatId, klines, symbol, tf) {
+  try {
+    var a = await opLedgerLoad(env, chatId);
+    var ch = false;
+    var tfm = (TF_MINUTES[tf] || 5) * 60000;
+    for (var i = 0; i < a.length; i++) {
+      var s = a[i];
+      if (s.status !== 'OPEN' && s.status !== 'WIN') continue;
+      if (s.sym !== symbol) continue;
+      if (s.tf !== tf) continue;
+      if (s.tp1 == null) continue;
+      for (var j = 0; j < klines.length; j++) {
+        var k = klines[j];
+        var kt = Date.parse(String(k.datetime).includes('T') ? k.datetime : String(k.datetime).replace(' ', 'T') + 'Z');
+        if (!Number.isFinite(kt)) continue;
+        if (kt < s.t - tfm) continue;
+        if (s.status === 'WIN') {
+          if (s.whichTP < 3 && s.tp3 != null) {
+            var t3 = s.dir === 'BUY' ? k.high >= s.tp3 : k.low <= s.tp3;
+            if (t3) { s.whichTP = 3; s.rr = Math.abs(s.tp3 - s.entry) / Math.abs(s.entry - s.sl); ch = true; }
+          }
+          continue;
+        }
+        if (!s.filled) {
+          if (!(k.low <= s.entry && k.high >= s.entry)) continue;
+          s.filled = true; ch = true;
+        }
+        var slHit = s.dir === 'BUY' ? k.low <= s.sl : k.high >= s.sl;
+        var tp1Hit = s.dir === 'BUY' ? k.high >= s.tp1 : k.low <= s.tp1;
+        if (slHit) { s.status = 'LOSS'; s.rr = -1; ch = true; break; }
+        if (tp1Hit) { s.status = 'WIN'; s.whichTP = 1; s.rr = Math.abs(s.tp1 - s.entry) / Math.abs(s.entry - s.sl); ch = true; }
+      }
+    }
+    if (ch) await opLedgerSave(env, chatId, a);
+    return ch;
+  } catch (e) { console.error('resolveRejectedSignals:', e.message); return false; }
+}
+
+// ============================================
+// v8.2 — PORTFOLIO RISK GATE (KV)
+// ============================================
+async function getPortfolioConfig(env, chatId) {
+  try {
+    var c = await env.KV.get('prcfg:' + chatId, 'json');
+    if (c) return c;
+  } catch (e) {}
+  return Object.assign({}, PORTFOLIO_DEFAULTS);
+}
+async function setPortfolioConfig(env, chatId, cfg) {
+  await env.KV.put('prcfg:' + chatId, JSON.stringify(cfg));
+}
+async function getPortfolioState(env, chatId) {
+  var a = await getJournal(env, chatId) || [];
+  var open = a.filter(function(s) { return s.status === 'OPEN' || (s.status === 'WIN' && s.whichTP < 3); });
+  var today = new Date(Date.now() + 3.5 * 3600 * 1000).toISOString().slice(0, 10);
+  var todaySignals = a.filter(function(s) { return s.day === today; });
+  var todayRSum = 0;
+  todaySignals.forEach(function(s) {
+    if (s.status === 'WIN') todayRSum += (s.rr || 0);
+    else if (s.status === 'LOSS') todayRSum -= 1;
+  });
+  var openBySymbol = {}, openByMarket = {}, openCrypto = 0;
+  open.forEach(function(s) {
+    var sym = s.sym || s.symbol || '?';
+    var market = s.market || (isCryptoSymbol(sym) ? 'crypto' : 'forex');
+    openBySymbol[sym] = (openBySymbol[sym] || 0) + 1;
+    openByMarket[market] = (openByMarket[market] || 0) + 1;
+    if (isCryptoSymbol(sym)) openCrypto++;
+  });
+  var hasBTC = open.some(function(s) {
+    var ss = (s.sym || s.symbol || '').toUpperCase().replace(/[\/\-_]/g, '');
+    return ss.indexOf('BTC') === 0;
+  });
+  return {
+    open: open, openBySymbol: openBySymbol, openByMarket: openByMarket,
+    openCrypto: openCrypto, hasBTC: hasBTC,
+    todayRSum: todayRSum, totalOpen: open.length
+  };
+}
+async function portfolioCheck(env, chatId, newSignal) {
+  var cfg = await getPortfolioConfig(env, chatId);
+  var state = await getPortfolioState(env, chatId);
+  var issues = [];
+  if (state.todayRSum <= cfg.maxDailyLossRR) {
+    issues.push('سقف ضرر روزانه (' + cfg.maxDailyLossRR + 'R) — فعلی ' + state.todayRSum.toFixed(2) + 'R');
+  }
+  var sym = newSignal.sym || '?';
+  var market = newSignal.market || (isCryptoSymbol(sym) ? 'crypto' : 'forex');
+  if ((state.openBySymbol[sym] || 0) >= cfg.maxPerSymbol) {
+    issues.push('پوزیشن باز هم‌نماد: ' + (state.openBySymbol[sym] || 0) + '/' + cfg.maxPerSymbol);
+  }
+  if ((state.openByMarket[market] || 0) >= cfg.maxPerMarket) {
+    issues.push('پوزیشن این بازار: ' + (state.openByMarket[market] || 0) + '/' + cfg.maxPerMarket);
+  }
+  if (state.totalOpen >= cfg.maxTotal) {
+    issues.push('کل پوزیشن باز: ' + state.totalOpen + '/' + cfg.maxTotal);
+  }
+  if (isCryptoSymbol(sym) && state.hasBTC && sym.toUpperCase().replace(/[\/\-_]/g, '').indexOf('BTC') !== 0 && state.openCrypto >= cfg.maxCorrelatedAlts) {
+    issues.push('همبستگی آلت‌کوین با BTC باز: ' + state.openCrypto + '/' + cfg.maxCorrelatedAlts);
+  }
+  return { ok: issues.length === 0, issues: issues, state: state };
+}
 
 // ============================================
 // PARSING
@@ -1088,11 +1467,32 @@ function directionEmoji(d) {
 }
 
 // ============================================
-// AUTO JOURNAL
+// v8.2 — DISPLAY HELPERS
+// ============================================
+function buildRegimeBlock(levels) {
+  if (!levels._regime) return '';
+  var rg = levels._regime;
+  var ic = { TRENDING_UP:'📈', TRENDING_DOWN:'📉', RANGING:'↔️', HIGH_VOL:'🌪️', COMPRESSION:'🗜️', UNKNOWN:'❓' }[rg.regime] || '🧭';
+  return '\n🧭 <b>رژیم محلی:</b> ' + ic + ' ' + rg.regime + ' · ADX ' + rg.adx + ' · ATR% ' + rg.atrPct + ' · Slope ' + rg.emaSlope + '%\n';
+}
+function buildAdversarialBlock(levels) {
+  if (!levels._adversarial || levels._adversarial.passed) return '';
+  var c = '\n🛡️ <b>Adversarial Reviewer:</b>\n';
+  levels._adversarial.issues.forEach(function(i) { c += '• ' + esc(i) + '\n'; });
+  return c;
+}
+function buildCalibBadge(levels) {
+  if (!levels._calibrated) return '';
+  return '\n🎯 <b>کالیبراسیون:</b> ' + levels._confRaw + '% → ' + levels.confidence + '%\n';
+}
+
+// ============================================
+// AUTO JOURNAL (v8.2 with Passport)
 // ============================================
 
-async function autoJournalAdd(env, chatId, levels, provider, symbol, tf, currentPrice) {
+async function autoJournalAdd(env, chatId, levels, provider, symbol, tf, currentPrice, opts) {
   try {
+    opts = opts || {};
     var a = await getJournal(env, chatId) || [];
     var kz = getKillZoneInfo();
     var isCrypto = isCryptoSymbol(symbol);
@@ -1100,6 +1500,7 @@ async function autoJournalAdd(env, chatId, levels, provider, symbol, tf, current
     var id = a.length ? (a[a.length - 1].id || 0) + 1 : 1;
     var tehran = new Date(Date.now() + 3.5 * 3600 * 1000);
     var day = tehran.toISOString().slice(0, 10);
+    var providerKey = normalizeProviderKey(provider);
     a.push({
       id: id, t: Date.now(),
       sym: symbol, tf: tf,
@@ -1108,6 +1509,7 @@ async function autoJournalAdd(env, chatId, levels, provider, symbol, tf, current
       tp1: levels.tp1, tp2: levels.tp2, tp3: levels.tp3,
       confidence: levels.confidence,
       provider: provider || '?',
+      providerKey: providerKey,
       status: 'OPEN', filled: false,
       currentPrice: currentPrice,
       kzIn: isCrypto ? (cryptoW ? cryptoW.active : false) : kz.active,
@@ -1115,7 +1517,22 @@ async function autoJournalAdd(env, chatId, levels, provider, symbol, tf, current
       isCrypto: isCrypto,
       dual: levels.dualEval ? { h: levels.dualEval.hard.approved, e: levels.dualEval.easy.approved } : null,
       mode: 'monitor',
-      day: day
+      strictness: opts.strictness || null,
+      day: day,
+      passport: {
+        atr: opts.atr != null ? Math.round(opts.atr * 10000) / 10000 : null,
+        regime: opts.regime ? opts.regime.regime : null,
+        regimeDetail: opts.regime ? { emaSlope: opts.regime.emaSlope, atrPct: opts.regime.atrPct, adx: opts.regime.adx } : null,
+        adversarial: opts.adversarial ? { passed: opts.adversarial.passed, issues: opts.adversarial.issues || [] } : null,
+        localStructure: opts.localStructure ? { state: opts.localStructure.state, type: opts.localStructure.fresh ? opts.localStructure.fresh.type : null, dir: opts.localStructure.fresh ? opts.localStructure.fresh.dir : null } : null,
+        aiProvider: provider,
+        modelTier: opts.modelTier || null,
+        promptVersion: 'v8.2',
+        candleCount: opts.candleCount || 0,
+        confidenceRaw: opts.confidenceRaw != null ? opts.confidenceRaw : levels.confidence,
+        confidenceAdjusted: opts.confidenceAdjusted === true
+      },
+      calibrated: false
     });
     await saveJournal(env, chatId, a);
     console.log('[AUTO-JOURNAL] ' + chatId + ' #' + id + ' ' + levels.direction + ' ' + symbol + ' @' + levels.entry);
@@ -1131,12 +1548,12 @@ function calcRRR(s, tpNum) {
   return risk > 0 ? reward / risk : 0;
 }
 
-// ✅ v8: TP1 نهایی + ارتقا به TP2/TP3
 async function resolveJournalForChat(env, chatId, klines, symbol, tf) {
   try {
     var a = await getJournal(env, chatId) || [];
     var ch = false;
     var tfm = (TF_MINUTES[tf] || 5) * 60 * 1000;
+    var calibQueue = [];
     for (var i = 0; i < a.length; i++) {
       var s = a[i];
       if (s.status !== 'OPEN' && s.status !== 'WIN') continue;
@@ -1167,7 +1584,15 @@ async function resolveJournalForChat(env, chatId, klines, symbol, tf) {
         }
 
         var slHit = s.dir === 'BUY' ? k.low <= s.sl : k.high >= s.sl;
-        if (slHit) { s.status = 'LOSS'; s.closeT = kt; s.closeP = k.close; s.whichTP = 0; s.rr = -1; ch = true; break; }
+        if (slHit) {
+          s.status = 'LOSS'; s.closeT = kt; s.closeP = k.close; s.whichTP = 0; s.rr = -1; ch = true;
+          if (!s.calibrated) {
+            var ppL = s.passport || {};
+            calibQueue.push({ provider: s.providerKey || normalizeProviderKey(s.provider), tier: ppL.modelTier, regime: ppL.regime, conf: s.confidence, outcome: false });
+            s.calibrated = true;
+          }
+          break;
+        }
 
         var tp3Hit = s.tp3 != null ? (s.dir === 'BUY' ? k.high >= s.tp3 : k.low <= s.tp3) : false;
         var tp2Hit = s.tp2 != null ? (s.dir === 'BUY' ? k.high >= s.tp2 : k.low <= s.tp2) : false;
@@ -1176,14 +1601,22 @@ async function resolveJournalForChat(env, chatId, klines, symbol, tf) {
         if (tp3Hit) { s.status = 'WIN'; s.closeT = kt; s.closeP = s.tp3; s.whichTP = 3; s.rr = calcRRR(s, 3); ch = true; }
         else if (tp2Hit) { s.status = 'WIN'; s.closeT = kt; s.closeP = s.tp2; s.whichTP = 2; s.rr = calcRRR(s, 2); ch = true; }
         else if (tp1Hit) { s.status = 'WIN'; s.closeT = kt; s.closeP = s.tp1; s.whichTP = 1; s.rr = calcRRR(s, 1); ch = true; }
+        if ((tp3Hit || tp2Hit || tp1Hit) && !s.calibrated) {
+          var ppW = s.passport || {};
+          calibQueue.push({ provider: s.providerKey || normalizeProviderKey(s.provider), tier: ppW.modelTier, regime: ppW.regime, conf: s.confidence, outcome: true });
+          s.calibrated = true;
+        }
       }
     }
     if (ch) { await saveJournal(env, chatId, a); console.log('[RESOLVE] ' + chatId + ' journal updated'); }
+    for (var ci = 0; ci < calibQueue.length; ci++) {
+      var cr = calibQueue[ci];
+      await calibrationRecord(env, chatId, cr.provider, cr.tier, cr.regime, cr.conf, cr.outcome);
+    }
     return ch;
   } catch (e) { console.error('resolveJournal:', e.message); return false; }
 }
 
-// ✅ v8: EXPIRY WATCHDOG — UNFILLED جدا از EXPIRED
 async function runExpiryWatchdog(env) {
   try {
     var token = env.TG_TOKEN;
@@ -1207,7 +1640,6 @@ async function runExpiryWatchdog(env) {
         var s = journal[i];
         if (s.status !== 'OPEN') continue;
 
-        // سفارش پر نشده
         if (!s.filled) {
           var info = getExpiryInfo(s);
           if (info.expired) {
@@ -1222,7 +1654,6 @@ async function runExpiryWatchdog(env) {
             warnedSignals.push({ s: s, info: info });
           }
         }
-        // سفارش پر شده که به TP/SL نرسید
         else if (s.fillT) {
           var finfo = getFilledExpiryInfo(s);
           if (finfo.expired) {
@@ -1242,7 +1673,6 @@ async function runExpiryWatchdog(env) {
         totalWarned += warnedSignals.length;
       }
 
-      // نوتیفیکیشن سفارش پر نشده
       for (var k = 0; k < unfilledSignals.length; k++) {
         var us = unfilledSignals[k];
         var msg = '🚫 <b>سفارش لیمیت پر نشد — کنسل شد</b>\n\n';
@@ -1261,7 +1691,6 @@ async function runExpiryWatchdog(env) {
         try { await sendMessage(token, chatId, msg, kb); } catch(e) { console.error('Unfilled notif: ' + e.message); }
       }
 
-      // نوتیفیکیشن سفارش پر شده که بسته نشد
       for (var m = 0; m < expiredSignals.length; m++) {
         var es = expiredSignals[m];
         var msg2 = '⌛ <b>سیگنال منقضی شد (بسته نشد)</b>\n\n';
@@ -1274,7 +1703,6 @@ async function runExpiryWatchdog(env) {
         try { await sendMessage(token, chatId, msg2); } catch(e) {}
       }
 
-      // هشدار نزدیک انقضا
       for (var n = 0; n < warnedSignals.length; n++) {
         var ws = warnedSignals[n].s;
         var wi = warnedSignals[n].info;
@@ -1332,11 +1760,34 @@ async function sendDailyReport(env, chatId, dayKey) {
       if (onlyEasy) txt += '⚖️ فقط آسان: ' + onlyEasy + '\n';
       if (onlyHard) txt += '⚖️ فقط سخت: ' + onlyHard + '\n';
     }
+    // 🆕 regime breakdown
+    var byRegime = {};
+    daySignals.forEach(function(s) {
+      if (s.passport && s.passport.regime) {
+        var rg = s.passport.regime;
+        if (!byRegime[rg]) byRegime[rg] = { total: 0, win: 0, loss: 0 };
+        byRegime[rg].total++;
+        if (s.status === 'WIN') byRegime[rg].win++;
+        if (s.status === 'LOSS') byRegime[rg].loss++;
+      }
+    });
+    var rgKeys = Object.keys(byRegime);
+    if (rgKeys.length) {
+      txt += '\n🧭 <b>تفکیک رژیم:</b>\n';
+      rgKeys.forEach(function(k) {
+        var b = byRegime[k];
+        var cl = b.win + b.loss;
+        var w = cl ? Math.round(b.win / cl * 100) : 0;
+        var ic = { TRENDING_UP:'📈',TRENDING_DOWN:'📉',RANGING:'↔️',HIGH_VOL:'🌪️',COMPRESSION:'🗜️' }[k] || '❓';
+        txt += ic + ' ' + esc(k) + ': ' + b.total + ' سیگنال · WR ' + (cl ? w + '%' : '—') + '\n';
+      });
+    }
     txt += '\n📋 <b>آخرین سیگنال‌ها:</b>\n';
     daySignals.slice(-10).forEach(function(s) {
       var ic = s.status === 'WIN' ? '✅' : s.status === 'LOSS' ? '❌' : s.status === 'OPEN' ? '⏳' : s.status === 'UNFILLED' ? '🚫' : '⌛';
       var t = new Date(s.t).toLocaleTimeString('fa-IR').slice(0, 5);
-      txt += ic + ' ' + t + ' ' + s.sym + ' ' + s.dir + ' @' + s.entry;
+      var rgIcon = s.passport && s.passport.regime ? ' ' + ({ TRENDING_UP:'📈',TRENDING_DOWN:'📉',RANGING:'↔️',HIGH_VOL:'🌪️',COMPRESSION:'🗜️' }[s.passport.regime] || '') : '';
+      txt += ic + ' ' + t + ' ' + s.sym + ' ' + s.dir + rgIcon + ' @' + s.entry;
       if (s.rr != null) txt += ' (' + (s.rr >= 0 ? '+' : '') + s.rr.toFixed(2) + 'R)';
       txt += '\n';
     });
@@ -1391,6 +1842,7 @@ function providerMenu(list, sr, tf, isMTF) {
 function journalMenu() { return { inline_keyboard: [
   [{ text: '📋 لیست معاملات', callback_data: 'journal_list' }, { text: '📊 آمار', callback_data: 'journal_stats' }],
   [{ text: '📅 گزارش روزانه', callback_data: 'journal_daily' }],
+  [{ text: '🔬 فرصت‌سنج', callback_data: 'journal_opp' }],
   [{ text: '🗑️ پاک کردن', callback_data: 'journal_clear' }],
   [{ text: '🏠 منو', callback_data: 'menu_main' }]
 ]}; }
@@ -1603,7 +2055,11 @@ function buildCaption(levels, symbol, tf, provider, conf, currentPrice) {
   var symIcon = isCrypto ? '🪙' : '💱';
   var c = '<b>📊 تحلیل</b>\n\n<b>نماد:</b> ' + symIcon + ' ' + esc(symbol) + '\n<b>TF:</b> ' + timeframeLabel(tf) + '\n';
   if (provider) c += '<b>سرویس:</b> ' + esc(provider) + '\n';
-  c += '<b>وضعیت:</b> ' + getKZBadge(symbol) + '\n\n';
+  c += '<b>وضعیت:</b> ' + getKZBadge(symbol) + '\n';
+  c += buildRegimeBlock(levels);
+  c += buildAdversarialBlock(levels);
+  c += buildCalibBadge(levels);
+  c += '\n';
   if (levels.dualEval) c += buildDualEvalBlock(levels);
   var d = levels.direction || 'WAIT';
   c += '\n<b>جهت:</b> ' + (d === 'BUY' ? '🟢 خرید' : d === 'SELL' ? '🔴 فروش' : '⏸️ انتظار') + '\n';
@@ -1629,7 +2085,10 @@ function buildMTFCaption(levels, symbol, provider, conf, currentPrice) {
   var symIcon = isCrypto ? '🪙' : '💱';
   var c = '<b>🎯 MTF</b>\n\n<b>نماد:</b> ' + symIcon + ' ' + esc(symbol) + '\n';
   if (provider) c += '<b>سرویس:</b> ' + esc(provider) + '\n';
-  c += '<b>وضعیت:</b> ' + getKZBadge(symbol) + '\n\n';
+  c += '<b>وضعیت:</b> ' + getKZBadge(symbol) + '\n';
+  c += buildRegimeBlock(levels);
+  c += buildAdversarialBlock(levels);
+  c += '\n';
   if (levels.dualEval) c += buildDualEvalBlock(levels);
   if (levels.htf || levels.mtf || levels.ltf || levels.entryTf) {
     c += '\n<b>📊 TF:</b>\n• 4H: ' + directionEmoji(levels.htf) + '\n• 1H: ' + directionEmoji(levels.mtf) + '\n• 15M: ' + directionEmoji(levels.ltf) + '\n• 1M: ' + directionEmoji(levels.entryTf) + '\n\n';
@@ -1654,6 +2113,7 @@ function buildImageCaption(levels, provider, conf, currentPrice) {
   if (provider) c += '<b>سرویس:</b> ' + esc(provider) + '\n';
   c += '\n';
   if (levels.detectedSymbol && levels.detectedSymbol !== 'UNKNOWN') c += '<b>نماد:</b> ' + esc(levels.detectedSymbol) + '\n';
+  c += buildAdversarialBlock(levels);
   if (levels.dualEval) c += buildDualEvalBlock(levels);
   var d = levels.direction || 'WAIT';
   c += '\n<b>جهت:</b> ' + (d === 'BUY' ? '🟢 خرید' : d === 'SELL' ? '🔴 فروش' : '⏸️ انتظار') + '\n';
@@ -1675,7 +2135,7 @@ function buildImageCaption(levels, provider, conf, currentPrice) {
 // ============================================
 
 async function showMainMenu(token, chatId, mid) {
-  await sendOrEdit(token, chatId, mid, '🎯 <b>Everest v8.0</b>\n\n📊 Auto Journal + گزارش شبانه\n🌐 KZ Mode · 🪙 کریپتو · 🎯 Entry Type\n🔍 فیلتر محلی MSS/BOS\n⏳ Expiry Watchdog (UNFILLED/EXPIRED)\n⭐ Custom Vision API\n\nاز منو انتخاب کنید:', mainMenu());
+  await sendOrEdit(token, chatId, mid, '🎯 <b>Everest v8.2</b>\n\n📊 Auto Journal + گزارش شبانه\n🧭 رژیم · 🛡️ Adversarial · 🎯 Calibration\n🌐 KZ Mode · 🪙 کریپتو · 🎯 Entry Type\n🔍 فیلتر محلی MSS/BOS\n⏳ Expiry Watchdog (UNFILLED/EXPIRED)\n🔬 Opportunity Ledger\n\nاز منو انتخاب کنید:', mainMenu());
 }
 async function showSymbolMenu(token, chatId, mid) {
   await sendOrEdit(token, chatId, mid, '🎯 <b>نماد:</b>\n\n💱 فارکس · 🪙 کریپتو', symbolMenu());
@@ -1750,7 +2210,7 @@ async function showMonitorMenu(token, chatId, mid, env) {
     }
     t += '\n' + lfLabel + '\n\n<i>هر سیگنال تأییدشده خودکار در ژورنال ثبت می‌شه</i>';
   } else {
-    t += '⚪ <b>غیرفعال</b>\n\nهر کندل بسته بررسی می‌شه و در صورت ستاپ معتبر، سیگنال با نوع ورود دقیق می‌آید.\n\n' + lfLabel + '\n\n🆕 <b>Auto Journal + Expiry Watchdog:</b> همه سیگنال‌ها خودکار ثبت می‌شن. سفارش پر نشده → UNFILLED. سفارش پر شده که بسته نشه → EXPIRED.';
+    t += '⚪ <b>غیرفعال</b>\n\nهر کندل بسته بررسی می‌شه و در صورت ستاپ معتبر، سیگنال با نوع ورود دقیق می‌آید.\n\n' + lfLabel + '\n\n🆕 <b>v8.2:</b> رژیم · Adversarial · Calibration · Portfolio Gate · Opportunity Ledger همه فعالن.';
   }
   await sendOrEdit(token, chatId, mid, t, monitorMenu());
 }
@@ -1812,7 +2272,8 @@ async function showSettingsMenu(token, chatId, mid, env) {
   var lf = await getLocalFilter(env, chatId);
   var lfIcon = lf === 'on' ? '🔍 فعال' : '🔍 غیرفعال';
   var cvReady = isCustomVisionReady(env) ? '⭐ ✅' : '⭐ ❌';
-  var text = '⚙️ <b>تنظیمات v8.0</b>\n\n' +
+  var calibOn = await isCalibApplyOn(env, chatId);
+  var text = '⚙️ <b>تنظیمات v8.2</b>\n\n' +
     '<b>🎚️ نوع:</b> ' + stCfg.icon + ' ' + stCfg.label + '\n' +
     '<i>' + stCfg.desc + '</i>\n\n' +
     '<b>⚙️ KZ Mode:</b> ' + KZ_MODES[kz].icon + ' ' + KZ_MODES[kz].label + '\n' +
@@ -1820,6 +2281,7 @@ async function showSettingsMenu(token, chatId, mid, env) {
     '<b>🧠 هم‌گرایی:</b> ' + cl + '\n' +
     '<b>' + lfIcon + '</b>\n' +
     '<b>Custom Vision:</b> ' + cvReady + '\n' +
+    '<b>🎯 کالیبراسیون:</b> ' + (calibOn ? '🟢 فعال' : '⚪ غیرفعال') + '\n' +
     '<b>مدل:</b> A ' + aL + ' · G ' + gL;
   await sendOrEdit(token, chatId, mid, text, {
     inline_keyboard: [
@@ -1829,6 +2291,8 @@ async function showSettingsMenu(token, chatId, mid, env) {
       [{ text: '🧠 هم‌گرایی', callback_data: 'settings_confluence' }],
       [{ text: '🔍 فیلتر محلی', callback_data: 'settings_localfilter' }],
       [{ text: '🎚️ سطح مدل', callback_data: 'settings_tier' }],
+      [{ text: '🎯 کالیبراسیون', callback_data: 'settings_calib' }],
+      [{ text: '🛡️ ریسک پورتفوی', callback_data: 'settings_portfolio' }],
       [{ text: '🏠', callback_data: 'menu_main' }]
     ]
   });
@@ -1836,7 +2300,7 @@ async function showSettingsMenu(token, chatId, mid, env) {
 
 async function showStatus(token, chatId, mid, env) {
   var all = ['customvision','gemini','aiprime','groq','github','together','gapgpt','openrouter','mistral','huggingface','cloudflare','nvidia','llm7','avalai','metis','onexai'];
-  var text = '📈 <b>وضعیت v8.0</b>\n\n';
+  var text = '📈 <b>وضعیت v8.2</b>\n\n';
   var active = 0;
   for (var i = 0; i < all.length; i++) {
     var p = all[i]; var hasKey;
@@ -1855,38 +2319,49 @@ async function showStatus(token, chatId, mid, env) {
   var lf = await getLocalFilter(env, chatId);
   text += '🔍 Local Filter: ' + (lf === 'on' ? '✅' : '❌') + '\n';
   text += '⏳ Watchdog: ' + (env.KV ? '✅ هر دقیقه' : '❌') + '\n';
-  text += '⭐ Vision Strict: ' + (VISION_STRICT ? '✅' : '❌');
+  text += '⭐ Vision Strict: ' + (VISION_STRICT ? '✅' : '❌') + '\n';
+
+  text += '\n━━━━━━━━━━━━━━━\n';
+  text += '🆕 <b>v8.2 Features:</b>\n';
+  var prState = await getPortfolioState(env, chatId);
+  var prCfg = await getPortfolioConfig(env, chatId);
+  var prIcon = prState.todayRSum <= prCfg.maxDailyLossRR ? '🔴' : prState.todayRSum < 0 ? '🟡' : '🟢';
+  text += prIcon + ' پورتفوی: ' + prState.todayRSum.toFixed(2) + 'R · ' + prState.totalOpen + '/' + prCfg.maxTotal + ' باز\n';
+  var calibOn = await isCalibApplyOn(env, chatId);
+  var calibData = await calibrationLoad(env, chatId);
+  var totalSamples = 0;
+  Object.keys(calibData).forEach(function(k) { totalSamples += (calibData[k].records || []).length; });
+  text += '🎯 کالیبراسیون: ' + (calibOn ? '🟢' : '⚪') + ' · ' + totalSamples + ' نمونه\n';
+  var oppRej = await opLedgerLoad(env, chatId);
+  text += '🔬 فرصت‌سنج: ' + oppRej.length + ' رد‌شده\n';
+
   await sendOrEdit(token, chatId, mid, text, { inline_keyboard: [[{ text: '🏠', callback_data: 'menu_main' }]] });
 }
 
 async function showHelp(token, chatId, mid) {
-  var t = '📖 <b>راهنما v8.0</b>\n\n' +
+  var t = '📖 <b>راهنما v8.2</b>\n\n' +
     '📊 <b>Auto Journal:</b>\nهر سیگنال تأییدشده خودکار ثبت می‌شه.\n\n' +
-    '⏳ <b>Expiry Watchdog:</b>\nدو نوع انقضا داریم:\n' +
-    '• 🚫 <b>UNFILLED</b> = سفارش لیمیت که پر نشد\n' +
-    '  TTL: 1m→20 · 3m→15 · 5m→12 · 15m→10 · 1h→8 · 4h→6 کندل\n' +
-    '• ⌛ <b>EXPIRED</b> = سفارش پر شد ولی SL/TP نزد\n' +
-    '  TTL: 1m→40 · 5m→24 · 15m→20 · 1h→16 · 4h→12 کندل\n\n' +
-    '📈 <b>وین‌ریت:</b> فقط از WIN+LOSS محاسبه می‌شه\n' +
-    '(UNFILLED و EXPIRED خارج از آمار)\n\n' +
+    '🆕 <b>v8.2 Pipeline:</b>\n' +
+    'AI (witness) → Schema → Adversarial → Filter → Portfolio Gate → Journal → Calibration\n\n' +
+    '⏳ <b>Expiry Watchdog:</b>\n' +
+    '• 🚫 UNFILLED = سفارش لیمیت که پر نشد\n' +
+    '• ⌛ EXPIRED = پر شد ولی به TP/SL نرسید\n\n' +
+    '🎯 <b>Calibration:</b>\nBrier Score + Reliability Curve\nبا n≥20 و bucket n≥8، confidence تصحیح می‌شه\n\n' +
+    '🛡️ <b>Portfolio Gate:</b>\nضرر روزانه · هم‌نماد · هر بازار · کل · همبستگی آلت‌کوین\n\n' +
+    '🔬 <b>Opportunity Ledger:</b>\nسیگنال‌های رد‌شده شبیه‌سازی می‌شن\n\n' +
     '⭐ <b>Vision:</b> Gemini → GapGPT → AIPrime\n\n' +
-    '🎚️ <b>نوع:</b> 🔴 سختگیر · 🟢 آسان · ⚖️ هر دو\n\n' +
     '<b>دستورات:</b>\n/menu /monitor /analyze /journal /watch /status';
   await sendOrEdit(token, chatId, mid, t, { inline_keyboard: [[{ text: '🏠', callback_data: 'menu_main' }]] });
 }
 
 async function showMonitorHelp(token, chatId, mid) {
-  var t = '📖 <b>راهنمای مانیتور v8.0</b>\n\n' +
+  var t = '📖 <b>راهنمای مانیتور v8.2</b>\n\n' +
     '🤖 هر کندل بسته، بازار تحلیل می‌شه.\n\n' +
     '🔍 <b>فیلتر محلی MSS/BOS:</b>\nصرفه‌جویی زیاد توکن.\n\n' +
-    '📓 <b>Auto Journal + Watchdog:</b>\nسیگنال‌ها خودکار ثبت می‌شن:\n' +
-    '• سفارش لیمیت پر نشد → 🚫 UNFILLED\n' +
-    '• سفارش پر شد ولی به TP/SL نرسید → ⌛ EXPIRED\n\n' +
-    '⏳ <b>TTL انقضای سفارش پر نشده:</b>\n' +
-    '• 1m: ۲۰ کندل\n• 3m: ۱۵\n• 5m: ۱۲\n• 15m: ۱۰\n• 1h: ۸\n• 4h: ۶\n\n' +
-    '⏰ <b>TTL سفارش پرشده:</b>\n' +
-    '• 1m: ۴۰\n• 5m: ۲۴\n• 15m: ۲۰\n• 1h: ۱۶\n• 4h: ۱۲\n\n' +
-    '🎯 <b>آستانه‌ها:</b>\n• اسکلپی: CF ≥ 5.0\n• متوسط: CF ≥ 4.5\n• مطمئن: CF ≥ 6.0';
+    '🧭 <b>رژیم محلی:</b>\nقبل از AI محاسبه می‌شه (EMA + ATR + ADX)\n\n' +
+    '🛡️ <b>Adversarial:</b>\n۶ قانون قطعی — رد قبل از ثبت\n\n' +
+    '🎯 <b>Calibration:</b>\nconfidence تعدیل‌شده با Brier\n\n' +
+    '📓 <b>Auto Journal + Watchdog:</b>\nسیگنال‌ها خودکار با Passport ثبت می‌شن';
   await sendOrEdit(token, chatId, mid, t, { inline_keyboard: [[{ text: '◀️', callback_data: 'menu_monitor' }]] });
 }
 
@@ -1907,7 +2382,8 @@ async function showJournalList(token, chatId, env) {
     var x = recent[i];
     var ic = x.status === 'WIN' ? '✅' : x.status === 'LOSS' ? '❌' : x.status === 'OPEN' ? '⏳' : x.status === 'UNFILLED' ? '🚫' : '⌛';
     var time = new Date(x.t).toLocaleTimeString('fa-IR').slice(0, 5);
-    t += ic + ' ' + time + ' ' + esc(x.sym) + ' ' + esc(x.dir) + ' @' + x.entry;
+    var rgI = x.passport && x.passport.regime ? ' ' + ({ TRENDING_UP:'📈',TRENDING_DOWN:'📉',RANGING:'↔️',HIGH_VOL:'🌪️',COMPRESSION:'🗜️' }[x.passport.regime] || '') : '';
+    t += ic + ' ' + time + ' ' + esc(x.sym) + ' ' + esc(x.dir) + rgI + ' @' + x.entry;
     if (x.status === 'OPEN' && !x.filled) {
       var info = getExpiryInfo(x);
       if (info.remainingMs > 0) t += ' <i>(' + formatRemainingTime(info.remainingMs) + ' مونده)</i>';
@@ -1958,6 +2434,74 @@ async function showJournalDaily(token, chatId, env) {
   await sendMessage(token, chatId, t, { inline_keyboard: [[{ text: '◀️', callback_data: 'menu_journal' }]] });
 }
 
+async function showOpportunityReport(token, chatId, env) {
+  var rej = await opLedgerLoad(env, chatId);
+  var all = await getJournal(env, chatId) || [];
+  var rejClosed = rej.filter(function(s) { return s.status === 'WIN' || s.status === 'LOSS'; });
+  var rejWins = rejClosed.filter(function(s) { return s.status === 'WIN'; }).length;
+  var rejLoss = rejClosed.filter(function(s) { return s.status === 'LOSS'; }).length;
+  var rejWR = rejClosed.length ? Math.round(rejWins / rejClosed.length * 100) : 0;
+  var accClosed = all.filter(function(s) { return s.status === 'WIN' || s.status === 'LOSS'; });
+  var accWins = accClosed.filter(function(s) { return s.status === 'WIN'; }).length;
+  var accLoss = accClosed.filter(function(s) { return s.status === 'LOSS'; }).length;
+  var accWR = accClosed.length ? Math.round(accWins / accClosed.length * 100) : 0;
+  var t = '🔬 <b>فرصت‌سنج v8.2</b>\n\n';
+  t += '✅ <b>Accepted (ژورنال):</b>\n';
+  t += '• کل بسته: ' + accClosed.length + '\n';
+  t += '• برد/باخت: ' + accWins + '/' + accLoss + '\n';
+  t += '• وین ریت: <b>' + accWR + '%</b>\n\n';
+  t += '🚫 <b>Rejected (فیلترها):</b>\n';
+  t += '• کل: ' + rej.length + ' · بسته: ' + rejClosed.length + '\n';
+  t += '• برد/باخت: ' + rejWins + '/' + rejLoss + '\n';
+  t += '• وین ریت: <b>' + rejWR + '%</b>\n\n';
+  if (rejClosed.length >= 10 && rejWR > accWR + 10) {
+    t += '⚠️ <b>هشدار:</b> فیلترها بیش از حد سختگیرن — آستانه‌ها را کم کن\n\n';
+  }
+  t += '📋 <b>آخرین رد‌شده‌ها:</b>\n';
+  if (!rej.length) t += '<i>هنوز رد‌شده‌ای نیست</i>\n';
+  else {
+    rej.slice(-5).reverse().forEach(function(s) {
+      var ic = s.status === 'WIN' ? '✅' : s.status === 'LOSS' ? '❌' : s.status === 'OPEN' ? '⏳' : '?';
+      t += ic + ' ' + esc(s.sym) + ' ' + esc(s.dir) + ' @' + s.entry + ' — ' + esc(s.reason) + '\n';
+    });
+  }
+  await sendMessage(token, chatId, t, { inline_keyboard: [[{ text: '◀️', callback_data: 'menu_journal' }]] });
+}
+
+async function showCalibMenu(token, chatId, mid, env) {
+  var on = await isCalibApplyOn(env, chatId);
+  var summary = await renderCalibrationSummary(env, chatId);
+  var t = '🎯 <b>Calibration Engine</b>\n\n';
+  t += 'وضعیت: ' + (on ? '🟢 فعال' : '⚪ غیرفعال') + '\n\n';
+  t += summary + '\n\n';
+  t += '<i>با n≥20 و bucket n≥8، confidence تصحیح می‌شه</i>';
+  await sendOrEdit(token, chatId, mid, t, { inline_keyboard: [
+    [{ text: on ? '⚪ غیرفعال کردن' : '🟢 فعال کردن', callback_data: on ? 'calib_off' : 'calib_on' }],
+    [{ text: '◀️', callback_data: 'menu_settings' }]
+  ]});
+}
+
+async function showPortfolioState(token, chatId, mid, env) {
+  var cfg = await getPortfolioConfig(env, chatId);
+  var state = await getPortfolioState(env, chatId);
+  var t = '🛡️ <b>وضعیت پورتفوی</b>\n\n';
+  var lossColor = state.todayRSum <= cfg.maxDailyLossRR ? '🔴' : state.todayRSum < 0 ? '🟡' : '🟢';
+  t += lossColor + ' <b>ضرر روزانه:</b> ' + state.todayRSum.toFixed(2) + 'R / ' + cfg.maxDailyLossRR + 'R\n';
+  t += '🔓 <b>پوزیشن باز:</b> ' + state.totalOpen + ' / ' + cfg.maxTotal + '\n';
+  var mk = Object.keys(state.openByMarket);
+  if (mk.length) {
+    t += '📊 <b>به تفکیک بازار:</b>\n';
+    mk.forEach(function(m) { t += '  • ' + esc(m) + ': ' + state.openByMarket[m] + '/' + cfg.maxPerMarket + '\n'; });
+  }
+  t += '🪙 <b>کریپتو باز:</b> ' + state.openCrypto + (state.hasBTC ? ' (BTC: ✅)' : '') + '\n';
+  t += '\n<i>قوانین:</i>\n';
+  t += '• هم‌نماد: max ' + cfg.maxPerSymbol + '\n';
+  t += '• هر بازار: max ' + cfg.maxPerMarket + '\n';
+  t += '• کل: max ' + cfg.maxTotal + '\n';
+  t += '• آلت‌کوین همبسته: max ' + cfg.maxCorrelatedAlts + '\n';
+  await sendOrEdit(token, chatId, mid, t, { inline_keyboard: [[{ text: '◀️', callback_data: 'menu_settings' }]] });
+}
+
 // ============================================
 // ANALYSIS RUNNERS
 // ============================================
@@ -2001,11 +2545,17 @@ async function runAnalysis(token, chatId, symbol, env, tf, forcedProvider) {
       }
     } else result = await callWithFallback(env, fullPrompt, null, null, chatId);
 
-    var levels = validateSignal(extractLevels(result.text), {
+    // 🆕 v8.2: Schema + Regime + Adversarial
+    var levels = validateSignalStrict(extractLevels(result.text), {
       strict: st, minRR: uc.minRR, minConfidence: uc.minConfidence,
       atr: atr, price: currentPrice
     });
     levels._atr = atr;
+    var regime = computeLocalRegime(klines);
+    levels._regime = regime;
+    var adv = adversarialCheck(levels, klines, regime, atr);
+    levels._adversarial = adv;
+
     var conf = await resolveConfluence(env, chatId, levels, result.text);
 
     await sendMessage(token, chatId, buildCaption(levels, symbol, TF_LABELS[tf], result.provider, conf, currentPrice));
@@ -2048,10 +2598,14 @@ async function runMultiTFAnalysis(token, chatId, symbol, env, forcedProvider) {
       } catch (e) { result = await callWithFallback(env, fullPrompt, null, null, chatId); }
     } else result = await callWithFallback(env, fullPrompt, null, null, chatId);
 
-    var levels = validateSignal(extractLevels(result.text), {
+    var levels = validateSignalStrict(extractLevels(result.text), {
       strict: st, minRR: uc.minRR, minConfidence: uc.minConfidence, atr: atr, price: currentPrice
     });
     levels._atr = atr;
+    var regime = computeLocalRegime(k15);
+    levels._regime = regime;
+    var adv = adversarialCheck(levels, k15, regime, atr);
+    levels._adversarial = adv;
     var conf = await resolveConfluence(env, chatId, levels, result.text);
 
     await sendMessage(token, chatId, buildMTFCaption(levels, symbol, result.provider, conf, currentPrice));
@@ -2075,7 +2629,7 @@ async function runImageAnalysis(token, chatId, photoFileId, env) {
 
     var fullPrompt = buildPromptForMode(IMAGE_PROMPT, mode);
     var result = await callWithFallback(env, fullPrompt, pd.base64, 'image/jpeg', chatId);
-    var levels = validateSignal(extractLevels(result.text), { strict: st, minRR: uc.minRR, minConfidence: uc.minConfidence });
+    var levels = validateSignalStrict(extractLevels(result.text), { strict: st, minRR: uc.minRR, minConfidence: uc.minConfidence });
     var conf = await resolveConfluence(env, chatId, levels, result.text);
     await sendMessage(token, chatId, buildImageCaption(levels, result.provider, conf, null));
 
@@ -2113,7 +2667,7 @@ async function finishMonitorSetup(token, chatId, mid, symbol, tf, ai, dp, env) {
   var dpLabel = { auto: '🔄 خودکار', binance: '🟡 Binance', twelve: '📊 Twelve' }[dp] || dp;
   var stCfg = STRICTNESS_MODES[strict];
   var cfg = MODE_CONFIG[mode];
-  var msg = '✅ <b>مانیتور فعال شد</b>\n\n' +
+  var msg = '✅ <b>مانیتور فعال شد (v8.2)</b>\n\n' +
     '<b>نماد:</b> ' + (isCrypto ? '🪙' : '💱') + ' ' + symbol + '\n' +
     '<b>TF:</b> ' + timeframeLabel(tf) + '\n' +
     '<b>AI:</b> ' + aiLabel + '\n' +
@@ -2123,9 +2677,10 @@ async function finishMonitorSetup(token, chatId, mid, symbol, tf, ai, dp, env) {
     '<b>KZ:</b> ' + KZ_MODES[kzMode].icon + ' ' + KZ_MODES[kzMode].label + '\n\n' +
     '🎯 آستانه CF: <b>' + cfg.minConfluence + '</b>\n' +
     '⏳ کنسلی سفارش پر نشده: <b>' + getExpiryTTL(tf) + ' کندل</b>\n' +
-    '⏰ انقضای سفارش پرشده: <b>' + getFilledTimeoutTTL(tf) + ' کندل</b>\n' +
-    '📓 سیگنال‌ها خودکار در ژورنال ثبت می‌شن\n' +
-    '🔔 در هر دو حالت بهت اطلاع می‌دیم';
+    '⏰ انقضای سفارش پرشده: <b>' + getFilledTimeoutTTL(tf) + ' کندل</b>\n\n' +
+    '🆕 <b>v8.2 Pipeline:</b>\n' +
+    'AI → Schema → Adversarial → Filter → Portfolio Gate → Calibration\n' +
+    '📓 سیگنال‌ها با Passport ثبت می‌شن';
   await sendOrEdit(token, chatId, mid, msg, { inline_keyboard: [
     [{ text: '📋 لیست', callback_data: 'mon_list' }],
     [{ text: '🏠 منو', callback_data: 'menu_main' }]
@@ -2236,18 +2791,18 @@ async function runMonitorForUser(env, token, chatId, m, strict, mode, cfg, local
 
   try {
     await resolveJournalForChat(env, chatId, klines, symbol, tf);
+    await resolveRejectedSignals(env, chatId, klines, symbol, tf);
   } catch (e) { console.error('resolveJournal in monitor: ' + e.message); }
 
-  if (localFilter === 'on') {
-    var ls = localStructure(klines, 5);
-    if (!ls.fresh) {
-      m.skippedCount = (m.skippedCount || 0) + 1;
-      return;
-    }
+  var ls = localStructure(klines, 5);
+  if (localFilter === 'on' && !ls.fresh) {
+    m.skippedCount = (m.skippedCount || 0) + 1;
+    return;
   }
 
   var currentPrice = klines[klines.length - 1].close;
   var atr = calcATR(klines, 14);
+  var regime = computeLocalRegime(klines); // 🆕
 
   var promptBody = 'نماد: ' + symbol + '\nتایم‌فریم: ' + timeframeLabel(tf) + '\nقیمت فعلی: ' + currentPrice + '\n\n' + klinesToText(klines, symbol, timeframeLabel(tf));
   var facts = '\n\n🧮 محلی:\n- ATR(14)=' + (atr ? atr.toFixed(4) : '?') + '\n';
@@ -2258,6 +2813,7 @@ async function runMonitorForUser(env, token, chatId, m, strict, mode, cfg, local
     var kz = getKillZoneInfo();
     facts += '- ' + (kz.active ? '⚠️ داخل KZ — اولویت بالا' : '⚠️ خارج KZ — احتیاط') + '\n';
   }
+  facts += '- 🧭 رژیم: ' + regime.regime + ' (ADX:' + regime.adx + ', ATR%:' + regime.atrPct + ', Slope:' + regime.emaSlope + '%)\n';
 
   var confMode = await getConfluenceMode(env, chatId);
   var sysPrompt = buildPromptForMode(SYSTEM_PROMPT, confMode);
@@ -2274,20 +2830,52 @@ async function runMonitorForUser(env, token, chatId, m, strict, mode, cfg, local
     } catch (e) { result = await callWithFallback(env, fullPrompt, null, null, chatId); }
   } else result = await callWithFallback(env, fullPrompt, null, null, chatId);
 
-  var levels = validateSignal(extractLevels(result.text), {
+  // 🆕 v8.2: Schema + Regime + Adversarial + Portfolio
+  var rawLevels = extractLevels(result.text);
+  var originalDir = rawLevels.direction;
+  var levels = validateSignalStrict(rawLevels, {
     strict: strict, minRR: cfg.minRR, minConfidence: cfg.minConfidence,
     atr: atr, price: currentPrice
   });
   levels._atr = atr;
-  var confluence = await resolveConfluence(env, chatId, levels, result.text);
+  levels._regime = regime;
 
-  var ok = isSignalConfirmed(levels, confluence, strict, cfg);
+  var adv = adversarialCheck(levels, klines, regime, atr);
+  levels._adversarial = adv;
+  var alreadyLogged = false;
+
+  if ((levels.direction === 'BUY' || levels.direction === 'SELL') && !adv.passed) {
+    await logRejectedSignal(env, chatId, levels, 'adversarial:' + adv.issues[0], currentPrice, { symbol: symbol, tf: tf, provider: result.provider });
+    levels.direction = 'WAIT';
+    levels.validationIssues = (levels.validationIssues || []).concat(adv.issues.map(function(i) { return '🛡️ ' + i; }));
+    alreadyLogged = true;
+  }
+
+  var confluence = await resolveConfluence(env, chatId, levels, result.text);
+  var ok = isSignalConfirmed(levels, confluence, strict, cfg, regime);
+
+  // 🆕 Portfolio gate
+  if (ok) {
+    var pr = await portfolioCheck(env, chatId, { sym: symbol, market: isCrypto ? 'crypto' : 'forex' });
+    if (!pr.ok) {
+      await logRejectedSignal(env, chatId, rawLevels, 'portfolio:' + pr.issues[0], currentPrice, { symbol: symbol, tf: tf, provider: result.provider });
+      levels.validationIssues = (levels.validationIssues || []).concat(pr.issues.map(function(i) { return '🛡️ ' + i; }));
+      alreadyLogged = true;
+      ok = false;
+    }
+  }
+
+  // 🆕 Opportunity: log filter rejections
+  if (!ok && !alreadyLogged && (originalDir === 'BUY' || originalDir === 'SELL') && rawLevels.entry != null && rawLevels.sl != null && rawLevels.tp1 != null) {
+    var reason = levels._schemaFailed ? 'schema' : 'filter';
+    await logRejectedSignal(env, chatId, rawLevels, reason, currentPrice, { symbol: symbol, tf: tf, provider: result.provider });
+  }
 
   var tol = (atr || 0) * 0.5;
   var p = m.lastSignal;
   var dup = ok && p && p.dir === levels.direction && Math.abs(p.entry - levels.entry) <= tol && (Date.now() - p.t) < (TF_MINUTES[tf] || 5) * 60000 * 2;
 
-  console.log('[MON ' + chatId + '] ' + symbol + ' ' + tf + ' | dir=' + levels.direction + ' conf=' + levels.confidence + ' rr=' + (levels.rr || '—') + ' cf=' + (confluence && confluence.confluence != null ? confluence.confluence : '—') + ' | ' + (ok ? (dup ? 'DUP' : 'SIGNAL ✅') : 'skip'));
+  console.log('[MON ' + chatId + '] ' + symbol + ' ' + tf + ' | dir=' + levels.direction + ' conf=' + levels.confidence + ' rr=' + (levels.rr || '—') + ' cf=' + (confluence && confluence.confluence != null ? confluence.confluence : '—') + ' reg=' + regime.regime + ' | ' + (ok ? (dup ? 'DUP' : 'SIGNAL ✅') : 'skip'));
 
   if (ok && !dup) {
     m.lastSignal = { dir: levels.direction, entry: levels.entry, t: Date.now() };
@@ -2296,18 +2884,40 @@ async function runMonitorForUser(env, token, chatId, m, strict, mode, cfg, local
     if (kzActive) m.kzSignalCount = (m.kzSignalCount || 0) + 1;
     m.lastSignalKey = levels.direction + '_' + levels.entry + '_' + levels.sl;
 
-    await autoJournalAdd(env, chatId, levels, result.provider, symbol, tf, currentPrice);
+    // 🆕 Calibration
+    var providerKey = normalizeProviderKey(result.provider);
+    var tier = await getUserModelTier(env, chatId, providerKey);
+    var confRaw = levels.confidence;
+    var calib = await calibrateConfidence(env, chatId, providerKey, tier, regime.regime, levels.confidence);
+    if (calib.adjusted) {
+      levels.confidence = calib.conf;
+      levels._calibrated = true;
+      levels._confRaw = confRaw;
+    }
+
+    await autoJournalAdd(env, chatId, levels, result.provider, symbol, tf, currentPrice, {
+      atr: atr, regime: regime, adversarial: adv, localStructure: ls,
+      candleCount: klines.length, confidenceRaw: confRaw,
+      confidenceAdjusted: calib.adjusted, modelTier: tier, strictness: strict
+    });
     await sendMonitorSignal(token, chatId, levels, confluence, result, currentPrice, symbol, tf);
   }
 }
 
-function isSignalConfirmed(levels, confluence, strict, cfg) {
+function isSignalConfirmed(levels, confluence, strict, cfg, regime) {
   if (levels.direction !== 'BUY' && levels.direction !== 'SELL') return false;
   if (!levels.entry || !levels.sl) return false;
 
   var minConf = cfg.minConfidence;
   var minRR = cfg.minRR;
   var minCF = cfg.minConfluence;
+
+  if (regime) {
+    if (regime.regime === 'HIGH_VOL') { minConf += 5; minCF += 1; }
+    if (regime.regime === 'COMPRESSION') { minCF += 0.5; }
+    if (regime.regime === 'TRENDING_UP' && levels.direction === 'SELL') { minCF += 1.5; }
+    if (regime.regime === 'TRENDING_DOWN' && levels.direction === 'BUY') { minCF += 1.5; }
+  }
 
   if (strict === 'easy') {
     minConf = Math.max(55, minConf - 5);
@@ -2334,9 +2944,7 @@ function isSignalConfirmed(levels, confluence, strict, cfg) {
   }
 
   if (strict === 'hard' && !levels.tp1) return false;
-
   if (confluence && confluence.confluence != null && confluence.confluence < minCF) return false;
-
   return true;
 }
 
@@ -2348,10 +2956,12 @@ async function sendMonitorSignal(token, chatId, levels, confluence, result, curr
   var kzBadge = getKZBadge(symbol);
   var et = detectEntryType(levels, currentPrice);
 
-  var caption = '🚨 <b>سیگنال مانیتور</b>\n\n';
+  var caption = '🚨 <b>سیگنال مانیتور (v8.2)</b>\n\n';
   caption += '<b>نماد:</b> ' + symIcon + ' ' + symbol + '\n';
   caption += '<b>TF:</b> ' + timeframeLabel(tf) + '\n';
   caption += '<b>وضعیت:</b> ' + kzBadge + '\n';
+  caption += buildRegimeBlock(levels);
+  caption += buildCalibBadge(levels);
 
   if (levels.dualEval) caption += buildDualEvalBlock(levels);
 
@@ -2378,7 +2988,7 @@ async function sendMonitorSignal(token, chatId, levels, confluence, result, curr
     caption += '\n🔔 اگه پر نشه، خودکار بهت اطلاع می‌دیم';
   }
 
-  caption += '\n📝 <b>ثبت خودکار در ژورنال</b>';
+  caption += '\n📝 <b>ثبت در ژورنال با Passport</b>';
 
   var keyboard = { inline_keyboard: [
     [{ text: '📓 ژورنال', callback_data: 'menu_journal' }],
@@ -2551,6 +3161,7 @@ async function handleCallback(token, chatId, mid, data, env) {
   if (data === 'journal_list') { await showJournalList(token, chatId, env); return; }
   if (data === 'journal_stats') { await showJournalStats(token, chatId, env); return; }
   if (data === 'journal_daily') { await showJournalDaily(token, chatId, env); return; }
+  if (data === 'journal_opp') { await showOpportunityReport(token, chatId, env); return; }
   if (data === 'journal_clear') { await saveJournal(env, chatId, []); await sendOrEdit(token, chatId, mid, '🗑️', { inline_keyboard: [[{ text: '◀️', callback_data: 'menu_journal' }]] }); return; }
 
   if (data === 'watch_add') { await setUserState(env, chatId, { action: 'watch_add', step: 'symbol', data: {} }); await sendOrEdit(token, chatId, mid, '🔔 ۱/۳ نماد:', { inline_keyboard: [[{ text: '❌', callback_data: 'wizard_cancel' }]] }); return; }
@@ -2617,6 +3228,12 @@ async function handleCallback(token, chatId, mid, data, env) {
     await sendOrEdit(token, chatId, mid, '✅', modelTierMenu(nt));
     return;
   }
+
+  // 🆕 v8.2 callbacks
+  if (data === 'settings_calib') { await showCalibMenu(token, chatId, mid, env); return; }
+  if (data === 'calib_on') { await setCalibApply(env, chatId, true); await showCalibMenu(token, chatId, mid, env); return; }
+  if (data === 'calib_off') { await setCalibApply(env, chatId, false); await showCalibMenu(token, chatId, mid, env); return; }
+  if (data === 'settings_portfolio') { await showPortfolioState(token, chatId, mid, env); return; }
 }
 
 async function sendAccessDenied(token, chatId) {
@@ -2715,7 +3332,7 @@ async function handleUpdate(update, env) {
 export default {
   async fetch(request, env, ctx) {
     var url = new URL(request.url);
-    if (url.pathname === '/' || url.pathname === '') return new Response('Everest Bot v8.0 — UNFILLED/EXPIRED Watchdog', { status: 200 });
+    if (url.pathname === '/' || url.pathname === '') return new Response('Everest Bot v8.2 — Calibration + Regime + Adversarial + Portfolio + Opportunity', { status: 200 });
     if (request.method === 'POST' && url.pathname === '/webhook') {
       try {
         var update = await request.json();
