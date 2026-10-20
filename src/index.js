@@ -1842,14 +1842,29 @@ async function showTimeframeMenu(token, chatId, mid, sr) {
   await sendOrEdit(token, chatId, mid, '⏰ <b>TF ' + esc(sym) + '</b>', timeframeMenu(sr));
 }
 async function showProviderMenu(token, chatId, mid, symbolRaw, timeframe, isMTF, env) {
-  var available = getAvailableProviders(env);
-  if (!available.length) { await sendOrEdit(token, chatId, mid, '❌ هیچ سرویس AI فعالی نیست', { inline_keyboard: [[{ text: '🏠', callback_data: 'menu_main' }]] }); return; }
-  var symbolDisplay = normalizeSymbol(symbolRaw);
-  var tfDisplay = isMTF ? 'MTF' : timeframeLabel(timeframe);
-  var strict = await getStrictness(env, chatId);
-  var kzMode = await getKzMode(env, chatId);
-  var text = '<b>🎯 انتخاب سرویس</b>\n\n<b>نماد:</b> ' + esc(symbolDisplay) + '\n<b>روش:</b> ' + tfDisplay + '\n<b>نوع:</b> ' + STRICTNESS_MODES[strict].icon + '\n<b>KZ:</b> ' + KZ_MODES[kzMode].icon + '\n\n<i>کدوم سرویس؟</i>';
-  await sendOrEdit(token, chatId, mid, text, providerMenu(available, symbolRaw, timeframe, isMTF));
+  try {
+    console.log('[showProviderMenu] START sr=' + symbolRaw + ' tf=' + timeframe + ' isMTF=' + isMTF + ' mid=' + mid);
+    var available = getAvailableProviders(env);
+    console.log('[showProviderMenu] available=[' + available.join(',') + ']');
+    if (!available.length) {
+      console.log('[showProviderMenu] NO PROVIDERS');
+      await sendOrEdit(token, chatId, mid, '❌ هیچ سرویس AI فعالی نیست', { inline_keyboard: [[{ text: '🏠', callback_data: 'menu_main' }]] });
+      return;
+    }
+    var symbolDisplay = normalizeSymbol(symbolRaw);
+    var tfDisplay = isMTF ? 'MTF' : timeframeLabel(timeframe);
+    var strict = await getStrictness(env, chatId);
+    var kzMode = await getKzMode(env, chatId);
+    console.log('[showProviderMenu] strict=' + strict + ' kz=' + kzMode);
+    var text = '<b>🎯 انتخاب سرویس</b>\n\n<b>نماد:</b> ' + esc(symbolDisplay) + '\n<b>روش:</b> ' + tfDisplay + '\n<b>نوع:</b> ' + STRICTNESS_MODES[strict].icon + '\n<b>KZ:</b> ' + KZ_MODES[kzMode].icon + '\n\n<i>کدوم سرویس؟</i>';
+    var kb = providerMenu(available, symbolRaw, timeframe, isMTF);
+    console.log('[showProviderMenu] SENDING textLen=' + text.length + ' btns=' + kb.inline_keyboard.length);
+    var result = await sendOrEdit(token, chatId, mid, text, kb);
+    console.log('[showProviderMenu] RESULT ok=' + (result && result.ok) + ' desc=' + (result && result.description ? result.description.slice(0, 100) : 'none'));
+  } catch (e) {
+    console.error('[showProviderMenu] FATAL: ' + e.message + '\n' + (e.stack || ''));
+    try { await sendMessage(token, chatId, '❌ Menu error: ' + e.message); } catch (x) {}
+  }
 }
 async function showSettingsMenu(token, chatId, mid, env) {
   var st = await getStrictness(env, chatId);
@@ -2526,6 +2541,8 @@ async function checkWatchlist(env) {
 // CALLBACK & MESSAGE HANDLERS
 // ============================================
 async function handleCallback(token, chatId, mid, data, env) {
+    console.log('[CB] ENTER data=' + data + ' mid=' + mid);
+  try {
   if (data === 'menu_main') { await showMainMenu(token, chatId, mid, env); return; }
   if (data === 'menu_analyze') { await showSymbolMenu(token, chatId, mid); return; }
   if (data === 'menu_mtf') { await showSymbolMenu(token, chatId, mid); return; }
@@ -2670,6 +2687,10 @@ async function handleCallback(token, chatId, mid, data, env) {
   if (data.indexOf('mode_') === 0) { var mM = data.replace('mode_', ''); await setUserMode(env, chatId, mM); await sendOrEdit(token, chatId, mid, '✅ ' + MODE_CONFIG[mM].label, modeMenu(mM)); return; }
   if (data === 'settings_confluence') { var curC = await getConfluenceMode(env, chatId); await sendOrEdit(token, chatId, mid, '🧠:', confluenceModeMenu(curC)); return; }
   if (data.indexOf('conf_') === 0) { var mC = data.replace('conf_', ''); await setConfluenceMode(env, chatId, mC); await sendOrEdit(token, chatId, mid, '✅ ' + mC, confluenceModeMenu(mC)); return; }
+     } catch (e) {
+    console.error('[CB] FATAL: ' + e.message + '\n' + (e.stack || ''));
+    try { await sendMessage(token, chatId, '❌ CB error: ' + e.message); } catch (x) {}
+  } 
 }
 async function sendAccessDenied(token, chatId) { await sendMessage(token, chatId, '🔒 <b>دسترسی محدود</b>\n\nChat ID:\n<code>' + chatId + '</code>'); }
 
