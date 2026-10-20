@@ -29,14 +29,14 @@ const MODEL_TIERS = {
 // ترتیب دقیقاً مطابق HTML v8.2.5 (مدل‌های پایدار اول)
 const MODEL_FALLBACK_CHAINS = {
   aiprime: {
-    fast: ['gpt-4o-mini', 'gpt-4o', 'gemini-2.5-flash', 'gemini-3.1-flash-lite', 'claude-haiku-4.5', 'gemini-2.5-pro'],
-    deepseek: ['deepseek-v3.2', 'deepseek-v3.1', 'deepseek-v4.1-flash', 'deepseek-v4-flash', 'deepseek-v4-pro', 'deepseek-v4.1-flash-1017', 'deepseek-r1'],
-    premium: ['claude-sonnet-5.5', 'claude-sonnet-5', 'claude-opus-5.5', 'claude-sonnet-4.6', 'claude-opus-5', 'claude-sonnet-4.5', 'gpt-5.5', 'gpt-5.4']
+    fast: ['gpt-4o-mini', 'gpt-4o', 'gemini-2.5-flash', 'claude-haiku-4.5'],
+    deepseek: ['deepseek-v3.2', 'deepseek-reasoner', 'deepseek-v4.1-flash', 'deepseek-v4-flash', 'deepseek-v4-pro', 'deepseek-r1'],
+    premium: ['claude-sonnet-5.5', 'claude-sonnet-5', 'claude-opus-5.5', 'claude-sonnet-4.6']
   },
   gapgpt: {
     fast: ['gpt-4o-mini', 'gpt-4o', 'gemini-2.5-flash'],
-    deepseek: ['deepseek-v3.2', 'deepseek-v3.1', 'deepseek-v4.1-flash', 'deepseek-v4-flash', 'deepseek-v4-pro', 'deepseek-r1'],
-    premium: ['claude-sonnet-5.5', 'claude-sonnet-5', 'claude-opus-5.5', 'claude-sonnet-4.6', 'gpt-5.5']
+    deepseek: ['deepseek-v3.2', 'deepseek-reasoner', 'deepseek-v4.1-flash', 'deepseek-v4-flash', 'deepseek-v4-pro', 'deepseek-r1'],
+    premium: ['claude-sonnet-5.5', 'claude-sonnet-5', 'claude-opus-5.5', 'claude-sonnet-4.6']
   }
 };
 
@@ -942,7 +942,15 @@ async function callAIPrimeText(env, prompt, imgB64, imgMime, chatId, opts) {
       var errMsg = d && d.error ? (d.error.message || JSON.stringify(d.error)) : 'HTTP ' + r.status;
       console.log('[AIPrime:' + model + '] FAILED status=' + r.status + ' err=' + errMsg.slice(0, 100));
       lastErr = model + ': ' + errMsg;
-      if (r.status === 401 || r.status === 403) { authFatal = true; break; }
+      if (r.status === 401 || r.status === 403) {
+  // 🔑 401 فقط اگر واقعاً خطای کلید است باید fatal باشد
+  // GapGPT/OpenRouter 401 را برای «مدل موجود نیست» هم برمی‌گرداند
+  var isKeyError = /invalid.*api.*key|invalid.*key|unauthorized|authentication.*fail|api.?key.*invalid/i.test(errMsg);
+  if (isKeyError) { authFatal = true; break; }
+  // در غیر این صورت مدل بعدی را امتحان کن
+  lastErr = model + ': ' + errMsg;
+  continue;
+}
     } catch (e) {
       clearTimeout(abortTimer);
       if (e.name === 'AbortError') { lastErr = model + ': timeout ' + perModelTimeout + 'ms'; console.log('[AIPrime:' + model + '] TIMEOUT'); }
@@ -1010,7 +1018,15 @@ async function callGapGPTText(env, prompt, imgB64, imgMime, chatId, opts) {
       }
       var errMsg = d && d.error ? (d.error.message || JSON.stringify(d.error)) : 'HTTP ' + r.status;
       lastErr = model + ': ' + errMsg;
-      if (r.status === 401 || r.status === 403) { authFatal = true; break; }
+      if (r.status === 401 || r.status === 403) {
+  // 🔑 401 فقط اگر واقعاً خطای کلید است باید fatal باشد
+  // GapGPT/OpenRouter 401 را برای «مدل موجود نیست» هم برمی‌گرداند
+  var isKeyError = /invalid.*api.*key|invalid.*key|unauthorized|authentication.*fail|api.?key.*invalid/i.test(errMsg);
+  if (isKeyError) { authFatal = true; break; }
+  // در غیر این صورت مدل بعدی را امتحان کن
+  lastErr = model + ': ' + errMsg;
+  continue;
+}
     } catch (e) {
       clearTimeout(abortTimer);
       if (e.name === 'AbortError') lastErr = model + ': timeout';
