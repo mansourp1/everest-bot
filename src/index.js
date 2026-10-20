@@ -30,16 +30,15 @@ const MODEL_TIERS = {
 const MODEL_FALLBACK_CHAINS = {
   aiprime: {
     fast: ['gpt-4o-mini', 'gpt-4o', 'gemini-2.5-flash'],
-    deepseek: ['deepseek-v4.1-flash', 'deepseek-v4-flash', 'deepseek-reasoner', 'deepseek-v3.2'],
+    deepseek: ['deepseek-v4.1-flash', 'deepseek-v4-flash', 'deepseek-v3.2'],
     premium: ['claude-sonnet-5', 'gpt-5.5']
   },
   gapgpt: {
     fast: ['gpt-4o-mini', 'gpt-4o', 'gemini-2.5-flash'],
-    deepseek: ['deepseek-v4.1-flash', 'deepseek-v4-flash', 'deepseek-reasoner', 'deepseek-v3.2'],
+    deepseek: ['deepseek-v4.1-flash', 'deepseek-v4-flash', 'deepseek-reasoner'],
     premium: ['claude-sonnet-5', 'gpt-5.5']
   }
 };
-
 const VISION_MODELS_BY_PROVIDER = {
   gemini: ['gemini-2.5-flash', 'gemini-2.0-flash'],
   aiprime: ['gpt-4o', 'gpt-4o-mini', 'claude-sonnet-5.5'],
@@ -149,30 +148,35 @@ async function getTierCandidates(env, chatId, provider, tier, hasImage) {
     if (tv && vis.indexOf(tv) === -1) vis.unshift(tv);
     return vis;
   }
+  
   var list = [];
   var saved = await getWorkingModel(env, chatId, provider, tier);
   if (saved) list.push(saved);
 
+  // 🔑 اول chain (لیست دستی ما) — پایدارترین
+  var chain = MODEL_FALLBACK_CHAINS[provider] && MODEL_FALLBACK_CHAINS[provider][tier];
+  if (chain) chain.forEach(function(m) { if (list.indexOf(m) === -1) list.push(m); });
+
+  // 🔑 بعد discovery — فقط مدل‌هایی که در chain نیستند اضافه شوند
   var discovered = await getDiscoveredModels(env, chatId, provider);
   if (discovered && discovered.length) {
     var patterns = {
       fast: /gpt-4o-mini|gpt-3\.5|gemini.*flash|haiku|llama.*8b|mistral-small/i,
-      deepseek: /deepseek-v3\.2|deepseek-v3\.1|deepseek-v4|deepseek-r1/i,
-      premium: /claude-sonnet-5\.5|claude-sonnet-5$|claude-sonnet-4\.6|claude-opus-5\.5|claude-opus-5$|claude/i
+      deepseek: /deepseek-v4\.1-flash|deepseek-v4-flash|deepseek-v3\.2|deepseek-reasoner/i,
+      premium: /claude-sonnet-5|claude-opus|gpt-5\.5|claude-sonnet-4\.6/i
     };
     var pat = patterns[tier] || patterns.fast;
-    discovered.filter(function(m) { return pat.test(m); })
-      .forEach(function(m) { if (list.indexOf(m) === -1) list.push(m); });
+    var matched = discovered.filter(function(m) { return pat.test(m) && list.indexOf(m) === -1; });
+    matched.forEach(function(m) { list.push(m); });
   }
-  var chain = MODEL_FALLBACK_CHAINS[provider] && MODEL_FALLBACK_CHAINS[provider][tier];
-  if (chain) chain.forEach(function(m) { if (list.indexOf(m) === -1) list.push(m); });
+  
+  // 🔑 blacklist: مدل‌های مشکل‌دار حذف
+  var blacklist = /deepseek-r1|deepseek-v4-pro|deepseek-v4\.1-flash-1017|deepseek-v4-pro-0813/i;
+  list = list.filter(function(m) { return !blacklist.test(m); });
+  
   console.log('[Pick] ' + provider + '/' + tier + ' → ' + list.length + ' candidates: ' + list.slice(0, 6).join(', '));
   return list.length ? list : ['gpt-4o-mini'];
 }
-
-const CALIB_MIN_SAMPLES = 20;
-const CALIB_BUCKET_MIN = 8;
-const PORTFOLIO_DEFAULTS = { maxDailyLossRR: -3, maxPerSymbol: 2, maxPerMarket: 5, maxTotal: 8, maxCorrelatedAlts: 2 };
 
 // ============================================
 // UTILS
@@ -900,8 +904,8 @@ async function callAIPrimeText(env, prompt, imgB64, imgMime, chatId, opts) {
 
   // 🔑 اگر deepseek یا premium انتخاب شد: ۵ ثانیه اول امتحان کن، بعد به fast برو
   // اگر fast انتخاب شد: ۱۲ ثانیه فرصت کافی
-  var perModelTimeout = (requestedTier === 'fast') ? 12000 : 5000;
-  var maxAttempts = (requestedTier === 'fast') ? 2 : 1;
+var perModelTimeout = (requestedTier === 'fast') ? 12000 : 4000;
+var maxAttempts = (requestedTier === 'fast') ? 2 : 2;
   var needsEmergencyFallback = !hasImage && requestedTier !== 'fast';
 
   console.log('[AIPrime] tier=' + requestedTier + ' attempts=' + maxAttempts + ' perTimeout=' + perModelTimeout + 'ms');
@@ -1027,8 +1031,8 @@ async function callGapGPTText(env, prompt, imgB64, imgMime, chatId, opts) {
   var lastErr = '', authFatal = false, tried = [];
 
   // 🔑 استراتژی زمان‌بندی: fast=12s (کافی)، deepseek/premium=5s (سریع رد شو)
-  var perModelTimeout = (requestedTier === 'fast') ? 12000 : 5000;
-  var maxAttempts = (requestedTier === 'fast') ? 2 : 1;
+var perModelTimeout = (requestedTier === 'fast') ? 12000 : 4000;
+var maxAttempts = (requestedTier === 'fast') ? 2 : 2;
   var needsEmergencyFallback = !hasImage && requestedTier !== 'fast';
 
   console.log('[GapGPT] tier=' + requestedTier + ' attempts=' + maxAttempts + ' perTimeout=' + perModelTimeout + 'ms');
@@ -2204,7 +2208,21 @@ async function handleAIError(token, chatId, err) {
       cloudflare: '☁️ Cloudflare', nvidia: '🟢 NVIDIA', llm7: '🎁 LLM7',
       avalai: '🇮🇷 AvalAI', metis: '🇮🇷 Metis', onexai: '🇮🇷 1xAi'
     }[prov] || prov.toUpperCase();
-
+     if (/429|rate.?limit|too.?many.?request/i.test(msg)) {
+  await sendMessage(token, chatId,
+    '⏱️ <b>محدودیت درخواست (429)</b>\n\n' +
+    'GapGPT/AIPrime سقف درخواست شما را پر کرده.\n' +
+    'این یعنی مدل کند نیست، فقط صف پر است.\n\n' +
+    '💡 <b>راه‌حل فوری:</b>\n' +
+    '• ⏱️ ۱-۲ دقیقه صبر کنید و دوباره بزنید\n' +
+    '• 🎚️ سطح مدل را به 🚀 سریع تغییر دهید (gpt-4o-mini سقف بالاتری دارد)\n' +
+    '• 🔻 Fallback را به 🟡 اجازه با هشدار تغییر دهید',
+    { inline_keyboard: [
+      [{ text: '🎚️ سطح مدل', callback_data: 'settings_tier' }],
+      [{ text: '🏠', callback_data: 'menu_main' }]
+    ]});
+  return;
+}
     await sendMessage(token, chatId,
       '🔒 <b>خطای احراز هویت ' + provLabel + '</b>\n\n' +
       'کد 401/403 یعنی کلید API رد شده.\n' +
