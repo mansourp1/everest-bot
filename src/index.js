@@ -27,16 +27,18 @@ const MODEL_TIERS = {
   }
 };
 
+// 🔑 v8.2.9 — فقط مدل‌هایی که واقعاً روی AIPrime/GapGPT وجود دارند
+// (deepseek-chat و deepseek-v3 روی AIPrime نیستند → حذف شدند)
 const MODEL_FALLBACK_CHAINS = {
   aiprime: {
-    fast: ['gpt-4o-mini', 'gpt-4o', 'gemini-2.5-flash', 'claude-haiku-4.5', 'gemini-2.5-pro'],
-    deepseek: ['deepseek-chat', 'deepseek-v3', 'deepseek-v3.2', 'deepseek-v3.1', 'deepseek-reasoner', 'deepseek-r1'],
-    premium: ['claude-sonnet-5.5', 'claude-sonnet-5', 'claude-opus-5.5', 'claude-sonnet-4.6', 'claude-opus-5', 'claude-sonnet-4.5', 'gpt-5.5']
+    fast: ['gpt-4o-mini', 'gpt-4o', 'gemini-2.5-flash', 'claude-haiku-4.5'],
+    deepseek: ['deepseek-v4.1-flash', 'deepseek-v4-pro', 'deepseek-v4-flash', 'deepseek-v3.2', 'deepseek-r1'],
+    premium: ['claude-sonnet-5.5', 'claude-sonnet-5', 'claude-opus-5.5', 'claude-sonnet-4.6', 'gpt-5.5']
   },
   gapgpt: {
     fast: ['gpt-4o-mini', 'gpt-4o', 'gemini-2.5-flash'],
-    deepseek: ['deepseek-chat', 'deepseek-v3', 'deepseek-v3.2', 'deepseek-reasoner'],
-    premium: ['claude-sonnet-5.5', 'claude-sonnet-5', 'claude-opus-5.5', 'claude-sonnet-4.6']
+    deepseek: ['deepseek-v4.1-flash', 'deepseek-v4-pro', 'deepseek-v3.2'],
+    premium: ['claude-sonnet-5.5', 'claude-sonnet-5', 'claude-opus-5.5']
   }
 };
 
@@ -1021,9 +1023,9 @@ async function callAIPrimeText(env, prompt, imgB64, imgMime, chatId) {
     allCandidates = interleaved;
   }
 
-  var MAX_TRIES = 3;
-  var PER_MODEL_TIMEOUT = 7000;
-  var TOTAL_BUDGET = 22000;
+var MAX_TRIES = 4;
+var PER_MODEL_TIMEOUT = 8000;
+var TOTAL_BUDGET = 25000;
   var startTime = Date.now();
 
   console.log('[AIPrime] requested=' + requestedTier + ' fallback=' + fallbackMode +
@@ -3013,16 +3015,29 @@ const JSON_SPEC = "\n\n**JSON انتها (الزامی):**\n```json\n" +
 function buildPromptForMode(basePrompt, mode) { if (mode === 'force') return basePrompt + FORCE_DIRECTIVE; return basePrompt; }
 
 const SYSTEM_PROMPT = "شما یک تحلیل‌گر ارشد بازارهای مالی با ۱۵ سال تجربه در SMC، ICT و پرایس اکشن هستید.\n\n" +
-"**روش کار**\n۱. استخراج داده خام\n۲. تشخیص رژیم بازار\n۳. شناسایی BOS، CHoCH\n۴. کشف Order Blocks و FVG\n۵. الگوهای کندلی\n۶. امتیازدهی ۶ لایه\n۷. تصمیم نهایی\n\n" +
-"**در انتهای پاسخ دقیقاً این فرمت متنی:**\n---\nDirection: [BUY/SELL/WAIT]\nRegime: [TRENDING_UP/TRENDING_DOWN/RANGING/TRANSITIONAL]\nConfidenceScore: [0-100]\nEntry: [عدد یا N/A]\nStop Loss: [عدد یا N/A]\nTP1: [عدد یا N/A]\nTP2: [عدد یا N/A]\nTP3: [عدد یا N/A]\nR/R: [نسبت یا N/A]\n---\n\n" +
-"**قوانین:**\n1. اگر Confidence < 65 → WAIT\n2. حد ضرر ساختاری\n3. در BUY، SL زیر Entry · در SELL، SL بالای Entry\n4. R/R با محاسبه واقعی\n5. تحلیل ۵۰۰ کلمه بنویس" + JSON_SPEC;
+"**روش کار (خیلی مختصر)**\n" +
+"۱. رژیم بازار (TRENDING/RANGING/HIGH_VOL)\n" +
+"۲. ساختار (BOS/CHoCH/سقف-کف)\n" +
+"۳. SMC/ICT (Order Block, FVG, Sweep)\n" +
+"۴. یک سناریو کوتاه\n" +
+"۵. تصمیم نهایی\n\n" +
+"**در انتهای پاسخ دقیقاً این فرمت متنی:**\n" +
+"---\nDirection: [BUY/SELL/WAIT]\nRegime: [TRENDING_UP/TRENDING_DOWN/RANGING/TRANSITIONAL]\nConfidenceScore: [0-100]\nEntry: [عدد یا N/A]\nStop Loss: [عدد یا N/A]\nTP1: [عدد یا N/A]\nTP2: [عدد یا N/A]\nTP3: [عدد یا N/A]\nR/R: [نسبت یا N/A]\n---\n\n" +
+"**قوانین سختگیرانه:**\n" +
+"1. اگر Confidence < 65 → WAIT\n" +
+"2. حد ضرر ساختاری\n" +
+"3. در BUY، SL زیر Entry · در SELL، SL بالای Entry\n" +
+"4. R/R با محاسبه واقعی\n" +
+"5. ⚠️ **پاسخ حداکثر ۲۰۰ کلمه — فقط نکات کلیدی. از توضیح طولانی خودداری کن.**\n" +
+"6. JSON را در آخر قرار بده" + JSON_SPEC;
 
 const MULTI_TF_PROMPT = "شما یک تحلیل‌گر ارشد هستید.\n\n" +
 "**MTF:**\n🎯 HTF (4H): روند اصلی\n🔍 MTF (1H): تأیید\n📊 LTF (15M): ستاپ\n⏱️ EntryTF (1M): تایمینگ\n\n" +
 "**فرمت متنی:**\n---\nDirection: [BUY/SELL/WAIT]\nConfluenceScore: [0-10]\nHTF4H: [BULLISH/BEARISH/RANGING]\nMTF1H: [BULLISH/BEARISH/RANGING]\nLTF15M: [BULLISH/BEARISH/RANGING]\nEntryTF1M: [BULLISH/BEARISH/RANGING]\nConfidenceScore: [0-100]\nEntry: [عدد یا N/A]\nStop Loss: [عدد یا N/A]\nTP1: [عدد یا N/A]\nTP2: [عدد یا N/A]\nTP3: [عدد یا N/A]\nR/R: [نسبت یا N/A]\n---" + JSON_SPEC;
 
-const IMAGE_PROMPT = "شما یک تحلیل‌گر ارشد هستید.\n\n**تحلیل چارت ۵۰۰ کلمه**\n\n" +
-"**فرمت متنی:**\n---\nDirection: [BUY/SELL/WAIT]\nSymbol: [نماد یا UNKNOWN]\nTimeframe: [TF یا UNKNOWN]\nRegime: [...]\nConfidenceScore: [0-100]\nEntry: [عدد یا N/A]\nStop Loss: [عدد یا N/A]\nTP1: [عدد یا N/A]\nTP2: [عدد یا N/A]\nTP3: [عدد یا N/A]\nR/R: [نسبت یا N/A]\n---" + JSON_SPEC;
+const IMAGE_PROMPT = "شما یک تحلیل‌گر ارشد هستید. **مختصر بنویس (حداکثر ۲۰۰ کلمه).**\n\n" +
+"**فرمت متنی:**\n" +
+"---\nDirection: [BUY/SELL/WAIT]\nSymbol: [نماد یا UNKNOWN]\nTimeframe: [TF یا UNKNOWN]\nRegime: [...]\nConfidenceScore: [0-100]\nEntry: [عدد یا N/A]\nStop Loss: [عدد یا N/A]\nTP1: [عدد یا N/A]\nTP2: [عدد یا N/A]\nTP3: [عدد یا N/A]\nR/R: [نسبت یا N/A]\n---" + JSON_SPEC;
 
 const CRYPTO_NOTE = "\n\n**🪙 کریپتو:** بازار ۲۴/۷. ساعات لیکویید بالا (US/EU) بهترین فرصت";
 
