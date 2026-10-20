@@ -904,8 +904,12 @@ async function callAIPrimeText(env, prompt, imgB64, imgMime, chatId, opts) {
 
   // 🔑 اگر deepseek یا premium انتخاب شد: ۵ ثانیه اول امتحان کن، بعد به fast برو
   // اگر fast انتخاب شد: ۱۲ ثانیه فرصت کافی
-var perModelTimeout = (requestedTier === 'fast') ? 12000 : 4000;
-var maxAttempts = (requestedTier === 'fast') ? 2 : 2;
+// 🔑 زمان‌بندی بهینه:
+// fast: 15s timeout، 1 attempt → 15s کافی است
+// deepseek: 17s timeout، 1 attempt → 17s کافی است
+// اگر deepseek شکست خورد: 10s برای gpt-4o-mini → 27s کل، در 30s جا می‌شود
+var perModelTimeout = 17000;
+var maxAttempts = 1;
   var needsEmergencyFallback = !hasImage && requestedTier !== 'fast';
 
   console.log('[AIPrime] tier=' + requestedTier + ' attempts=' + maxAttempts + ' perTimeout=' + perModelTimeout + 'ms');
@@ -973,7 +977,7 @@ var maxAttempts = (requestedTier === 'fast') ? 2 : 2;
       var emergencyModel = fastCandidates[0];
       if (emergencyModel) {
         var ctrl2 = new AbortController();
-        var tmr2 = setTimeout(function() { ctrl2.abort(); }, Math.min(12000, remaining - 2000));
+        var tmr2 = setTimeout(function() { ctrl2.abort(); }, Math.min(10000, remaining - 2000));
         try {
           var rE = await fetch('https://api.aiprime.shop/v1/chat/completions', {
             method: 'POST',
@@ -1031,8 +1035,12 @@ async function callGapGPTText(env, prompt, imgB64, imgMime, chatId, opts) {
   var lastErr = '', authFatal = false, tried = [];
 
   // 🔑 استراتژی زمان‌بندی: fast=12s (کافی)، deepseek/premium=5s (سریع رد شو)
-var perModelTimeout = (requestedTier === 'fast') ? 12000 : 4000;
-var maxAttempts = (requestedTier === 'fast') ? 2 : 2;
+// 🔑 زمان‌بندی بهینه:
+// fast: 15s timeout، 1 attempt → 15s کافی است
+// deepseek: 17s timeout، 1 attempt → 17s کافی است
+// اگر deepseek شکست خورد: 10s برای gpt-4o-mini → 27s کل، در 30s جا می‌شود
+var perModelTimeout = 17000;
+var maxAttempts = 1;
   var needsEmergencyFallback = !hasImage && requestedTier !== 'fast';
 
   console.log('[GapGPT] tier=' + requestedTier + ' attempts=' + maxAttempts + ' perTimeout=' + perModelTimeout + 'ms');
@@ -1100,7 +1108,7 @@ var maxAttempts = (requestedTier === 'fast') ? 2 : 2;
       var emergencyModel = fastCandidates[0];
       if (emergencyModel) {
         var ctrl2 = new AbortController();
-        var tmr2 = setTimeout(function() { ctrl2.abort(); }, Math.min(12000, remaining - 2000));
+        var tmr2 = setTimeout(function() { ctrl2.abort(); }, Math.min(10000, remaining - 2000));
         try {
           var rE = await fetch('https://api.gapgpt.app/v1/chat/completions', {
             method: 'POST',
