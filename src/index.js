@@ -2031,17 +2031,48 @@ async function showMonitorHelp(token, chatId, mid) {
 async function handleAIError(token, chatId, err) {
   var msg = (err && err.message) || String(err);
   console.error('[AI ERROR] ' + msg);
+
+  // 🔑 خطای احراز هویت — پیام شفاف
+  if (/auth \(401\/403\)/i.test(msg)) {
+    var provMatch = msg.match(/(gapgpt|aiprime|groq|gemini|openrouter|mistral|github|together|huggingface|cloudflare|nvidia|llm7|avalai|metis|onexai)\s*:/i);
+    var prov = provMatch ? provMatch[1].toLowerCase() : '?';
+    var provLabel = {
+      gapgpt: '💎 GapGPT', aiprime: '🅰️ AIPrime', groq: '⚡ Groq',
+      gemini: '🌟 Gemini', openrouter: '🔀 OpenRouter', mistral: '🌬️ Mistral',
+      github: '🐙 GitHub', together: '🤝 Together', huggingface: '🤗 HuggingFace',
+      cloudflare: '☁️ Cloudflare', nvidia: '🟢 NVIDIA', llm7: '🎁 LLM7',
+      avalai: '🇮🇷 AvalAI', metis: '🇮🇷 Metis', onexai: '🇮🇷 1xAi'
+    }[prov] || prov.toUpperCase();
+
+    await sendMessage(token, chatId,
+      '🔒 <b>خطای احراز هویت ' + provLabel + '</b>\n\n' +
+      'کد 401/403 یعنی کلید API رد شده.\n' +
+      'این مشکل <b>کد نیست</b> — کلید باید در Cloudflare تصحیح شود.\n\n' +
+      '💡 <b>راه‌حل:</b>\n' +
+      '1. در HTML → F12 → Console:\n' +
+      '   <code>localStorage.getItem(\'api_key_' + prov + '\')</code>\n' +
+      '2. کلید را کپی کنید\n' +
+      '3. Cloudflare Dashboard → Workers → everest-bot → Settings → Variables\n' +
+      '4. <code>' + prov.toUpperCase() + '_KEY</code> را با کلید کپی‌شده جایگزین کنید\n' +
+      '5. Save and Deploy\n\n' +
+      '⚠️ <b>توجه:</b> کلید HTML در مرورگر ذخیره می‌شود، بات از Cloudflare Variables می‌خواند — دو جای جدا!',
+      { inline_keyboard: [[{ text: '📈 وضعیت', callback_data: 'menu_status' }], [{ text: '🏠', callback_data: 'menu_main' }]] });
+    return;
+  }
+
+  // خطای عمومی
   var tierMatch = msg.match(/tier=(\w+)/);
   var tier = tierMatch ? tierMatch[1] : '?';
-  var tierIcon = tier === 'premium' ? '💎' : tier === 'deepseek' ? '🧠' : '🚀';
+  var tierIcon = tier === 'premium' ? '💎' : tier === 'deepseek' ? '🧠' : tier === 'fast' ? '🚀' : '?';
   var triedMatch = msg.match(/\[([^\]]+)\]/);
-  var tried = triedMatch ? triedMatch[1] : '?';
+  var tried = triedMatch ? triedMatch[1] : '(جزئیات در Workers Logs)';
+
   await sendMessage(token, chatId,
     '❌ <b>مدل ' + tierIcon + ' ' + esc(tier) + ' پاسخ نداد</b>\n\n' +
     '📋 مدل‌های تلاش‌شده:\n<code>' + esc(tried.slice(0, 300)) + '</code>\n\n' +
     '💡 <b>راه‌حل‌ها:</b>\n' +
-    '• ⏱️ چند دقیقه دیگر تلاش کنید\n' +
-    '• 🎚️ سطح مدل را به 🚀 سریع تغییر دهید (پایدارترین)\n' +
+    '• ⏱️ چند دقیقه دیگر تلاش کنید (سرویس شلوغ)\n' +
+    '• 🎚️ سطح مدل را به 🚀 سریع تغییر دهید\n' +
     '• 🔻 Fallback را به 🟡 اجازه با هشدار تغییر دهید',
     { inline_keyboard: [
       [{ text: '🎚️ سطح مدل', callback_data: 'settings_tier' }],
