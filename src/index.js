@@ -2725,6 +2725,26 @@ async function handleUpdate(update, env) {
 export default {
   async fetch(request, env, ctx) {
     var url = new URL(request.url);
+    if (url.pathname === '/debug_gapgpt') {
+  var key = getKey(env, 'gapgpt');
+  if (!key) return new Response('GAPGPT_KEY not defined', { status: 200 });
+  try {
+    var testResp = await fetch('https://api.gapgpt.app/v1/models', {
+      headers: { 'Authorization': 'Bearer ' + key }
+    });
+    var testBody = await testResp.text();
+    return new Response(
+      'Key length: ' + key.length + '\n' +
+      'Key first 4: ' + key.slice(0, 4) + '\n' +
+      'Key last 4: ' + key.slice(-4) + '\n' +
+      'HTTP status: ' + testResp.status + '\n' +
+      'Response body: ' + testBody.slice(0, 500),
+      { status: 200 }
+    );
+  } catch (e) {
+    return new Response('Fetch failed: ' + e.message, { status: 200 });
+  }
+}
     if (url.pathname === '/' || url.pathname === '') {
       return new Response('Everest Bot v8.2.10 — HTML parity: real models, 500-word analysis, no silent downgrade', { status: 200 });
     }
