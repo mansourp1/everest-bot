@@ -483,13 +483,30 @@ const PROVIDER_NAMES = {
 };
 function getKey(env, p) {
   var m = {
-    gemini: env.GEMINI_KEY_1 || env.GEMINI_KEY, aiprime: env.AIPRIME_KEY, github: env.GITHUB_MODELS_TOKEN,
-    groq: env.GROQ_KEY, together: env.TOGETHER_KEY, gapgpt: env.GAPGPT_KEY, openrouter: env.OPENROUTER_KEY,
-    mistral: env.MISTRAL_KEY, huggingface: env.HUGGINGFACE_KEY, cloudflare: env.CLOUDFLARE_KEY,
-    nvidia: env.NVIDIA_KEY, llm7: env.LLM7_KEY || 'unused', avalai: env.AVALAI_KEY,
-    metis: env.METIS_KEY, onexai: env.ONEXAI_KEY, customvision: env.CUSTOM_VISION_KEY
+    gemini: env.GEMINI_KEY_1 || env.GEMINI_KEY,
+    aiprime: env.AIPRIME_KEY,
+    github: env.GITHUB_MODELS_TOKEN,
+    groq: env.GROQ_KEY,
+    together: env.TOGETHER_KEY,
+    gapgpt: env.GAPGPT_KEY,
+    openrouter: env.OPENROUTER_KEY,
+    mistral: env.MISTRAL_KEY,
+    huggingface: env.HUGGINGFACE_KEY,
+    cloudflare: env.CLOUDFLARE_KEY,
+    nvidia: env.NVIDIA_KEY,
+    llm7: env.LLM7_KEY || 'unused',
+    avalai: env.AVALAI_KEY,
+    metis: env.METIS_KEY,
+    onexai: env.ONEXAI_KEY,
+    customvision: env.CUSTOM_VISION_KEY
   };
-  return m[p] || '';
+  var v = m[p] || '';
+  // 🔑 پاک‌سازی خودکار کلید
+  v = String(v).trim();                        // حذف فاصله/newline اول و آخر
+  v = v.replace(/^["'`]|["'`]$/g, '');         // حذف گیومه
+  v = v.replace(/^Bearer\s+/i, '');            // حذف Bearer اشتباهی
+  v = v.trim();
+  return v;
 }
 function getGeminiKeys(env) {
   var k = [];
@@ -865,7 +882,7 @@ async function resolveConfluence(env, chatId, levels, rawText) {
 // ============================================
 async function callAIPrimeText(env, prompt, imgB64, imgMime, chatId, opts) {
   opts = opts || {};
-  var key = env.AIPRIME_KEY;
+  var key = getKey(env, 'aiprime');
   if (!key) throw new Error('AIPRIME_KEY تنظیم نشده');
   var hasImage = !!imgB64;
   var content = hasImage ? [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: 'data:' + imgMime + ';base64,' + imgB64 } }] : prompt;
@@ -940,7 +957,7 @@ async function callAIPrimeText(env, prompt, imgB64, imgMime, chatId, opts) {
 
 async function callGapGPTText(env, prompt, imgB64, imgMime, chatId, opts) {
   opts = opts || {};
-  var key = env.GAPGPT_KEY;
+  var key = getKey(env, 'gapgpt');
   if (!key) throw new Error('GAPGPT_KEY تنظیم نشده');
   var hasImage = !!imgB64;
   var content = hasImage ? [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: 'data:' + imgMime + ';base64,' + imgB64 } }] : prompt;
@@ -1862,6 +1879,23 @@ async function showStatus(token, chatId, mid, env) {
   var all = ['gemini','aiprime','groq','github','together','gapgpt','openrouter','mistral','huggingface','cloudflare','nvidia','llm7','avalai','metis','onexai'];
   var text = '📈 <b>وضعیت v8.2.10</b>\n\n<b>🔑 کلیدها:</b>\n';
   var active = 0;
+    // 🔑 دیباگ کلیدها
+  text += '\n<b>🔍 دیباگ کلید (اول ۴ + آخر ۴ کاراکتر):</b>\n';
+  var debugProviders = ['aiprime', 'gapgpt', 'groq', 'openrouter', 'mistral', 'gemini'];
+  for (var dpi = 0; dpi < debugProviders.length; dpi++) {
+    var dpp = debugProviders[dpi];
+    var rawKey = env[dpp === 'aiprime' ? 'AIPRIME_KEY' : dpp === 'gapgpt' ? 'GAPGPT_KEY' : dpp.toUpperCase() + '_KEY'] || '';
+    var cleanKey = getKey(env, dpp);
+    if (!rawKey) {
+      text += '❌ ' + dpp + ': تعریف نشده\n';
+    } else {
+      var diff = rawKey.length - cleanKey.length;
+      var warn = diff > 0 ? ' ⚠️' + diff + ' فاصله/کاراکتر اضافه' : ' ✅';
+      text += '🔑 ' + dpp + ': len=' + cleanKey.length + ' ' +
+              (cleanKey.length > 8 ? cleanKey.slice(0, 4) + '…' + cleanKey.slice(-4) : '?') + warn + '\n';
+    }
+  }
+  text += '\n';
   for (var i = 0; i < all.length; i++) {
     var p = all[i];
     var hasKey = (p === 'gemini') ? getGeminiKeys(env).length > 0 : (p === 'llm7') ? true : !!getKey(env, p);
