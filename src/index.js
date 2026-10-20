@@ -29,14 +29,14 @@ const MODEL_TIERS = {
 // ترتیب دقیقاً مطابق HTML v8.2.5 (مدل‌های پایدار اول)
 const MODEL_FALLBACK_CHAINS = {
   aiprime: {
-    fast: ['gpt-4o-mini', 'gpt-4o', 'gemini-2.5-flash', 'claude-haiku-4.5'],
-    deepseek: ['deepseek-v3.2', 'deepseek-reasoner', 'deepseek-v4.1-flash', 'deepseek-v4-flash', 'deepseek-v4-pro', 'deepseek-r1'],
-    premium: ['claude-sonnet-5.5', 'claude-sonnet-5', 'claude-opus-5.5', 'claude-sonnet-4.6']
+    fast: ['gpt-4o-mini', 'gpt-4o', 'gemini-2.5-flash'],
+    deepseek: ['deepseek-v4.1-flash', 'deepseek-v4-flash', 'deepseek-reasoner', 'deepseek-v3.2'],
+    premium: ['claude-sonnet-5', 'gpt-5.5']
   },
   gapgpt: {
     fast: ['gpt-4o-mini', 'gpt-4o', 'gemini-2.5-flash'],
-    deepseek: ['deepseek-v3.2', 'deepseek-reasoner', 'deepseek-v4.1-flash', 'deepseek-v4-flash', 'deepseek-v4-pro', 'deepseek-r1'],
-    premium: ['claude-sonnet-5.5', 'claude-sonnet-5', 'claude-opus-5.5', 'claude-sonnet-4.6']
+    deepseek: ['deepseek-v4.1-flash', 'deepseek-v4-flash', 'deepseek-reasoner', 'deepseek-v3.2'],
+    premium: ['claude-sonnet-5', 'gpt-5.5']
   }
 };
 
@@ -94,7 +94,7 @@ const MODE_CONFIG = {
 
 // 🔑 تنظیمات timeout — fit در 30s wallTime
 const AI_PER_MODEL_TIMEOUT = 15000;   // 15 ثانیه هر مدل
-const AI_MAX_ATTEMPTS = 2;            // حداکثر ۲ مدل
+const AI_MAX_ATTEMPTS = 4;
 const AI_TOTAL_BUDGET = 27000;        // ۲۷ ثانیه بودجهٔ کل
 
 // ============================================
@@ -942,12 +942,9 @@ async function callAIPrimeText(env, prompt, imgB64, imgMime, chatId, opts) {
       var errMsg = d && d.error ? (d.error.message || JSON.stringify(d.error)) : 'HTTP ' + r.status;
       console.log('[AIPrime:' + model + '] FAILED status=' + r.status + ' err=' + errMsg.slice(0, 100));
       lastErr = model + ': ' + errMsg;
-      if (r.status === 401 || r.status === 403) {
-  // 🔑 401 فقط اگر واقعاً خطای کلید است باید fatal باشد
-  // GapGPT/OpenRouter 401 را برای «مدل موجود نیست» هم برمی‌گرداند
-  var isKeyError = /invalid.*api.*key|invalid.*key|unauthorized|authentication.*fail|api.?key.*invalid/i.test(errMsg);
-  if (isKeyError) { authFatal = true; break; }
-  // در غیر این صورت مدل بعدی را امتحان کن
+   if (r.status === 401 || r.status === 403) {
+  var isRealAuthError = /invalid.*api.*key|invalid.*key|unauthorized|authentication.*fail|api.?key.*invalid/i.test(errMsg);
+  if (isRealAuthError) { authFatal = true; break; }
   lastErr = model + ': ' + errMsg;
   continue;
 }
@@ -1018,12 +1015,9 @@ async function callGapGPTText(env, prompt, imgB64, imgMime, chatId, opts) {
       }
       var errMsg = d && d.error ? (d.error.message || JSON.stringify(d.error)) : 'HTTP ' + r.status;
       lastErr = model + ': ' + errMsg;
-      if (r.status === 401 || r.status === 403) {
-  // 🔑 401 فقط اگر واقعاً خطای کلید است باید fatal باشد
-  // GapGPT/OpenRouter 401 را برای «مدل موجود نیست» هم برمی‌گرداند
-  var isKeyError = /invalid.*api.*key|invalid.*key|unauthorized|authentication.*fail|api.?key.*invalid/i.test(errMsg);
-  if (isKeyError) { authFatal = true; break; }
-  // در غیر این صورت مدل بعدی را امتحان کن
+    if (r.status === 401 || r.status === 403) {
+  var isRealAuthError = /invalid.*api.*key|invalid.*key|unauthorized|authentication.*fail|api.?key.*invalid/i.test(errMsg);
+  if (isRealAuthError) { authFatal = true; break; }
   lastErr = model + ': ' + errMsg;
   continue;
 }
