@@ -167,9 +167,14 @@ async function getTierCandidates(env, chatId, provider, tier, hasImage) {
     return vis;
   }
 
-  var list = [];
+  // 🔑 v8.2.8 — chain اولویت‌دار، reasoning در آخر، حداکثر ۵ مدل
+  var chain = MODEL_FALLBACK_CHAINS[provider] && MODEL_FALLBACK_CHAINS[provider][tier];
+  var result = [];
+
   var saved = await getWorkingModel(env, chatId, provider, tier);
-  if (saved) list.push(saved);
+  if (saved) result.push(saved);
+
+  if (chain) chain.forEach(function(m) { if (result.indexOf(m) === -1) result.push(m); });
 
   var discovered = await getDiscoveredModels(env, chatId, provider);
   if (discovered && discovered.length) {
@@ -180,19 +185,19 @@ async function getTierCandidates(env, chatId, provider, tier, hasImage) {
     };
     var pat = patterns[tier] || patterns.fast;
     discovered.filter(function(m) { return pat.test(m); })
-      .forEach(function(m) { if (list.indexOf(m) === -1) list.push(m); });
+      .forEach(function(m) { if (result.indexOf(m) === -1) result.push(m); });
   }
 
-  var chain = MODEL_FALLBACK_CHAINS[provider] && MODEL_FALLBACK_CHAINS[provider][tier];
-  if (chain) chain.forEach(function(m) { if (list.indexOf(m) === -1) list.push(m); });
+  // 🔑 reasoning models را آخر بگذار
+  var reasoning = /r1|reasoner/i;
+  var nonReasoning = result.filter(function(m) { return !reasoning.test(m); });
+  var reasoningModels = result.filter(function(m) { return reasoning.test(m); });
+  result = nonReasoning.concat(reasoningModels);
 
-  console.log('[Pick] ' + provider + '/' + tier + ' → ' + list.length + ' candidates: ' + list.slice(0, 6).join(', '));
-  return list.length ? list : ['gpt-4o-mini'];
+  result = result.slice(0, 5);
+  console.log('[Pick] ' + provider + '/' + tier + ' → ' + result.length + ' prioritized: ' + result.join(', '));
+  return result.length ? result : ['gpt-4o-mini'];
 }
-
-const CALIB_MIN_SAMPLES = 20;
-const CALIB_BUCKET_MIN = 8;
-const PORTFOLIO_DEFAULTS = { maxDailyLossRR: -3, maxPerSymbol: 2, maxPerMarket: 5, maxTotal: 8, maxCorrelatedAlts: 2 };
 
 // ============================================
 // UTILS
@@ -986,8 +991,13 @@ async function callGeminiText(env, prompt, imgB64, imgMime) {
 async function callAIPrimeText(env, prompt, imgB64, imgMime, chatId) {
   var key = env.AIPRIME_KEY;
   if (!key) throw new Error('AIPRIME_KEY تنظیم نشده است');
+
   var hasImage = !!imgB64;
-  var content = hasImage ? [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: 'data:' + imgMime + ';base64,' + imgB64 } }] : prompt;
+  var content = hasImage ? [
+    { type: 'text', text: prompt },
+    { type: 'image_url', image_url: { url: 'data:' + imgMime + ';base64,' + imgB64 } }
+  ] : prompt;
+
   var requestedTier = chatId ? await getUserModelTier(env, chatId, 'aiprime') : 'fast';
   var fallbackMode = chatId ? await getFallbackMode(env, chatId) : 'strict';
 
@@ -996,73 +1006,107 @@ async function callAIPrimeText(env, prompt, imgB64, imgMime, chatId) {
     if (!discovered) { try { await discoverProviderModels(env, chatId, 'aiprime', key); } catch (e) {} }
   }
 
-  // Candidates همان tier
   var primaryCandidates = await getTierCandidates(env, chatId, 'aiprime', requestedTier, hasImage);
   var allCandidates = primaryCandidates.slice();
 
-  // اگر fallback مجاز است و tier بالاتر بود، fast را هم امتحان کن
+  // 🔑 interleave: primary[0], fast[0], primary[1], fast[1]
   if (fallbackMode !== 'strict' && requestedTier !== 'fast' && !hasImage) {
     var fastCandidates = await getTierCandidates(env, chatId, 'aiprime', 'fast', hasImage);
-    fastCandidates.forEach(function(m) { if (allCandidates.indexOf(m) === -1) allCandidates.push(m); });
-    console.log('[AIPrime] fallback ON — total candidates: ' + allCandidates.length);
+    var interleaved = [];
+    var maxLen = Math.max(primaryCandidates.length, fastCandidates.length);
+    for (var i = 0; i < maxLen && interleaved.length < 5; i++) {
+      if (primaryCandidates[i] && interleaved.indexOf(primaryCandidates[i]) === -1) interleaved.push(primaryCandidates[i]);
+      if (fastCandidates[i] && interleaved.indexOf(fastCandidates[i]) === -1) interleaved.push(fastCandidates[i]);
+    }
+    allCandidates = interleaved;
   }
 
-  console.log('[AIPrime] requested=' + requestedTier + ' fallback=' + fallbackMode + ' candidates=[' + allCandidates.join(', ') + ']');
+  var MAX_TRIES = 3;
+  var PER_MODEL_TIMEOUT = 7000;
+  var TOTAL_BUDGET = 22000;
+  var startTime = Date.now();
+
+  console.log('[AIPrime] requested=' + requestedTier + ' fallback=' + fallbackMode +
+              ' maxTries=' + MAX_TRIES + ' perTimeout=' + PER_MODEL_TIMEOUT + 'ms' +
+              ' candidates=[' + allCandidates.join(', ') + ']');
+
   var lastErr = '', authFatal = false, tried = [];
-  for (var mi = 0; mi < allCandidates.length; mi++) {
+
+  for (var mi = 0; mi < Math.min(allCandidates.length, MAX_TRIES); mi++) {
+    var elapsed = Date.now() - startTime;
+    if (elapsed > TOTAL_BUDGET) {
+      throw new Error('AI budget exceeded: tried ' + tried.length + ' models in ' + Math.round(elapsed / 1000) + 's — last: ' + lastErr);
+    }
+
     var model = allCandidates[mi];
     var actualTier = getModelTierOf(model, 'aiprime');
     var isFallback = actualTier !== requestedTier && requestedTier !== 'fast';
     tried.push(model + '(' + actualTier + ')');
+
+    var ctrl = new AbortController();
+    var abortTimer = setTimeout(function() { ctrl.abort(); }, PER_MODEL_TIMEOUT);
+
     try {
       var r = await fetch('https://api.aiprime.shop/v1/chat/completions', {
-        method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + key },
-        body: JSON.stringify({ model: model, messages: [{ role: 'user', content: content }], temperature: 0.2, max_tokens: getMaxTokens(model) })
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + key },
+        body: JSON.stringify({ model: model, messages: [{ role: 'user', content: content }], temperature: 0.2, max_tokens: getMaxTokens(model) }),
+        signal: ctrl.signal
       });
+      clearTimeout(abortTimer);
       var d = await r.json();
+
       if (r.ok) {
         var choice = d && d.choices && d.choices[0];
         var msg = choice && choice.message;
         var t = msg ? msg.content : null;
-        var reasoning = msg ? msg.reasoning_content : null;
         var finish = choice ? choice.finish_reason : null;
         console.log('[AIPrime:' + model + '(' + actualTier + ')] finish=' + finish + ' len=' + (t ? t.length : 0) + (isFallback ? ' ⚠️ FALLBACK' : ''));
+
         if (finish === 'length') { lastErr = model + ': پاسخ قطع'; continue; }
-        if ((!t || t.length < 10) && reasoning && reasoning.length > 100) { lastErr = model + ': reasoning-only'; continue; }
         if (t && t.length > 10) {
           var hasJson = /\{[\s\S]*?"direction"[\s\S]*?\}/i.test(t);
           var hasSections = /#{2,4}\s+\S/.test(t);
           if (!hasJson && !hasSections && t.split(/\s+/).length < 80) { lastErr = model + ': کوتاه'; continue; }
           if (!hasImage && chatId) {
-            // 🔑 Save برای tier واقعی (نه requested)
             try { await setWorkingModel(env, chatId, 'aiprime', actualTier, model); } catch (e) {}
           }
-          return {
-            text: t, model: model,
-            actualTier: actualTier, requestedTier: requestedTier,
-            fallback: isFallback
-          };
+          return { text: t, model: model, actualTier: actualTier, requestedTier: requestedTier, fallback: isFallback };
         }
         lastErr = model + ': خالی'; continue;
       }
+
       var errMsg = d && d.error ? (d.error.message || JSON.stringify(d.error)) : 'HTTP ' + r.status;
       console.log('[AIPrime:' + model + '] FAILED status=' + r.status + ' err=' + errMsg.slice(0, 100));
       lastErr = model + ': ' + errMsg;
       if (r.status === 401 || r.status === 403) { authFatal = true; break; }
     } catch (e) {
-      lastErr = model + ': ' + e.message;
-      console.log('[AIPrime:' + model + '] EXC: ' + e.message);
+      clearTimeout(abortTimer);
+      if (e.name === 'AbortError') {
+        lastErr = model + ': timeout ' + PER_MODEL_TIMEOUT + 'ms';
+        console.log('[AIPrime:' + model + '] TIMEOUT');
+      } else {
+        lastErr = model + ': ' + e.message;
+        console.log('[AIPrime:' + model + '] EXC: ' + e.message);
+      }
     }
   }
+
   if (authFatal) throw new Error('AIPrime auth (401/403) — کلید AIPRIME_KEY را بررسی کنید');
-  throw new Error('AIPrime tier=' + requestedTier + ' [tried: ' + tried.slice(0, 6).join(', ') + '] last: ' + lastErr);
+  var totalTime = Math.round((Date.now() - startTime) / 1000);
+  throw new Error('AIPrime tier=' + requestedTier + ' در ' + totalTime + 's نتوانست پاسخ دهد [' + tried.join(', ') + '] — ' + lastErr);
 }
 
 async function callGapGPTText(env, prompt, imgB64, imgMime, chatId) {
   var key = env.GAPGPT_KEY;
   if (!key) throw new Error('GAPGPT_KEY تنظیم نشده');
+
   var hasImage = !!imgB64;
-  var content = hasImage ? [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: 'data:' + imgMime + ';base64,' + imgB64 } }] : prompt;
+  var content = hasImage ? [
+    { type: 'text', text: prompt },
+    { type: 'image_url', image_url: { url: 'data:' + imgMime + ';base64,' + imgB64 } }
+  ] : prompt;
+
   var requestedTier = chatId ? await getUserModelTier(env, chatId, 'gapgpt') : 'fast';
   var fallbackMode = chatId ? await getFallbackMode(env, chatId) : 'strict';
 
@@ -1073,24 +1117,52 @@ async function callGapGPTText(env, prompt, imgB64, imgMime, chatId) {
 
   var primaryCandidates = await getTierCandidates(env, chatId, 'gapgpt', requestedTier, hasImage);
   var allCandidates = primaryCandidates.slice();
+
   if (fallbackMode !== 'strict' && requestedTier !== 'fast' && !hasImage) {
     var fastCandidates = await getTierCandidates(env, chatId, 'gapgpt', 'fast', hasImage);
-    fastCandidates.forEach(function(m) { if (allCandidates.indexOf(m) === -1) allCandidates.push(m); });
+    var interleaved = [];
+    var maxLen = Math.max(primaryCandidates.length, fastCandidates.length);
+    for (var i = 0; i < maxLen && interleaved.length < 5; i++) {
+      if (primaryCandidates[i] && interleaved.indexOf(primaryCandidates[i]) === -1) interleaved.push(primaryCandidates[i]);
+      if (fastCandidates[i] && interleaved.indexOf(fastCandidates[i]) === -1) interleaved.push(fastCandidates[i]);
+    }
+    allCandidates = interleaved;
   }
 
-  console.log('[GapGPT] requested=' + requestedTier + ' fallback=' + fallbackMode + ' candidates=[' + allCandidates.join(', ') + ']');
+  var MAX_TRIES = 3;
+  var PER_MODEL_TIMEOUT = 7000;
+  var TOTAL_BUDGET = 22000;
+  var startTime = Date.now();
+
+  console.log('[GapGPT] requested=' + requestedTier + ' fallback=' + fallbackMode +
+              ' candidates=[' + allCandidates.join(', ') + ']');
+
   var lastErr = '', authFatal = false, tried = [];
-  for (var mi = 0; mi < allCandidates.length; mi++) {
+
+  for (var mi = 0; mi < Math.min(allCandidates.length, MAX_TRIES); mi++) {
+    var elapsed = Date.now() - startTime;
+    if (elapsed > TOTAL_BUDGET) {
+      throw new Error('AI budget exceeded: ' + Math.round(elapsed / 1000) + 's');
+    }
+
     var model = allCandidates[mi];
     var actualTier = getModelTierOf(model, 'gapgpt');
     var isFallback = actualTier !== requestedTier && requestedTier !== 'fast';
     tried.push(model + '(' + actualTier + ')');
+
+    var ctrl = new AbortController();
+    var abortTimer = setTimeout(function() { ctrl.abort(); }, PER_MODEL_TIMEOUT);
+
     try {
       var r = await fetch('https://api.gapgpt.app/v1/chat/completions', {
-        method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + key },
-        body: JSON.stringify({ model: model, messages: [{ role: 'user', content: content }], temperature: 0.2, max_tokens: getMaxTokens(model) })
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + key },
+        body: JSON.stringify({ model: model, messages: [{ role: 'user', content: content }], temperature: 0.2, max_tokens: getMaxTokens(model) }),
+        signal: ctrl.signal
       });
+      clearTimeout(abortTimer);
       var d = await r.json();
+
       if (r.ok) {
         var choice = d && d.choices && d.choices[0];
         var msg = choice && choice.message;
@@ -1105,13 +1177,23 @@ async function callGapGPTText(env, prompt, imgB64, imgMime, chatId) {
         }
         lastErr = model + ': خالی'; continue;
       }
+
       var errMsg = d && d.error ? (d.error.message || JSON.stringify(d.error)) : 'HTTP ' + r.status;
       lastErr = model + ': ' + errMsg;
       if (r.status === 401 || r.status === 403) { authFatal = true; break; }
-    } catch (e) { lastErr = model + ': ' + e.message; }
+    } catch (e) {
+      clearTimeout(abortTimer);
+      if (e.name === 'AbortError') {
+        lastErr = model + ': timeout';
+        console.log('[GapGPT:' + model + '] TIMEOUT');
+      } else {
+        lastErr = model + ': ' + e.message;
+      }
+    }
   }
+
   if (authFatal) throw new Error('GapGPT auth (401/403)');
-  throw new Error('GapGPT tier=' + requestedTier + ' [tried: ' + tried.slice(0, 6).join(', ') + '] last: ' + lastErr);
+  throw new Error('GapGPT tier=' + requestedTier + ' [' + tried.join(', ') + '] — ' + lastErr);
 }
 
 async function callGroqText(env, prompt, imgB64, imgMime) {
@@ -1318,7 +1400,9 @@ async function callWithFallback(env, prompt, imgB64, imgMime, chatId, forcedProv
   for (var i = 0; i < providers.length; i++) {
     var p = providers[i];
     try {
-      var timeout = (p === 'gapgpt' || p === 'aiprime' || p === 'customvision') ? 180000 : 60000;
+      // 🔑 v8.2.8 — با احتساب ۳۰ ثانیه limit برای waitUntil
+if (Date.now() - (arguments[7] || Date.now()) > 25000) break;
+var timeout = (p === 'gapgpt' || p === 'aiprime' || p === 'customvision') ? 22000 : 25000;
       var r = await withTimeout(PROVIDER_FUNCS[p](env, prompt, imgB64, imgMime, chatId), timeout, p);
       var u = unwrapProviderResponse(r);
       if (u && u.text && u.text.length > 10) {
