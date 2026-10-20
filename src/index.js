@@ -893,23 +893,27 @@ async function callAIPrimeText(env, prompt, imgB64, imgMime, chatId, opts) {
     if (!discovered) { try { await discoverProviderModels(env, chatId, 'aiprime', key); } catch (e) {} }
   }
 
-  // candidates فقط از tier درخواستی
   var candidates = await getTierCandidates(env, chatId, 'aiprime', requestedTier, hasImage);
 
   var startTime = Date.now();
   var lastErr = '', authFatal = false, tried = [];
-  var maxAttempts = opts.maxAttempts || AI_MAX_ATTEMPTS;
-  var perModelTimeout = opts.perModelTimeout || AI_PER_MODEL_TIMEOUT;
 
-  console.log('[AIPrime] tier=' + requestedTier + ' attempts=' + maxAttempts + ' perTimeout=' + perModelTimeout + 'ms candidates=[' + candidates.slice(0, 5).join(', ') + ']');
+  // 🔑 اگر deepseek یا premium انتخاب شد: ۵ ثانیه اول امتحان کن، بعد به fast برو
+  // اگر fast انتخاب شد: ۱۲ ثانیه فرصت کافی
+  var perModelTimeout = (requestedTier === 'fast') ? 12000 : 5000;
+  var maxAttempts = (requestedTier === 'fast') ? 2 : 1;
+  var needsEmergencyFallback = !hasImage && requestedTier !== 'fast';
 
+  console.log('[AIPrime] tier=' + requestedTier + ' attempts=' + maxAttempts + ' perTimeout=' + perModelTimeout + 'ms');
+  console.log('[AIPrime] candidates=[' + candidates.slice(0, 5).join(', ') + ']');
+
+  // ═══ مرحله ۱: تلاش با tier انتخابی ═══
   for (var mi = 0; mi < Math.min(candidates.length, maxAttempts); mi++) {
     var elapsed = Date.now() - startTime;
-    if (elapsed > AI_TOTAL_BUDGET) { lastErr = 'total budget exceeded'; break; }
+    if (elapsed > 20000) { lastErr = 'pre-check budget exceeded'; break; }
 
     var model = candidates[mi];
     tried.push(model);
-
     var ctrl = new AbortController();
     var abortTimer = setTimeout(function() { ctrl.abort(); }, perModelTimeout);
 
@@ -940,14 +944,12 @@ async function callAIPrimeText(env, prompt, imgB64, imgMime, chatId, opts) {
       }
 
       var errMsg = d && d.error ? (d.error.message || JSON.stringify(d.error)) : 'HTTP ' + r.status;
-      console.log('[AIPrime:' + model + '] FAILED status=' + r.status + ' err=' + errMsg.slice(0, 100));
+      console.log('[AIPrime:' + model + '] FAILED status=' + r.status);
       lastErr = model + ': ' + errMsg;
-   if (r.status === 401 || r.status === 403) {
-  var isRealAuthError = /invalid.*api.*key|invalid.*key|unauthorized|authentication.*fail|api.?key.*invalid/i.test(errMsg);
-  if (isRealAuthError) { authFatal = true; break; }
-  lastErr = model + ': ' + errMsg;
-  continue;
-}
+      if (r.status === 401 || r.status === 403) {
+        var isRealAuth = /invalid.*api.*key|unauthorized|authentication.*fail/i.test(errMsg);
+        if (isRealAuth) { authFatal = true; break; }
+      }
     } catch (e) {
       clearTimeout(abortTimer);
       if (e.name === 'AbortError') { lastErr = model + ': timeout ' + perModelTimeout + 'ms'; console.log('[AIPrime:' + model + '] TIMEOUT'); }
@@ -956,6 +958,51 @@ async function callAIPrimeText(env, prompt, imgB64, imgMime, chatId, opts) {
   }
 
   if (authFatal) throw new Error('AIPrime auth (401/403) — کلید AIPRIME_KEY را بررسی کنید');
+
+  // ═══ مرحله ۲: Emergency Fallback به fast (فقط اگر tier بالاتر بود) ═══
+  if (needsEmergencyFallback && !authFatal) {
+    var elapsed2 = Date.now() - startTime;
+    var remaining = 25000 - elapsed2;
+    if (remaining > 6000) {
+      console.log('[AIPrime] ⚡ EMERGENCY → fast tier (tier=' + requestedTier + ' failed, remaining=' + Math.round(remaining/1000) + 's)');
+      var fastCandidates = await getTierCandidates(env, chatId, 'aiprime', 'fast', false);
+      var emergencyModel = fastCandidates[0];
+      if (emergencyModel) {
+        var ctrl2 = new AbortController();
+        var tmr2 = setTimeout(function() { ctrl2.abort(); }, Math.min(12000, remaining - 2000));
+        try {
+          var rE = await fetch('https://api.aiprime.shop/v1/chat/completions', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + key },
+            body: JSON.stringify({ model: emergencyModel, messages: [{ role: 'user', content: content }], temperature: 0.2, max_tokens: getMaxTokens(emergencyModel) }),
+            signal: ctrl2.signal
+          });
+          clearTimeout(tmr2);
+          var dE = await rE.json();
+          if (rE.ok) {
+            var choiceE = dE && dE.choices && dE.choices[0];
+            var msgE = choiceE && choiceE.message;
+            var tE = msgE ? msgE.content : null;
+            console.log('[AIPrime:EMERGENCY ' + emergencyModel + '] len=' + (tE ? tE.length : 0));
+            if (tE && tE.length > 10) {
+              if (chatId) { try { await setWorkingModel(env, chatId, 'aiprime', 'fast', emergencyModel); } catch (e) {} }
+              return {
+                text: tE,
+                model: emergencyModel,
+                tier: 'fast',
+                emergencyFallback: true,
+                requestedTier: requestedTier
+              };
+            }
+          }
+        } catch (e) {
+          clearTimeout(tmr2);
+          console.log('[AIPrime] EMERGENCY failed: ' + e.message);
+        }
+      }
+    }
+  }
+
   var totalTime = Math.round((Date.now() - startTime) / 1000);
   throw new Error('AIPrime tier=' + requestedTier + ' در ' + totalTime + 's پاسخ نداد [' + tried.join(', ') + '] — ' + lastErr);
 }
@@ -964,6 +1011,7 @@ async function callGapGPTText(env, prompt, imgB64, imgMime, chatId, opts) {
   opts = opts || {};
   var key = getKey(env, 'gapgpt');
   if (!key) throw new Error('GAPGPT_KEY تنظیم نشده');
+
   var hasImage = !!imgB64;
   var content = hasImage ? [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: 'data:' + imgMime + ';base64,' + imgB64 } }] : prompt;
   var requestedTier = chatId ? await getUserModelTier(env, chatId, 'gapgpt') : 'fast';
@@ -974,16 +1022,22 @@ async function callGapGPTText(env, prompt, imgB64, imgMime, chatId, opts) {
   }
 
   var candidates = await getTierCandidates(env, chatId, 'gapgpt', requestedTier, hasImage);
+
   var startTime = Date.now();
   var lastErr = '', authFatal = false, tried = [];
-  var maxAttempts = opts.maxAttempts || AI_MAX_ATTEMPTS;
-  var perModelTimeout = opts.perModelTimeout || AI_PER_MODEL_TIMEOUT;
 
-  console.log('[GapGPT] tier=' + requestedTier + ' attempts=' + maxAttempts + ' candidates=[' + candidates.slice(0, 5).join(', ') + ']');
+  // 🔑 استراتژی زمان‌بندی: fast=12s (کافی)، deepseek/premium=5s (سریع رد شو)
+  var perModelTimeout = (requestedTier === 'fast') ? 12000 : 5000;
+  var maxAttempts = (requestedTier === 'fast') ? 2 : 1;
+  var needsEmergencyFallback = !hasImage && requestedTier !== 'fast';
 
+  console.log('[GapGPT] tier=' + requestedTier + ' attempts=' + maxAttempts + ' perTimeout=' + perModelTimeout + 'ms');
+  console.log('[GapGPT] candidates=[' + candidates.slice(0, 5).join(', ') + ']');
+
+  // ═══ مرحله ۱: تلاش با tier انتخابی ═══
   for (var mi = 0; mi < Math.min(candidates.length, maxAttempts); mi++) {
     var elapsed = Date.now() - startTime;
-    if (elapsed > AI_TOTAL_BUDGET) { lastErr = 'total budget exceeded'; break; }
+    if (elapsed > 20000) { lastErr = 'pre-check budget exceeded'; break; }
 
     var model = candidates[mi];
     tried.push(model);
@@ -1005,6 +1059,8 @@ async function callGapGPTText(env, prompt, imgB64, imgMime, chatId, opts) {
         var msg = choice && choice.message;
         var t = msg ? msg.content : null;
         var finish = choice ? choice.finish_reason : null;
+        console.log('[GapGPT:' + model + '(' + requestedTier + ')] finish=' + finish + ' len=' + (t ? t.length : 0));
+
         if (finish === 'length') { lastErr = model + ': پاسخ قطع'; continue; }
         if (t && t.length > 10) {
           if (chatId) { try { await setWorkingModel(env, chatId, 'gapgpt', requestedTier, model); } catch (e) {} }
@@ -1013,23 +1069,69 @@ async function callGapGPTText(env, prompt, imgB64, imgMime, chatId, opts) {
         lastErr = model + ': خالی';
         continue;
       }
+
       var errMsg = d && d.error ? (d.error.message || JSON.stringify(d.error)) : 'HTTP ' + r.status;
+      console.log('[GapGPT:' + model + '] FAILED status=' + r.status);
       lastErr = model + ': ' + errMsg;
-    if (r.status === 401 || r.status === 403) {
-  var isRealAuthError = /invalid.*api.*key|invalid.*key|unauthorized|authentication.*fail|api.?key.*invalid/i.test(errMsg);
-  if (isRealAuthError) { authFatal = true; break; }
-  lastErr = model + ': ' + errMsg;
-  continue;
-}
+      if (r.status === 401 || r.status === 403) {
+        var isRealAuth = /invalid.*api.*key|unauthorized|authentication.*fail|api.?key.*invalid/i.test(errMsg);
+        if (isRealAuth) { authFatal = true; break; }
+      }
     } catch (e) {
       clearTimeout(abortTimer);
-      if (e.name === 'AbortError') lastErr = model + ': timeout';
-      else lastErr = model + ': ' + e.message;
+      if (e.name === 'AbortError') { lastErr = model + ': timeout ' + perModelTimeout + 'ms'; console.log('[GapGPT:' + model + '] TIMEOUT'); }
+      else { lastErr = model + ': ' + e.message; }
     }
   }
 
-  if (authFatal) throw new Error('GapGPT auth (401/403)');
-  throw new Error('GapGPT tier=' + requestedTier + ' [' + tried.join(', ') + '] — ' + lastErr);
+  if (authFatal) throw new Error('GapGPT auth (401/403) — کلید GAPGPT_KEY را بررسی کنید');
+
+  // ═══ مرحله ۲: Emergency Fallback به fast ═══
+  if (needsEmergencyFallback && !authFatal) {
+    var elapsed2 = Date.now() - startTime;
+    var remaining = 25000 - elapsed2;
+    if (remaining > 6000) {
+      console.log('[GapGPT] ⚡ EMERGENCY → fast tier (tier=' + requestedTier + ' failed, remaining=' + Math.round(remaining/1000) + 's)');
+      var fastCandidates = await getTierCandidates(env, chatId, 'gapgpt', 'fast', false);
+      var emergencyModel = fastCandidates[0];
+      if (emergencyModel) {
+        var ctrl2 = new AbortController();
+        var tmr2 = setTimeout(function() { ctrl2.abort(); }, Math.min(12000, remaining - 2000));
+        try {
+          var rE = await fetch('https://api.gapgpt.app/v1/chat/completions', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + key },
+            body: JSON.stringify({ model: emergencyModel, messages: [{ role: 'user', content: content }], temperature: 0.2, max_tokens: getMaxTokens(emergencyModel) }),
+            signal: ctrl2.signal
+          });
+          clearTimeout(tmr2);
+          var dE = await rE.json();
+          if (rE.ok) {
+            var choiceE = dE && dE.choices && dE.choices[0];
+            var msgE = choiceE && choiceE.message;
+            var tE = msgE ? msgE.content : null;
+            console.log('[GapGPT:EMERGENCY ' + emergencyModel + '] len=' + (tE ? tE.length : 0));
+            if (tE && tE.length > 10) {
+              if (chatId) { try { await setWorkingModel(env, chatId, 'gapgpt', 'fast', emergencyModel); } catch (e) {} }
+              return {
+                text: tE,
+                model: emergencyModel,
+                tier: 'fast',
+                emergencyFallback: true,
+                requestedTier: requestedTier
+              };
+            }
+          }
+        } catch (e) {
+          clearTimeout(tmr2);
+          console.log('[GapGPT] EMERGENCY failed: ' + e.message);
+        }
+      }
+    }
+  }
+
+  var totalTime = Math.round((Date.now() - startTime) / 1000);
+  throw new Error('GapGPT tier=' + requestedTier + ' در ' + totalTime + 's پاسخ نداد [' + tried.join(', ') + '] — ' + lastErr);
 }
 
 async function callGeminiText(env, prompt, imgB64, imgMime) {
