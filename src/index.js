@@ -1,18 +1,18 @@
 // ============================================
-// EVEREST BOT v8.2.3
+// EVEREST BOT v8.2.4
 // + Real Model Names (AIPrime's actual /v1/models)
-// + Auto-Discovery + Working Model Cache
-// + Reasoning-safe: max_tokens 32000, finish_reason check, reasoning_content detection
+// + Auto-Discovery + Working Model Cache (fallback chain)
+// + Reasoning-safe: getMaxTokens per model, finish_reason check
 // + Calibration Engine (Brier + Reliability)
-// + Regime Router (local deterministic)
-// + Adversarial Reviewer
-// + Portfolio Risk Gate
+// + Regime Router (Wilder ADX)
+// + Adversarial Reviewer (trend/momentum → warnings)
+// + Portfolio Risk Gate (OPEN only)
 // + Opportunity Cost Ledger
 // + Schema Validator (strict)
 // + Signal Passport
 // + Expiry Watchdog (UNFILLED vs EXPIRED)
 // + Text: AIPrime | Image: Gemini → GapGPT → AIPrime
-// + Custom Vision API + Local Filter MSS/BOS
+// + Custom Vision API + Local Filter MSS/BOS + MSS dedupe
 // ============================================
 
 const CONF_KEYS = ['structure', 'smc', 'ict', 'candle', 'liquidity', 'riskReward'];
@@ -23,30 +23,30 @@ const CONF_LABELS = {
 
 const VISION_STRICT = false;
 
-// 🔧 v8.2.3 — Real model names from AIPrime's actual /v1/models list
+// 🔧 v8.2.4 — Real model names from AIPrime's actual /v1/models list
 const MODEL_TIERS = {
   aiprime: {
     fast: { label: '🚀 سریع', text: 'gpt-4o-mini', vision: 'gpt-4o' },
     premium: { label: '💎 قوی', text: 'claude-sonnet-5.5', vision: 'claude-sonnet-5.5' },
-    deepseek: { label: '🧠 DeepSeek', text: 'deepseek-v3.2', vision: 'gpt-4o' }
+    deepseek: { label: '🧠 DeepSeek', text: 'deepseek-flash', vision: 'gpt-4o' }
   },
   gapgpt: {
     fast: { label: '🚀 سریع', text: 'gpt-4o-mini', vision: 'gpt-4o' },
     premium: { label: '💎 قوی', text: 'claude-sonnet-5.5', vision: 'claude-sonnet-5.5' },
-    deepseek: { label: '🧠 DeepSeek', text: 'deepseek-v3.2', vision: 'gpt-4o' }
+    deepseek: { label: '🧠 DeepSeek', text: 'deepseek-flash', vision: 'gpt-4o' }
   }
 };
 
-// 🔧 v8.2.3 — Fallback chains with REAL models
+// 🔧 v8.2.4 — Fallback chains with REAL DeepSeek names (deepseek-flash is the actual V4.1-Flash alias)
 const MODEL_FALLBACK_CHAINS = {
   aiprime: {
     fast: ['gpt-4o-mini', 'gpt-4o', 'gemini-2.5-flash', 'claude-haiku-4.5', 'gemini-2.5-pro'],
-    deepseek: ['deepseek-v3.2', 'deepseek-v3.1', 'deepseek-v4.1-flash', 'deepseek-v4-flash', 'deepseek-v4-pro', 'deepseek-v4.1-flash-1017', 'deepseek-r1'],
+    deepseek: ['deepseek-flash', 'deepseek-v4-pro', 'deepseek-v3.2', 'deepseek-v3.1', 'deepseek-r1'],
     premium: ['claude-sonnet-5.5', 'claude-sonnet-5', 'claude-opus-5.5', 'claude-sonnet-4.6', 'claude-opus-5', 'claude-sonnet-4.5', 'gpt-5.5', 'gpt-5.4']
   },
   gapgpt: {
     fast: ['gpt-4o-mini', 'gpt-4o', 'gemini-2.5-flash'],
-    deepseek: ['deepseek-v3.2', 'deepseek-v3.1', 'deepseek-v4.1-flash', 'deepseek-v4-flash', 'deepseek-v4-pro', 'deepseek-r1'],
+    deepseek: ['deepseek-flash', 'deepseek-v4-pro', 'deepseek-v3.2', 'deepseek-v3.1', 'deepseek-r1'],
     premium: ['claude-sonnet-5.5', 'claude-sonnet-5', 'claude-opus-5.5', 'claude-sonnet-4.6', 'gpt-5.5']
   }
 };
@@ -56,6 +56,17 @@ const VISION_MODELS_BY_PROVIDER = {
   aiprime: ['gpt-4o', 'gpt-4o-mini', 'claude-sonnet-5.5'],
   gapgpt: ['gpt-4o', 'gpt-4o-mini']
 };
+
+// 🔧 v8.2.4 — per-model max_tokens (gpt-4o-mini has 16k output cap)
+function getMaxTokens(model) {
+  var m = String(model || '').toLowerCase();
+  if (/gpt-4o-mini|gpt-3\.5/.test(m)) return 4000;
+  if (/gemini/.test(m)) return 8000;
+  if (/claude/.test(m)) return 8000;
+  if (/deepseek/.test(m)) return 8000;
+  if (/gpt-4o$/.test(m)) return 16000;
+  return 8000;
+}
 
 const EXPIRY_TTL_BY_TF = {
   '1min': 20, '3min': 15, '5min': 12, '15min': 10, '1h': 8, '4h': 6
@@ -92,7 +103,7 @@ const MODE_CONFIG = {
 };
 
 // ============================================
-// v8.2.3 — MODEL DISCOVERY + CACHE
+// v8.2.4 — MODEL DISCOVERY + CACHE
 // ============================================
 
 async function getDiscoveredModels(env, chatId, provider) {
@@ -137,33 +148,32 @@ async function discoverProviderModels(env, chatId, provider, key) {
   }
 }
 
+// 🔧 v8.2.4 — saved پین اول، سپس کشف‌شده، سپس fallback chain
 async function getModelCandidates(env, chatId, provider, tier, hasImage) {
-  if (hasImage) return VISION_MODELS_BY_PROVIDER[provider] || ['gpt-4o'];
+  if (hasImage) {
+    var tv = MODEL_TIERS[provider] && MODEL_TIERS[provider][tier] && MODEL_TIERS[provider][tier].vision;
+    var vis = (VISION_MODELS_BY_PROVIDER[provider] || ['gpt-4o']).slice();
+    if (tv && vis.indexOf(tv) === -1) vis.unshift(tv);
+    return vis;
+  }
+  var list = [];
   var saved = await getWorkingModel(env, chatId, provider, tier);
-  if (saved) return [saved];
+  if (saved) list.push(saved);
   var discovered = await getDiscoveredModels(env, chatId, provider);
   if (discovered && discovered.length) {
     var patterns = {
-      fast: /gpt-4o-mini|gemini.*flash|haiku|llama.*8b|mistral-small/i,
-      deepseek: /^deepseek-v3\.(2|1)$|^deepseek-v4\.1-flash$|^deepseek-v4-flash$|^deepseek-v3\.2$|^deepseek-v3\.1$/i,
-      premium: /claude-sonnet-5\.5|claude-sonnet-5$|claude-sonnet-4\.6|claude-opus-5\.5|claude-opus-5$/i
+      fast: /gpt-4o-mini|gpt-3\.5|gemini.*flash|haiku|llama.*8b|mistral-small/i,
+      deepseek: /^deepseek-flash$|^deepseek-v4-pro$|^deepseek-v3\.2$|^deepseek-v3\.1$|^deepseek-r1$|deepseek/i,
+      premium: /claude-sonnet-5\.5|claude-sonnet-5$|claude-sonnet-4\.6|claude-opus-5\.5|claude-opus-5$|claude/i
     };
     var pat = patterns[tier] || patterns.fast;
-    var matches = discovered.filter(function(m) { return pat.test(m); });
-    if (matches.length) {
-      console.log('[Pick] ' + provider + '/' + tier + ' → ' + matches[0] + ' (discovered)');
-      return matches;
-    }
-    var loose = discovered.filter(function(m) {
-      return (tier === 'deepseek' && /deepseek/i.test(m)) ||
-             (tier === 'premium' && /claude.*sonnet/i.test(m)) ||
-             (tier === 'fast' && /gpt-4o-mini/i.test(m));
-    });
-    if (loose.length) return loose;
+    discovered.filter(function(m) { return pat.test(m); })
+      .forEach(function(m) { if (list.indexOf(m) === -1) list.push(m); });
   }
   var chain = MODEL_FALLBACK_CHAINS[provider] && MODEL_FALLBACK_CHAINS[provider][tier];
-  console.log('[Pick] ' + provider + '/' + tier + ' → fallback chain (' + ((chain && chain.length) || 0) + ')');
-  return chain || ['gpt-4o-mini'];
+  if (chain) chain.forEach(function(m) { if (list.indexOf(m) === -1) list.push(m); });
+  console.log('[Pick] ' + provider + '/' + tier + ' → ' + list.length + ' candidates: ' + list.slice(0, 4).join(', '));
+  return list.length ? list : ['gpt-4o-mini'];
 }
 
 // ============================================
@@ -412,7 +422,7 @@ function normalizeProviderKey(providerName) {
 }
 
 // ============================================
-// REGIME DETECTION
+// REGIME DETECTION — 🔧 v8.2.4 Wilder ADX
 // ============================================
 function calcEMA(arr, period) {
   if (!arr.length || period < 1) return [];
@@ -422,7 +432,8 @@ function calcEMA(arr, period) {
   return ema;
 }
 
-function computeLocalRegime(kl) {
+function computeLocalRegime(kl, tf) {
+  tf = tf || '5min';
   if (!kl || kl.length < 30) return { regime: 'UNKNOWN', emaSlope: 0, atrPct: 50, adx: 0, lastAtr: 0 };
   var closes = kl.map(function(k) { return k.close; });
   var ema20 = calcEMA(closes, 20);
@@ -438,32 +449,57 @@ function computeLocalRegime(kl) {
     var below = atrs.filter(function(x) { return x < lastAtr; }).length;
     atrPct = Math.round(below / atrs.length * 100);
   }
-  var trSum = 0, dmP = 0, dmM = 0, window = Math.min(kl.length - 1, 30);
-  for (var j = kl.length - window; j < kl.length; j++) {
-    if (j < 1) continue;
+
+  // Wilder ADX
+  var period = 14, n = kl.length;
+  var trs = [], pDMs = [], nDMs = [];
+  for (var j = 1; j < n; j++) {
     var up = kl[j].high - kl[j - 1].high;
     var dn = kl[j - 1].low - kl[j].low;
-    if (up > dn && up > 0) dmP += up;
-    if (dn > up && dn > 0) dmM += dn;
-    trSum += Math.max(kl[j].high - kl[j].low, Math.abs(kl[j].high - kl[j - 1].close), Math.abs(kl[j].low - kl[j - 1].close));
+    trs.push(Math.max(kl[j].high - kl[j].low, Math.abs(kl[j].high - kl[j - 1].close), Math.abs(kl[j].low - kl[j - 1].close)));
+    pDMs.push((up > dn && up > 0) ? up : 0);
+    nDMs.push((dn > up && dn > 0) ? dn : 0);
   }
-  var diP = trSum ? dmP / trSum * 100 : 0;
-  var diM = trSum ? dmM / trSum * 100 : 0;
-  var dx = (diP + diM) ? (Math.abs(diP - diM) / (diP + diM)) * 100 : 0;
-  var adx = Math.round(dx);
+  var adx = 0;
+  if (trs.length >= period + 1) {
+    var sTR = 0, sPDM = 0, sNDM = 0;
+    for (var k = 0; k < period; k++) { sTR += trs[k]; sPDM += pDMs[k]; sNDM += nDMs[k]; }
+    var dxs = [];
+    for (var k2 = period; k2 < trs.length; k2++) {
+      sTR = sTR - sTR / period + trs[k2];
+      sPDM = sPDM - sPDM / period + pDMs[k2];
+      sNDM = sNDM - sNDM / period + nDMs[k2];
+      var pdi = sTR ? (sPDM / sTR) * 100 : 0;
+      var ndi = sTR ? (sNDM / sTR) * 100 : 0;
+      dxs.push((pdi + ndi) ? Math.abs(pdi - ndi) / (pdi + ndi) * 100 : 0);
+    }
+    if (dxs.length >= period) {
+      var s = 0;
+      for (var k3 = 0; k3 < period; k3++) s += dxs[k3];
+      adx = s / period;
+      for (var k4 = period; k4 < dxs.length; k4++) adx = (adx * (period - 1) + dxs[k4]) / period;
+    }
+  }
+  var adxR = Math.round(adx);
+
+  // نرمال‌سازی آستانه شیب با تایم‌فریم
+  var tfm = TF_MINUTES[tf] || 5;
+  var slopeThresh = 0.03 * Math.sqrt(Math.max(1, tfm) / 5);
+
   var regime = 'RANGING';
   if (atrPct > 85) regime = 'HIGH_VOL';
-  else if (atrPct < 20 && adx < 15) regime = 'COMPRESSION';
-  else if (Math.abs(slope20) > 0.03 && adx > 20) regime = slope20 > 0 ? 'TRENDING_UP' : 'TRENDING_DOWN';
-  return { regime: regime, emaSlope: Math.round(slope20 * 100) / 100, atrPct: atrPct, adx: adx, lastAtr: lastAtr };
+  else if (atrPct < 20 && adxR < 15) regime = 'COMPRESSION';
+  else if (Math.abs(slope20) > slopeThresh && adxR > 20) regime = slope20 > 0 ? 'TRENDING_UP' : 'TRENDING_DOWN';
+  return { regime: regime, emaSlope: Math.round(slope20 * 100) / 100, atrPct: atrPct, adx: adxR, lastAtr: lastAtr };
 }
 
 // ============================================
-// ADVERSARIAL CHECK
+// ADVERSARIAL CHECK — 🔧 v8.2.4 روند/مومنتوم → warnings
 // ============================================
 function adversarialCheck(levels, klines, regime, atr) {
   var issues = [];
-  if (levels.direction !== 'BUY' && levels.direction !== 'SELL') return { passed: true, issues: [] };
+  var warnings = [];
+  if (levels.direction !== 'BUY' && levels.direction !== 'SELL') return { passed: true, issues: [], warnings: [] };
   var last = klines[klines.length - 1];
   if (levels.entry != null && levels.sl != null && atr > 0) {
     var risk = Math.abs(levels.entry - levels.sl);
@@ -474,8 +510,9 @@ function adversarialCheck(levels, klines, regime, atr) {
     var rr = Math.abs(levels.tp1 - levels.entry) / Math.abs(levels.entry - levels.sl);
     if (rr < 1.2) issues.push('R/R < 1.2');
   }
-  if (regime.regime === 'TRENDING_UP' && levels.direction === 'SELL') issues.push('فروش در روند صعودی');
-  if (regime.regime === 'TRENDING_DOWN' && levels.direction === 'BUY') issues.push('خرید در روند نزولی');
+  // ⬇️ روند/مومنتوم به‌عنوان هشدار، نه رد — MSS تعریفاً خلاف روند قبلی است
+  if (regime.regime === 'TRENDING_UP' && levels.direction === 'SELL') warnings.push('SELL خلاف روند (MSS/reversal؟)');
+  if (regime.regime === 'TRENDING_DOWN' && levels.direction === 'BUY') warnings.push('BUY خلاف روند (MSS/reversal؟)');
   if (levels.entry != null && last && atr > 0 && Math.abs(levels.entry - last.close) > 4.5 * atr) issues.push('Entry > 4.5×ATR از قیمت');
   var recent = klines.slice(-5);
   if (recent.length >= 5) {
@@ -483,12 +520,12 @@ function adversarialCheck(levels, klines, regime, atr) {
     var range = Math.max.apply(null, recent.map(function(k) { return k.high; })) - Math.min.apply(null, recent.map(function(k) { return k.low; }));
     if (range > 0) {
       var m = net / range;
-      if (levels.direction === 'BUY' && m < -0.65) issues.push('مومنتوم نزولی شدید');
-      if (levels.direction === 'SELL' && m > 0.65) issues.push('مومنتوم صعودی شدید');
+      if (levels.direction === 'BUY' && m < -0.65) warnings.push('مومنتوم نزولی ۵ کندل (MSS؟)');
+      if (levels.direction === 'SELL' && m > 0.65) warnings.push('مومنتوم صعودی ۵ کندل (MSS؟)');
     }
   }
   if (regime.atrPct > 92) issues.push('نوسان >92 پرسنتیل');
-  return { passed: issues.length === 0, issues: issues };
+  return { passed: issues.length === 0, issues: issues, warnings: warnings };
 }
 
 // ============================================
@@ -746,7 +783,7 @@ async function resolveRejectedSignals(env, chatId, klines, symbol, tf) {
 }
 
 // ============================================
-// PORTFOLIO RISK GATE
+// PORTFOLIO RISK GATE — 🔧 v8.2.4 فقط OPEN
 // ============================================
 async function getPortfolioConfig(env, chatId) {
   try {
@@ -760,13 +797,15 @@ async function setPortfolioConfig(env, chatId, cfg) {
 }
 async function getPortfolioState(env, chatId) {
   var a = await getJournal(env, chatId) || [];
-  var open = a.filter(function(s) { return s.status === 'OPEN' || (s.status === 'WIN' && s.whichTP < 3); });
+  // 🔧 v8.2.4 — فقط OPEN، نه WINهای قدیمی
+  var open = a.filter(function(s) { return s.status === 'OPEN'; });
   var today = new Date(Date.now() + 3.5 * 3600 * 1000).toISOString().slice(0, 10);
   var todaySignals = a.filter(function(s) { return s.day === today; });
   var todayRSum = 0;
   todaySignals.forEach(function(s) {
     if (s.status === 'WIN') todayRSum += (s.rr || 0);
     else if (s.status === 'LOSS') todayRSum -= 1;
+    else if (s.status === 'EXPIRED') todayRSum += (s.rr || 0);
   });
   var openBySymbol = {}, openByMarket = {}, openCrypto = 0;
   open.forEach(function(s) {
@@ -811,7 +850,7 @@ async function portfolioCheck(env, chatId, newSignal) {
 }
 
 // ============================================
-// PARSING
+// PARSING — 🔧 v8.2.4 markdown-safe
 // ============================================
 
 function parseJsonBlock(text) {
@@ -833,9 +872,10 @@ function findValue(text, labels) {
   }
   return null;
 }
+// 🔧 v8.2.4 — markdown-safe (handles **Direction:** **BUY**)
 function detectDirection(text) {
   if (!text) return 'WAIT';
-  var td = text.match(/Direction\s*[:：=]\s*(BUY|SELL|WAIT|LONG|SHORT)/i);
+  var td = text.match(/\*{0,2}Direction\*{0,2}\s*[:：=]\s*\*{0,2}\s*(BUY|SELL|WAIT|LONG|SHORT)\b/i);
   if (td) return normDir(td[1]);
   return 'WAIT';
 }
@@ -965,7 +1005,7 @@ function validateSignal(levels, opts) {
 }
 
 // ============================================
-// CONFLUENCE
+// CONFLUENCE — 🔧 v8.2.4 پایه ۱۵ در نبود شاهد
 // ============================================
 
 function extractScores(text) {
@@ -984,36 +1024,27 @@ function extractScores(text) {
 function calculateConfluenceAuto(levels, rawText) {
   var t = String(rawText || '');
   var tClean = t.replace(/(?:FVG|OB|BOS|CHOCH|Order\s*Block|Sweep)\s*(?:وجود\s*ندارد|نیست|no|not|absent)/gi, '');
+  var hasBOS = /\bBOS\b/i.test(tClean);
+  var hasCHoCH = /CHOCH|CHoCH/i.test(tClean);
+  var hasRetest = /Retest|پولبک/i.test(tClean);
+  var hasOB = /Order\s*Block|\bOB\b/i.test(tClean);
+  var hasPD = /Premium|Discount/i.test(tClean);
+  var hasFVG = /FVG|Fair\s*Value\s*Gap/i.test(tClean);
+  var hasImb = /Imbalance/i.test(tClean);
+  var hasEngulf = /Engulf|پوششی/i.test(tClean);
+  var hasPin = /Pin\s*Bar|Hammer|Doji/i.test(tClean);
+  var hasSweep = /Liquidity\s*Sweep|Sweep/i.test(tClean);
+  var hasLiq = /نقدینگی/i.test(tClean);
+
   var s = {};
-  var st = 55;
-  if (/\bBOS\b/i.test(tClean)) st += 12;
-  if (/CHOCH|CHoCH/i.test(tClean)) st += 10;
-  if (/Retest|پولبک/i.test(tClean)) st += 8;
-  if (/TRENDING_UP|TRENDING_DOWN/i.test(tClean)) st += 10;
-  if (/RANGING|رنج/i.test(tClean)) st -= 15;
-  s.structure = Math.max(0, Math.min(100, st));
+  // 🔧 v8.2.4 — پایه ۱۵ اگر شاهد نیست، ۵۵ اگر هست
+  s.structure = (hasBOS || hasCHoCH) ? Math.min(100, 55 + (hasBOS ? 12 : 0) + (hasCHoCH ? 10 : 0) + (hasRetest ? 8 : 0)) : 15;
+  s.smc = (hasOB || hasPD) ? Math.min(100, 55 + (hasOB ? 18 : 0) + (hasPD ? 8 : 0)) : 15;
+  s.ict = (hasFVG || hasImb) ? Math.min(100, 55 + (hasFVG ? 22 : 0) + (hasImb ? 12 : 0)) : 15;
+  s.candle = (hasEngulf || hasPin) ? Math.min(100, 55 + (hasEngulf ? 18 : 0) + (hasPin ? 15 : 0)) : 15;
+  s.liquidity = (hasSweep || hasLiq) ? Math.min(100, 55 + (hasSweep ? 20 : 0) + (hasLiq ? 10 : 0)) : 15;
 
-  var smc = 55;
-  if (/Order\s*Block|\bOB\b/i.test(tClean)) smc += 18;
-  if (/Premium|Discount/i.test(tClean)) smc += 8;
-  s.smc = Math.max(0, Math.min(100, smc));
-
-  var ict = 55;
-  if (/FVG|Fair\s*Value\s*Gap/i.test(tClean)) ict += 22;
-  if (/Imbalance/i.test(tClean)) ict += 12;
-  s.ict = Math.max(0, Math.min(100, ict));
-
-  var cd = 55;
-  if (/Engulf|پوششی/i.test(tClean)) cd += 18;
-  if (/Pin\s*Bar/i.test(tClean)) cd += 15;
-  s.candle = Math.max(0, Math.min(100, cd));
-
-  var lq = 55;
-  if (/Liquidity\s*Sweep|Sweep/i.test(tClean)) lq += 20;
-  if (/نقدینگی/i.test(tClean)) lq += 10;
-  s.liquidity = Math.max(0, Math.min(100, lq));
-
-  var rr = 50;
+  var rr = 20;
   if (levels.entry && levels.sl && levels.tp1) {
     var r = Math.abs(levels.entry - levels.sl);
     var rw = Math.abs(levels.tp1 - levels.entry);
@@ -1023,9 +1054,13 @@ function calculateConfluenceAuto(levels, rawText) {
   s.riskReward = rr;
 
   var avg = (s.structure + s.smc + s.ict + s.candle + s.liquidity + s.riskReward) / 6;
-  var normalized = 4 + ((avg - 40) / 50) * 5;
-  var confluence = Math.max(3, Math.min(9, Math.round(normalized * 10) / 10));
-  return { scores: s, confluence: confluence, auto: true };
+  var normalized = avg < 25 ? 2 : Math.max(2, Math.min(9, avg / 10));
+  return {
+    scores: s,
+    confluence: Math.round(normalized * 10) / 10,
+    auto: true,
+    hasEvidence: hasBOS || hasCHoCH || hasOB || hasPD || hasFVG || hasImb || hasEngulf || hasPin || hasSweep || hasLiq
+  };
 }
 
 async function resolveConfluence(env, chatId, levels, rawText) {
@@ -1047,7 +1082,8 @@ async function resolveConfluence(env, chatId, levels, rawText) {
     result.scores = a.scores;
     result.confluence = a.confluence;
     result.auto = true;
-    if (mode === 'force') result.warning = '\n⚠️ AI از دستور اجباری پیروی نکرد';
+    if (!a.hasEvidence) result.warning = '\n⚠️ هیچ الگوی SMC/ICT شناسایی نشد — confluence پایین';
+    if (mode === 'force') result.warning = (result.warning || '') + '\n⚠️ AI از دستور اجباری پیروی نکرد';
     return result;
   }
   result.warning = '\n⚠️ نمرات هم‌گرایی دریافت نشد.';
@@ -1055,7 +1091,7 @@ async function resolveConfluence(env, chatId, levels, rawText) {
 }
 
 // ============================================
-// AI CALLERS — v8.2.3 REASONING-SAFE
+// AI CALLERS — 🔧 v8.2.4 authFatal + getMaxTokens
 // ============================================
 
 async function callCustomVisionText(env, prompt, imgB64, imgMime) {
@@ -1068,7 +1104,7 @@ async function callCustomVisionText(env, prompt, imgB64, imgMime) {
   var r = await fetchWithTimeout(baseUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + key },
-    body: JSON.stringify({ model: model, messages: [{ role: 'user', content: c }], temperature: 0.15, max_tokens: 32000 })
+    body: JSON.stringify({ model: model, messages: [{ role: 'user', content: c }], temperature: 0.15, max_tokens: getMaxTokens(model) })
   }, 60000, 'CustomVision');
   var d = await r.json();
   if (!r.ok) throw new Error(d && d.error ? d.error.message : 'HTTP ' + r.status);
@@ -1088,7 +1124,7 @@ async function callGeminiText(env, prompt, imgB64, imgMime) {
       try {
         var r = await fetch('https://generativelanguage.googleapis.com/v1beta/models/' + models[mi] + ':generateContent', {
           method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': keys[ki] },
-          body: JSON.stringify({ contents: [{ parts: parts }], generationConfig: { temperature: 0.15, topP: 0.9, maxOutputTokens: 32000 } })
+          body: JSON.stringify({ contents: [{ parts: parts }], generationConfig: { temperature: 0.15, topP: 0.9, maxOutputTokens: 12000 } })
         });
         var d = await r.json();
         if (r.ok) {
@@ -1118,7 +1154,6 @@ async function callAIPrimeText(env, prompt, imgB64, imgMime, chatId) {
   var content = hasImage ? [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: 'data:' + imgMime + ';base64,' + imgB64 } }] : prompt;
   var tier = chatId ? await getUserModelTier(env, chatId, 'aiprime') : 'fast';
 
-  // Lazy discovery on first text call
   if (!hasImage && chatId) {
     var discovered = await getDiscoveredModels(env, chatId, 'aiprime');
     if (!discovered) {
@@ -1128,12 +1163,14 @@ async function callAIPrimeText(env, prompt, imgB64, imgMime, chatId) {
 
   var candidates = await getModelCandidates(env, chatId, 'aiprime', tier, hasImage);
   var lastErr = '';
+  var authFatal = false;
+
   for (var mi = 0; mi < candidates.length; mi++) {
     var model = candidates[mi];
     try {
       var r = await fetch('https://api.aiprime.shop/v1/chat/completions', {
         method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + key },
-        body: JSON.stringify({ model: model, messages: [{ role: 'user', content: content }], temperature: 0.2, max_tokens: 32000 })
+        body: JSON.stringify({ model: model, messages: [{ role: 'user', content: content }], temperature: 0.2, max_tokens: getMaxTokens(model) })
       });
       var d = await r.json();
       if (r.ok) {
@@ -1175,11 +1212,12 @@ async function callAIPrimeText(env, prompt, imgB64, imgMime, chatId) {
       }
       var errMsg = d && d.error ? (d.error.message || JSON.stringify(d.error)) : 'HTTP ' + r.status;
       lastErr = model + ': ' + errMsg;
+      // 🔧 v8.2.4 — auth fatal: از زنجیره خارج شو
+      if (r.status === 401 || r.status === 403) { authFatal = true; break; }
       if (/vision|not support|does not support|model.*not found|invalid.*model|not available/i.test(errMsg)) continue;
-      if (r.status === 401 || r.status === 403) throw new Error('AIPrime auth: ' + errMsg);
-      continue;
-    } catch (e) { lastErr = model + ': ' + e.message; continue; }
+    } catch (e) { lastErr = model + ': ' + e.message; }
   }
+  if (authFatal) throw new Error('AIPrime auth failed (401/403) — کلید AIPRIME_KEY را بررسی کنید');
   throw new Error('AIPrime: ' + lastErr);
 }
 
@@ -1199,12 +1237,14 @@ async function callGapGPTText(env, prompt, imgB64, imgMime, chatId) {
 
   var candidates = await getModelCandidates(env, chatId, 'gapgpt', tier, hasImage);
   var lastErr = '';
+  var authFatal = false;
+
   for (var mi = 0; mi < candidates.length; mi++) {
     var model = candidates[mi];
     try {
       var r = await fetch('https://api.gapgpt.app/v1/chat/completions', {
         method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + key },
-        body: JSON.stringify({ model: model, messages: [{ role: 'user', content: content }], temperature: 0.2, max_tokens: 32000 })
+        body: JSON.stringify({ model: model, messages: [{ role: 'user', content: content }], temperature: 0.2, max_tokens: getMaxTokens(model) })
       });
       var d = await r.json();
       if (r.ok) {
@@ -1245,11 +1285,11 @@ async function callGapGPTText(env, prompt, imgB64, imgMime, chatId) {
       }
       var errMsg = d && d.error ? (d.error.message || JSON.stringify(d.error)) : 'HTTP ' + r.status;
       lastErr = model + ': ' + errMsg;
+      if (r.status === 401 || r.status === 403) { authFatal = true; break; }
       if (/vision|not support|does not support|no available channel|not found|invalid.*model|not available/i.test(errMsg)) continue;
-      if (r.status === 401 || r.status === 403) throw new Error('GapGPT auth: ' + errMsg);
-      continue;
-    } catch (e) { lastErr = model + ': ' + e.message; continue; }
+    } catch (e) { lastErr = model + ': ' + e.message; }
   }
+  if (authFatal) throw new Error('GapGPT auth failed (401/403) — کلید GAPGPT_KEY را بررسی کنید');
   throw new Error('GapGPT: ' + lastErr);
 }
 
@@ -1262,12 +1302,13 @@ async function callGroqText(env, prompt, imgB64, imgMime) {
       var c = imgB64 ? [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: 'data:' + imgMime + ';base64,' + imgB64 } }] : prompt;
       var r = await fetch('https://api.groq.com/openai/v1/chat/completions', {
         method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + key },
-        body: JSON.stringify({ model: models[i], messages: [{ role: 'user', content: c }], temperature: 0.15, max_tokens: 32000 })
+        body: JSON.stringify({ model: models[i], messages: [{ role: 'user', content: c }], temperature: 0.15, max_tokens: getMaxTokens(models[i]) })
       });
       var d = await r.json();
       if (r.ok) { var t = d && d.choices && d.choices[0] && d.choices[0].message ? d.choices[0].message.content : null; if (t) return t; }
       last = d && d.error ? d.error.message : 'HTTP ' + r.status;
-    } catch (e) { last = e.message; }
+      if (r.status === 401 || r.status === 403) throw new Error('auth: ' + last);
+    } catch (e) { last = e.message; if (/auth/.test(e.message)) throw e; }
   }
   throw new Error('Groq: ' + last);
 }
@@ -1277,7 +1318,7 @@ async function callGitHubText(env, prompt, imgB64, imgMime) {
   var c = imgB64 ? [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: 'data:' + imgMime + ';base64,' + imgB64 } }] : prompt;
   var r = await fetch('https://models.inference.ai.azure.com/chat/completions', {
     method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + t },
-    body: JSON.stringify({ model: 'gpt-4o-mini', messages: [{ role: 'user', content: c }], temperature: 0.15, max_tokens: 32000 })
+    body: JSON.stringify({ model: 'gpt-4o-mini', messages: [{ role: 'user', content: c }], temperature: 0.15, max_tokens: 4000 })
   });
   var d = await r.json();
   if (!r.ok) throw new Error(d && d.error ? d.error.message : 'HTTP ' + r.status);
@@ -1290,7 +1331,7 @@ async function callTogetherText(env, prompt, imgB64, imgMime) {
   var c = imgB64 ? [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: 'data:' + imgMime + ';base64,' + imgB64 } }] : prompt;
   var r = await fetch('https://api.together.xyz/v1/chat/completions', {
     method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + key },
-    body: JSON.stringify({ model: model, messages: [{ role: 'user', content: c }], temperature: 0.15, max_tokens: 32000 })
+    body: JSON.stringify({ model: model, messages: [{ role: 'user', content: c }], temperature: 0.15, max_tokens: getMaxTokens(model) })
   });
   var d = await r.json();
   if (!r.ok) throw new Error(d && d.error ? d.error.message : 'HTTP ' + r.status);
@@ -1306,12 +1347,13 @@ async function callOpenRouterText(env, prompt, imgB64, imgMime) {
       var c = imgB64 ? [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: 'data:' + imgMime + ';base64,' + imgB64 } }] : prompt;
       var r = await fetch('https://openrouter.ai/api/v1/chat/completions', {
         method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + key, 'HTTP-Referer': 'https://everest.bot', 'X-Title': 'Everest' },
-        body: JSON.stringify({ model: models[i], messages: [{ role: 'user', content: c }], temperature: 0.15, max_tokens: 32000 })
+        body: JSON.stringify({ model: models[i], messages: [{ role: 'user', content: c }], temperature: 0.15, max_tokens: getMaxTokens(models[i]) })
       });
       var d = await r.json();
       if (r.ok) { var t = d && d.choices && d.choices[0] && d.choices[0].message ? d.choices[0].message.content : null; if (t) return t; }
       last = d && d.error ? d.error.message : 'HTTP ' + r.status;
-    } catch (e) { last = e.message; }
+      if (r.status === 401 || r.status === 403) throw new Error('auth: ' + last);
+    } catch (e) { last = e.message; if (/auth/.test(e.message)) throw e; }
   }
   throw new Error('OR: ' + last);
 }
@@ -1322,7 +1364,7 @@ async function callMistralText(env, prompt, imgB64, imgMime) {
   var c = imgB64 ? [{ type: 'text', text: prompt }, { type: 'image_url', image_url: 'data:' + imgMime + ';base64,' + imgB64 }] : prompt;
   var r = await fetch('https://api.mistral.ai/v1/chat/completions', {
     method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + key },
-    body: JSON.stringify({ model: model, messages: [{ role: 'user', content: c }], temperature: 0.15, max_tokens: 32000 })
+    body: JSON.stringify({ model: model, messages: [{ role: 'user', content: c }], temperature: 0.15, max_tokens: getMaxTokens(model) })
   });
   var d = await r.json();
   if (!r.ok) throw new Error(d && d.error ? d.error.message : 'HTTP ' + r.status);
@@ -1334,7 +1376,7 @@ async function callAvalAIText(env, prompt, imgB64, imgMime) {
   var c = imgB64 ? [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: 'data:' + imgMime + ';base64,' + imgB64 } }] : prompt;
   var r = await fetch('https://api.avalai.ir/v1/chat/completions', {
     method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + key },
-    body: JSON.stringify({ model: 'gemini-2.0-flash', messages: [{ role: 'user', content: c }], temperature: 0.15, max_tokens: 32000 })
+    body: JSON.stringify({ model: 'gemini-2.0-flash', messages: [{ role: 'user', content: c }], temperature: 0.15, max_tokens: 8000 })
   });
   var d = await r.json();
   if (!r.ok) throw new Error(d && d.error ? d.error.message : 'HTTP ' + r.status);
@@ -1347,7 +1389,7 @@ async function callHuggingFaceText(env, prompt, imgB64, imgMime) {
   var c = imgB64 ? [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: 'data:' + imgMime + ';base64,' + imgB64 } }] : prompt;
   var r = await fetch('https://api-inference.huggingface.co/models/' + model + '/v1/chat/completions', {
     method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + key },
-    body: JSON.stringify({ model: model, messages: [{ role: 'user', content: c }], temperature: 0.15, max_tokens: 32000 })
+    body: JSON.stringify({ model: model, messages: [{ role: 'user', content: c }], temperature: 0.15, max_tokens: 4000 })
   });
   var d = await r.json();
   if (!r.ok) throw new Error(d && d.error ? d.error.message : 'HTTP ' + r.status);
@@ -1375,7 +1417,7 @@ async function callNvidiaText(env, prompt, imgB64, imgMime) {
   var c = imgB64 ? [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: 'data:' + imgMime + ';base64,' + imgB64 } }] : prompt;
   var r = await fetch('https://integrate.api.nvidia.com/v1/chat/completions', {
     method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + key },
-    body: JSON.stringify({ model: model, messages: [{ role: 'user', content: c }], temperature: 0.15, max_tokens: 32000 })
+    body: JSON.stringify({ model: model, messages: [{ role: 'user', content: c }], temperature: 0.15, max_tokens: getMaxTokens(model) })
   });
   var d = await r.json();
   if (!r.ok) throw new Error(d && d.error ? d.error.message : 'HTTP ' + r.status);
@@ -1391,7 +1433,7 @@ async function callLLM7Text(env, prompt, imgB64, imgMime) {
       var c = imgB64 ? [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: 'data:' + imgMime + ';base64,' + imgB64 } }] : prompt;
       var r = await fetch('https://api.llm7.io/v1/chat/completions', {
         method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + key },
-        body: JSON.stringify({ model: models[i], messages: [{ role: 'user', content: c }], temperature: 0.15, max_tokens: 32000 })
+        body: JSON.stringify({ model: models[i], messages: [{ role: 'user', content: c }], temperature: 0.15, max_tokens: 8000 })
       });
       var d = await r.json();
       if (r.ok) { var t = d && d.choices && d.choices[0] && d.choices[0].message ? d.choices[0].message.content : null; if (t) return t; }
@@ -1406,7 +1448,7 @@ async function callMetisText(env, prompt, imgB64, imgMime) {
   var c = imgB64 ? [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: 'data:' + imgMime + ';base64,' + imgB64 } }] : prompt;
   var r = await fetch('https://api.metisai.ir/openai/v1/chat/completions', {
     method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + key },
-    body: JSON.stringify({ model: 'google/gemini-2.5-flash', messages: [{ role: 'user', content: c }], temperature: 0.15, max_tokens: 32000 })
+    body: JSON.stringify({ model: 'google/gemini-2.5-flash', messages: [{ role: 'user', content: c }], temperature: 0.15, max_tokens: 8000 })
   });
   var d = await r.json();
   if (!r.ok) throw new Error(d && d.error ? d.error.message : 'HTTP ' + r.status);
@@ -1418,7 +1460,7 @@ async function callOneXAiText(env, prompt, imgB64, imgMime) {
   var c = imgB64 ? [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: 'data:' + imgMime + ';base64,' + imgB64 } }] : prompt;
   var r = await fetch('https://1xai.ir/v1/chat/completions', {
     method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + key },
-    body: JSON.stringify({ model: 'google/gemini-2.5-flash', messages: [{ role: 'user', content: c }], temperature: 0.15, max_tokens: 32000 })
+    body: JSON.stringify({ model: 'google/gemini-2.5-flash', messages: [{ role: 'user', content: c }], temperature: 0.15, max_tokens: 8000 })
   });
   var d = await r.json();
   if (!r.ok) throw new Error(d && d.error ? d.error.message : 'HTTP ' + r.status);
@@ -1464,7 +1506,6 @@ async function callWithFallback(env, prompt, imgB64, imgMime, chatId, forcedProv
   for (var i = 0; i < providers.length; i++) {
     var p = providers[i];
     try {
-      // v8.2.3: 180s for reasoning-capable providers
       var timeout = (p === 'gapgpt' || p === 'aiprime' || p === 'customvision') ? 180000 : 60000;
       var r = await withTimeout(PROVIDER_FUNCS[p](env, prompt, imgB64, imgMime, chatId), timeout, p);
       if (r && r.length > 10) return { text: r, provider: PROVIDER_NAMES[p] };
@@ -1601,10 +1642,20 @@ function buildRegimeBlock(levels) {
   var ic = { TRENDING_UP:'📈', TRENDING_DOWN:'📉', RANGING:'↔️', HIGH_VOL:'🌪️', COMPRESSION:'🗜️', UNKNOWN:'❓' }[rg.regime] || '🧭';
   return '\n🧭 <b>رژیم محلی:</b> ' + ic + ' ' + rg.regime + ' · ADX ' + rg.adx + ' · ATR% ' + rg.atrPct + ' · Slope ' + rg.emaSlope + '%\n';
 }
+// 🔧 v8.2.4 — نمایش warnings هم
 function buildAdversarialBlock(levels) {
-  if (!levels._adversarial || levels._adversarial.passed) return '';
-  var c = '\n🛡️ <b>Adversarial Reviewer:</b>\n';
-  levels._adversarial.issues.forEach(function(i) { c += '• ' + esc(i) + '\n'; });
+  if (!levels._adversarial) return '';
+  var issues = levels._adversarial.issues || [];
+  var warnings = levels._adversarial.warnings || [];
+  var c = '';
+  if (issues.length) {
+    c += '\n🛡️ <b>Adversarial:</b>\n';
+    issues.forEach(function(i) { c += '• ' + esc(i) + '\n'; });
+  }
+  if (warnings.length) {
+    c += '\nℹ️ <b>هشدار (غیرمسدود):</b>\n';
+    warnings.forEach(function(w) { c += '• ' + esc(w) + '\n'; });
+  }
   return c;
 }
 function buildCalibBadge(levels) {
@@ -1649,11 +1700,11 @@ async function autoJournalAdd(env, chatId, levels, provider, symbol, tf, current
         atr: opts.atr != null ? Math.round(opts.atr * 10000) / 10000 : null,
         regime: opts.regime ? opts.regime.regime : null,
         regimeDetail: opts.regime ? { emaSlope: opts.regime.emaSlope, atrPct: opts.regime.atrPct, adx: opts.regime.adx } : null,
-        adversarial: opts.adversarial ? { passed: opts.adversarial.passed, issues: opts.adversarial.issues || [] } : null,
+        adversarial: opts.adversarial ? { passed: opts.adversarial.passed, issues: opts.adversarial.issues || [], warnings: opts.adversarial.warnings || [] } : null,
         localStructure: opts.localStructure ? { state: opts.localStructure.state, type: opts.localStructure.fresh ? opts.localStructure.fresh.type : null, dir: opts.localStructure.fresh ? opts.localStructure.fresh.dir : null } : null,
         aiProvider: provider,
         modelTier: opts.modelTier || null,
-        promptVersion: 'v8.2.3',
+        promptVersion: 'v8.2.4',
         candleCount: opts.candleCount || 0,
         confidenceRaw: opts.confidenceRaw != null ? opts.confidenceRaw : levels.confidence,
         confidenceAdjusted: opts.confidenceAdjusted === true
@@ -1714,7 +1765,7 @@ async function resolveJournalForChat(env, chatId, klines, symbol, tf) {
           s.status = 'LOSS'; s.closeT = kt; s.closeP = k.close; s.whichTP = 0; s.rr = -1; ch = true;
           if (!s.calibrated) {
             var ppL = s.passport || {};
-            calibQueue.push({ provider: s.providerKey || normalizeProviderKey(s.provider), tier: ppL.modelTier, regime: ppL.regime, conf: s.confidence, outcome: false });
+            calibQueue.push({ provider: s.providerKey || normalizeProviderKey(s.provider), tier: ppL.modelTier, regime: ppL.regime, conf: ppL.confidenceRaw != null ? ppL.confidenceRaw : s.confidence, outcome: false });
             s.calibrated = true;
           }
           break;
@@ -1729,7 +1780,7 @@ async function resolveJournalForChat(env, chatId, klines, symbol, tf) {
         else if (tp1Hit) { s.status = 'WIN'; s.closeT = kt; s.closeP = s.tp1; s.whichTP = 1; s.rr = calcRRR(s, 1); ch = true; }
         if ((tp3Hit || tp2Hit || tp1Hit) && !s.calibrated) {
           var ppW = s.passport || {};
-          calibQueue.push({ provider: s.providerKey || normalizeProviderKey(s.provider), tier: ppW.modelTier, regime: ppW.regime, conf: s.confidence, outcome: true });
+          calibQueue.push({ provider: s.providerKey || normalizeProviderKey(s.provider), tier: ppW.modelTier, regime: ppW.regime, conf: ppW.confidenceRaw != null ? ppW.confidenceRaw : s.confidence, outcome: true });
           s.calibrated = true;
         }
       }
@@ -2261,7 +2312,7 @@ function buildImageCaption(levels, provider, conf, currentPrice) {
 // ============================================
 
 async function showMainMenu(token, chatId, mid) {
-  await sendOrEdit(token, chatId, mid, '🎯 <b>Everest v8.2.3</b>\n\n📊 Auto Journal + گزارش شبانه\n🧭 رژیم · 🛡️ Adversarial · 🎯 Calibration\n🌐 KZ Mode · 🪙 کریپتو · 🎯 Entry Type\n🔍 فیلتر محلی MSS/BOS\n⏳ Expiry Watchdog\n🔬 Opportunity Ledger\n🆕 <b>Real Model Names + Auto-Discovery</b>\n\nاز منو انتخاب کنید:', mainMenu());
+  await sendOrEdit(token, chatId, mid, '🎯 <b>Everest v8.2.4</b>\n\n📊 Auto Journal + گزارش شبانه\n🧭 رژیم · 🛡️ Adversarial (warnings)\n🎯 Calibration · 🌐 KZ Mode · 🪙 کریپتو\n🔍 فیلتر محلی MSS/BOS + dedupe\n⏳ Expiry Watchdog · 🔬 Opportunity Ledger\n🆕 <b>Fallback chain — دیگر قفل نمی‌شود</b>\n\nاز منو انتخاب کنید:', mainMenu());
 }
 async function showSymbolMenu(token, chatId, mid) {
   await sendOrEdit(token, chatId, mid, '🎯 <b>نماد:</b>\n\n💱 فارکس · 🪙 کریپتو', symbolMenu());
@@ -2335,7 +2386,7 @@ async function showMonitorMenu(token, chatId, mid, env) {
     }
     t += '\n' + lfLabel + '\n\n<i>هر سیگنال تأییدشده خودکار در ژورنال ثبت می‌شه</i>';
   } else {
-    t += '⚪ <b>غیرفعال</b>\n\nهر کندل بسته بررسی می‌شه.\n\n' + lfLabel + '\n\n🆕 <b>v8.2.3:</b> Real Model Names + Auto-Discovery';
+    t += '⚪ <b>غیرفعال</b>\n\nهر کندل بسته بررسی می‌شه.\n\n' + lfLabel + '\n\n🆕 <b>v8.2.4:</b> Fallback chain + dedupe + warnings';
   }
   await sendOrEdit(token, chatId, mid, t, monitorMenu());
 }
@@ -2398,7 +2449,7 @@ async function showSettingsMenu(token, chatId, mid, env) {
   var lfIcon = lf === 'on' ? '🔍 فعال' : '🔍 غیرفعال';
   var cvReady = isCustomVisionReady(env) ? '⭐ ✅' : '⭐ ❌';
   var calibOn = await isCalibApplyOn(env, chatId);
-  var text = '⚙️ <b>تنظیمات v8.2.3</b>\n\n' +
+  var text = '⚙️ <b>تنظیمات v8.2.4</b>\n\n' +
     '<b>🎚️ نوع:</b> ' + stCfg.icon + ' ' + stCfg.label + '\n' +
     '<b>⚙️ KZ Mode:</b> ' + KZ_MODES[kz].icon + ' ' + KZ_MODES[kz].label + '\n' +
     '<b>🎯 حالت:</b> ' + uc.icon + ' ' + uc.label + '\n' +
@@ -2424,7 +2475,7 @@ async function showSettingsMenu(token, chatId, mid, env) {
 
 async function showStatus(token, chatId, mid, env) {
   var all = ['customvision','gemini','aiprime','groq','github','together','gapgpt','openrouter','mistral','huggingface','cloudflare','nvidia','llm7','avalai','metis','onexai'];
-  var text = '📈 <b>وضعیت v8.2.3</b>\n\n';
+  var text = '📈 <b>وضعیت v8.2.4</b>\n\n';
   var active = 0;
   for (var i = 0; i < all.length; i++) {
     var p = all[i]; var hasKey;
@@ -2464,9 +2515,9 @@ async function showStatus(token, chatId, mid, env) {
 }
 
 async function showHelp(token, chatId, mid) {
-  var t = '📖 <b>راهنما v8.2.3</b>\n\n' +
+  var t = '📖 <b>راهنما v8.2.4</b>\n\n' +
     '📊 <b>Auto Journal:</b>\nهر سیگنال تأییدشده خودکار ثبت می‌شه.\n\n' +
-    '🆕 <b>v8.2.3:</b>\nReal Model Names (deepseek-v3.2, claude-sonnet-5.5, gpt-4o-mini)\nAuto-Discovery از /v1/models\nmax_tokens=32000\nreasoning-safe\n\n' +
+    '🆕 <b>v8.2.4:</b>\nFallback chain (دیگر قفل نمی‌شود)\nAdversarial warnings (روند/مومنتوم)\nMSS dedupe (صرفه‌جویی هزینه)\nWilder ADX (تشخیص رژیم دقیق)\nmarkdown-safe parser\nmax_tokens per model\n\n' +
     '🆕 <b>v8.2 Pipeline:</b>\nAI → Schema → Adversarial → Filter → Portfolio Gate → Journal → Calibration\n\n' +
     '⏳ <b>Expiry Watchdog:</b>\n• 🚫 UNFILLED = سفارش لیمیت پر نشد\n• ⌛ EXPIRED = پر شد ولی TP/SL نزد\n\n' +
     '🎯 <b>Calibration:</b>\nBrier Score + Reliability Curve\n\n' +
@@ -2477,13 +2528,13 @@ async function showHelp(token, chatId, mid) {
 }
 
 async function showMonitorHelp(token, chatId, mid) {
-  var t = '📖 <b>راهنمای مانیتور v8.2.3</b>\n\n' +
+  var t = '📖 <b>راهنمای مانیتور v8.2.4</b>\n\n' +
     '🤖 هر کندل بسته، بازار تحلیل می‌شه.\n\n' +
-    '🔍 <b>فیلتر محلی MSS/BOS:</b>\nصرفه‌جویی توکن.\n\n' +
-    '🧭 <b>رژیم محلی:</b>\nقبل از AI (EMA + ATR + ADX)\n\n' +
-    '🛡️ <b>Adversarial:</b>\n۶ قانون قطعی — رد قبل از ثبت\n\n' +
+    '🔍 <b>فیلتر محلی MSS/BOS:</b>\nصرفه‌جویی توکن + MSS dedupe\n\n' +
+    '🧭 <b>رژیم محلی:</b>\nWilder ADX + EMA نرمال‌شده با TF\n\n' +
+    '🛡️ <b>Adversarial:</b>\nSL/Entry/RR = بلاک · روند/مومنتوم = هشدار\n\n' +
     '🎯 <b>Calibration:</b>\nconfidence تعدیل‌شده با Brier\n\n' +
-    '🆕 <b>Real Model Names:</b>\nAIPrime: deepseek-v3.2, claude-sonnet-5.5, gpt-4o-mini\nGapGPT: همان‌ها (Auto-Discovered)\n\n' +
+    '🆕 <b>Fallback chain:</b>\nحتی اگر مدل پین از دسترس خارج شود، جایگزین امتحان می‌شود\n\n' +
     '📓 <b>Auto Journal + Watchdog:</b>\nسیگنال‌ها خودکار با Passport ثبت می‌شن';
   await sendOrEdit(token, chatId, mid, t, { inline_keyboard: [[{ text: '◀️', callback_data: 'menu_monitor' }]] });
 }
@@ -2568,7 +2619,7 @@ async function showOpportunityReport(token, chatId, env) {
   var accWins = accClosed.filter(function(s) { return s.status === 'WIN'; }).length;
   var accLoss = accClosed.filter(function(s) { return s.status === 'LOSS'; }).length;
   var accWR = accClosed.length ? Math.round(accWins / accClosed.length * 100) : 0;
-  var t = '🔬 <b>فرصت‌سنج v8.2.3</b>\n\n';
+  var t = '🔬 <b>فرصت‌سنج v8.2.4</b>\n\n';
   t += '✅ <b>Accepted:</b>\n';
   t += '• کل بسته: ' + accClosed.length + '\n';
   t += '• برد/باخت: ' + accWins + '/' + accLoss + '\n';
@@ -2673,7 +2724,7 @@ async function runAnalysis(token, chatId, symbol, env, tf, forcedProvider) {
       atr: atr, price: currentPrice
     });
     levels._atr = atr;
-    var regime = computeLocalRegime(klines);
+    var regime = computeLocalRegime(klines, tf);
     levels._regime = regime;
     var adv = adversarialCheck(levels, klines, regime, atr);
     levels._adversarial = adv;
@@ -2724,7 +2775,7 @@ async function runMultiTFAnalysis(token, chatId, symbol, env, forcedProvider) {
       strict: st, minRR: uc.minRR, minConfidence: uc.minConfidence, atr: atr, price: currentPrice
     });
     levels._atr = atr;
-    var regime = computeLocalRegime(k15);
+    var regime = computeLocalRegime(k15, '15min');
     levels._regime = regime;
     var adv = adversarialCheck(levels, k15, regime, atr);
     levels._adversarial = adv;
@@ -2781,7 +2832,7 @@ async function finishMonitorSetup(token, chatId, mid, symbol, tf, ai, dp, env) {
     mode: mode, strictness: strict, kzMode: kzMode,
     active: true, startAt: Date.now(), lastCheckAt: 0,
     signalCount: 0, kzSignalCount: 0, skippedCount: 0,
-    lastSignal: null, lastSignalKey: null, lastError: null
+    lastSignal: null, lastSignalKey: null, lastMss: null, lastError: null
   });
   await saveMonitors(env, chatId, list);
   var isCrypto = isCryptoSymbol(symbol);
@@ -2789,7 +2840,7 @@ async function finishMonitorSetup(token, chatId, mid, symbol, tf, ai, dp, env) {
   var dpLabel = { auto: '🔄 خودکار', binance: '🟡 Binance', twelve: '📊 Twelve' }[dp] || dp;
   var stCfg = STRICTNESS_MODES[strict];
   var cfg = MODE_CONFIG[mode];
-  var msg = '✅ <b>مانیتور فعال شد (v8.2.3)</b>\n\n' +
+  var msg = '✅ <b>مانیتور فعال شد (v8.2.4)</b>\n\n' +
     '<b>نماد:</b> ' + (isCrypto ? '🪙' : '💱') + ' ' + symbol + '\n' +
     '<b>TF:</b> ' + timeframeLabel(tf) + '\n' +
     '<b>AI:</b> ' + aiLabel + '\n' +
@@ -2800,7 +2851,7 @@ async function finishMonitorSetup(token, chatId, mid, symbol, tf, ai, dp, env) {
     '🎯 آستانه CF: <b>' + cfg.minConfluence + '</b>\n' +
     '⏳ کنسلی سفارش پر نشده: <b>' + getExpiryTTL(tf) + ' کندل</b>\n' +
     '⏰ انقضای سفارش پرشده: <b>' + getFilledTimeoutTTL(tf) + ' کندل</b>\n\n' +
-    '🆕 <b>v8.2.3:</b>\nReal Model Names + Auto-Discovery + max_tokens 32000';
+    '🆕 <b>v8.2.4:</b>\nFallback chain · MSS dedupe · Wilder ADX';
   await sendOrEdit(token, chatId, mid, msg, { inline_keyboard: [
     [{ text: '📋 لیست', callback_data: 'mon_list' }],
     [{ text: '🏠 منو', callback_data: 'menu_main' }]
@@ -2920,15 +2971,25 @@ async function runMonitorForUser(env, token, chatId, m, strict, mode, cfg, local
     return;
   }
 
+  // 🔧 v8.2.4 — MSS dedupe: همان MSS تکراری تحلیل نشود
+  if (ls.fresh && m.lastMss) {
+    if (m.lastMss.type === ls.fresh.type && m.lastMss.level === ls.fresh.level &&
+        (Date.now() - m.lastMss.t) < (TF_MINUTES[tf] || 5) * 60000 * 3) {
+      m.skippedCount = (m.skippedCount || 0) + 1;
+      return;
+    }
+  }
+  if (ls.fresh) m.lastMss = { type: ls.fresh.type, level: ls.fresh.level, t: Date.now() };
+
   var currentPrice = klines[klines.length - 1].close;
   var atr = calcATR(klines, 14);
-  var regime = computeLocalRegime(klines);
+  var regime = computeLocalRegime(klines, tf);
 
   var promptBody = 'نماد: ' + symbol + '\nتایم‌فریم: ' + timeframeLabel(tf) + '\nقیمت فعلی: ' + currentPrice + '\n\n' + klinesToText(klines, symbol, timeframeLabel(tf));
   var facts = '\n\n🧮 محلی:\n- ATR(14)=' + (atr ? atr.toFixed(4) : '?') + '\n';
   if (isCrypto) {
     var w = getCryptoLiquidityWindow();
-    facts += '- 🪙 کریپتو: ' + (w.high ? 'لیکویید بالا' : w.active ? 'لیکویید متوسط' : 'لیکویید پایین') + '\n';
+    facts += '- 🪙 کریپتو: ' + (w.high ? 'لیکویید بالا' : w.active ? 'لیکوید متوسط' : 'لیکوید پایین') + '\n';
   } else {
     var kz = getKillZoneInfo();
     facts += '- ' + (kz.active ? '⚠️ داخل KZ — اولویت بالا' : '⚠️ خارج KZ — احتیاط') + '\n';
@@ -3050,12 +3111,11 @@ function isSignalConfirmed(levels, confluence, strict, cfg, regime) {
     return false;
   }
 
+  // 🔧 v8.2.4 — both: سخت باید تأیید کند (نه فقط آسان)
   if (strict === 'both') {
     if (!levels.dualEval) return false;
-    if (!levels.dualEval.easy.approved && !levels.dualEval.hard.approved) return false;
-    var isEasyOnly = levels.dualEval.easy.approved && !levels.dualEval.hard.approved;
-    var cfThreshold = isEasyOnly ? Math.max(3.0, minCF - 2.5) : minCF;
-    if (confluence && confluence.confluence != null && confluence.confluence < cfThreshold) return false;
+    if (!levels.dualEval.hard.approved) return false;
+    if (confluence && confluence.confluence != null && confluence.confluence < minCF) return false;
     return true;
   }
 
@@ -3072,11 +3132,12 @@ async function sendMonitorSignal(token, chatId, levels, confluence, result, curr
   var kzBadge = getKZBadge(symbol);
   var et = detectEntryType(levels, currentPrice);
 
-  var caption = '🚨 <b>سیگنال مانیتور (v8.2.3)</b>\n\n';
+  var caption = '🚨 <b>سیگنال مانیتور (v8.2.4)</b>\n\n';
   caption += '<b>نماد:</b> ' + symIcon + ' ' + symbol + '\n';
   caption += '<b>TF:</b> ' + timeframeLabel(tf) + '\n';
   caption += '<b>وضعیت:</b> ' + kzBadge + '\n';
   caption += buildRegimeBlock(levels);
+  caption += buildAdversarialBlock(levels);
   caption += buildCalibBadge(levels);
 
   if (levels.dualEval) caption += buildDualEvalBlock(levels);
@@ -3189,7 +3250,7 @@ async function handleCallback(token, chatId, mid, data, env) {
   if (data.indexOf('mon_restart_') === 0) {
     var idx2 = parseInt(data.replace('mon_restart_', ''));
     var list2 = await getMonitors(env, chatId);
-    if (list2[idx2]) { list2[idx2].lastCheckAt = 0; list2[idx2].lastError = null; list2[idx2].active = true; await saveMonitors(env, chatId, list2); }
+    if (list2[idx2]) { list2[idx2].lastCheckAt = 0; list2[idx2].lastError = null; list2[idx2].lastMss = null; list2[idx2].active = true; await saveMonitors(env, chatId, list2); }
     await showMonitorView(token, chatId, mid, env, idx2);
     return;
   }
@@ -3448,10 +3509,15 @@ async function handleUpdate(update, env) {
 }
 
 // ============================================
-// PROMPTS (unchanged)
+// PROMPTS — 🔧 v8.2.4 با JSON الزامی
 // ============================================
 const FORCE_DIRECTIVE = "\n\n⚠️ **اجباری**: JSON انتهای پاسخ:\n```json\n" +
 "{\"direction\":\"BUY|SELL|WAIT\",\"confluenceScore\":0.0,\"scores\":{\"structure\":0,\"smc\":0,\"ict\":0,\"candle\":0,\"liquidity\":0,\"riskReward\":0},\"confidence\":0,\"entry\":0,\"stopLoss\":0,\"tp1\":0,\"tp2\":0,\"tp3\":0,\"rr\":\"1:0\"}\n```";
+
+// 🔧 v8.2.4 — JSON الزامی (بالاترین قابلیت اطمینان پارس)
+const JSON_SPEC = "\n\n**JSON انتها (الزامی — در آخرین بلوک پاسخ):**\n```json\n" +
+'{"direction":"BUY|SELL|WAIT","regime":"TRENDING_UP|TRENDING_DOWN|RANGING|TRANSITIONAL","confidence":0,"entry":0,"stopLoss":0,"tp1":0,"tp2":0,"tp3":0,"rr":"1:2.5","confluenceScore":0,"scores":{"structure":0,"smc":0,"ict":0,"candle":0,"liquidity":0,"riskReward":0}}\n' +
+"```";
 
 function buildPromptForMode(basePrompt, mode) {
   if (mode === 'force') return basePrompt + FORCE_DIRECTIVE;
@@ -3460,15 +3526,15 @@ function buildPromptForMode(basePrompt, mode) {
 
 const SYSTEM_PROMPT = "شما یک تحلیل‌گر ارشد بازارهای مالی با ۱۵ سال تجربه در SMC، ICT و پرایس اکشن هستید.\n\n" +
 "**روش کار**\n۱. استخراج داده خام\n۲. تشخیص رژیم بازار\n۳. شناسایی BOS، CHoCH\n۴. کشف Order Blocks و FVG\n۵. الگوهای کندلی\n۶. امتیازدهی ۶ لایه\n۷. تصمیم نهایی\n\n" +
-"**در انتهای پاسخ دقیقاً این فرمت:**\n---\nDirection: [BUY/SELL/WAIT]\nRegime: [TRENDING_UP/TRENDING_DOWN/RANGING/TRANSITIONAL]\nConfidenceScore: [0-100]\nEntry: [عدد یا N/A]\nStop Loss: [عدد یا N/A]\nTP1: [عدد یا N/A]\nTP2: [عدد یا N/A]\nTP3: [عدد یا N/A]\nR/R: [نسبت یا N/A]\n---\n\n" +
-"**قوانین:**\n1. اگر Confidence < 65 → WAIT\n2. حد ضرر ساختاری\n3. در BUY، SL زیر Entry · در SELL، SL بالای Entry\n4. R/R با محاسبه واقعی\n5. تحلیل ۵۰۰ کلمه بنویس";
+"**در انتهای پاسخ دقیقاً این فرمت متنی:**\n---\nDirection: [BUY/SELL/WAIT]\nRegime: [TRENDING_UP/TRENDING_DOWN/RANGING/TRANSITIONAL]\nConfidenceScore: [0-100]\nEntry: [عدد یا N/A]\nStop Loss: [عدد یا N/A]\nTP1: [عدد یا N/A]\nTP2: [عدد یا N/A]\nTP3: [عدد یا N/A]\nR/R: [نسبت یا N/A]\n---\n\n" +
+"**قوانین:**\n1. اگر Confidence < 65 → WAIT\n2. حد ضرر ساختاری\n3. در BUY، SL زیر Entry · در SELL، SL بالای Entry\n4. R/R با محاسبه واقعی\n5. تحلیل ۵۰۰ کلمه بنویس" + JSON_SPEC;
 
 const MULTI_TF_PROMPT = "شما یک تحلیل‌گر ارشد هستید.\n\n" +
 "**MTF:**\n🎯 HTF (4H): روند اصلی\n🔍 MTF (1H): تأیید\n📊 LTF (15M): ستاپ\n⏱️ EntryTF (1M): تایمینگ\n\n" +
-"**فرمت:**\n---\nDirection: [BUY/SELL/WAIT]\nConfluenceScore: [0-10]\nHTF4H: [BULLISH/BEARISH/RANGING]\nMTF1H: [BULLISH/BEARISH/RANGING]\nLTF15M: [BULLISH/BEARISH/RANGING]\nEntryTF1M: [BULLISH/BEARISH/RANGING]\nConfidenceScore: [0-100]\nEntry: [عدد یا N/A]\nStop Loss: [عدد یا N/A]\nTP1: [عدد یا N/A]\nTP2: [عدد یا N/A]\nTP3: [عدد یا N/A]\nR/R: [نسبت یا N/A]\n---";
+"**فرمت متنی:**\n---\nDirection: [BUY/SELL/WAIT]\nConfluenceScore: [0-10]\nHTF4H: [BULLISH/BEARISH/RANGING]\nMTF1H: [BULLISH/BEARISH/RANGING]\nLTF15M: [BULLISH/BEARISH/RANGING]\nEntryTF1M: [BULLISH/BEARISH/RANGING]\nConfidenceScore: [0-100]\nEntry: [عدد یا N/A]\nStop Loss: [عدد یا N/A]\nTP1: [عدد یا N/A]\nTP2: [عدد یا N/A]\nTP3: [عدد یا N/A]\nR/R: [نسبت یا N/A]\n---" + JSON_SPEC;
 
 const IMAGE_PROMPT = "شما یک تحلیل‌گر ارشد هستید.\n\n**تحلیل چارت ۵۰۰ کلمه**\n\n" +
-"**فرمت:**\n---\nDirection: [BUY/SELL/WAIT]\nSymbol: [نماد یا UNKNOWN]\nTimeframe: [TF یا UNKNOWN]\nRegime: [...]\nConfidenceScore: [0-100]\nEntry: [عدد یا N/A]\nStop Loss: [عدد یا N/A]\nTP1: [عدد یا N/A]\nTP2: [عدد یا N/A]\nTP3: [عدد یا N/A]\nR/R: [نسبت یا N/A]\n---";
+"**فرمت متنی:**\n---\nDirection: [BUY/SELL/WAIT]\nSymbol: [نماد یا UNKNOWN]\nTimeframe: [TF یا UNKNOWN]\nRegime: [...]\nConfidenceScore: [0-100]\nEntry: [عدد یا N/A]\nStop Loss: [عدد یا N/A]\nTP1: [عدد یا N/A]\nTP2: [عدد یا N/A]\nTP3: [عدد یا N/A]\nR/R: [نسبت یا N/A]\n---" + JSON_SPEC;
 
 const CRYPTO_NOTE = "\n\n**🪙 کریپتو:** بازار ۲۴/۷. ساعات لیکویید بالا (US/EU) بهترین فرصت";
 
@@ -3479,7 +3545,7 @@ const CRYPTO_NOTE = "\n\n**🪙 کریپتو:** بازار ۲۴/۷. ساعات �
 export default {
   async fetch(request, env, ctx) {
     var url = new URL(request.url);
-    if (url.pathname === '/' || url.pathname === '') return new Response('Everest Bot v8.2.3 — Real Model Names + Auto-Discovery', { status: 200 });
+    if (url.pathname === '/' || url.pathname === '') return new Response('Everest Bot v8.2.4 — Fallback chain + Wilder ADX + warnings', { status: 200 });
     if (request.method === 'POST' && url.pathname === '/webhook') {
       try {
         var update = await request.json();
