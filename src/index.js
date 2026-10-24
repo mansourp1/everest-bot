@@ -1,18 +1,22 @@
 // ============================================
-// EVEREST BOT v8.2.10 — HTML-parity edition
-// الگوریتم انتخاب مدل و prompt از HTML v8.2.5
-// AI_TIMEOUT=15s per model، 2 attempts، بدون downgrade بی‌صدا
-// نمایش مدل واقعی در همه پاسخ‌ها
+// EVEREST BOT v8.3.5 — Merged Best of v8.2.10 + v8.3
+// - صف مدل‌های قوی (job:)
+// - classifyErr + callOAICompat متمرکز
+// - bad models cache + blacklist
+// - saved اول، مانیتور با concurrency=2 و lastEvKey
+// - resolveOpenSignalsCron + effTf fix
+// - /modeltest + WEBHOOK_SECRET + multi-admin
 // ============================================
 
 const CONF_KEYS = ['structure', 'smc', 'ict', 'candle', 'liquidity', 'riskReward'];
-const CONF_LABELS = {
-  structure: 'Market Structure', smc: 'SMC / Order Blocks', ict: 'ICT / FVG',
-  candle: 'Candlestick', liquidity: 'Liquidity Sweep', riskReward: 'R/R'
-};
+const CONF_LABELS = { structure: 'Market Structure', smc: 'SMC / OB', ict: 'ICT / FVG', candle: 'Candlestick', liquidity: 'Liquidity', riskReward: 'R/R' };
 const VISION_STRICT = false;
 
-// مدل‌ها دقیقاً مطابق HTML v8.2.5
+// 🔑 ثابت‌های گم‌شده v8.2.10 (فیکس)
+const PORTFOLIO_DEFAULTS = { maxDailyLossRR: -3, maxPerSymbol: 2, maxPerMarket: 5, maxTotal: 8, maxCorrelatedAlts: 2 };
+const CALIB_MIN_SAMPLES = 20;
+const CALIB_BUCKET_MIN = 8;
+
 const MODEL_TIERS = {
   aiprime: {
     fast: { label: '🚀 سریع', text: 'gpt-4o-mini', vision: 'gpt-4o' },
@@ -26,32 +30,34 @@ const MODEL_TIERS = {
   }
 };
 
-// ترتیب دقیقاً مطابق HTML v8.2.5 (مدل‌های پایدار اول)
+// 🔑 chains تمیز v8.3 (بدون deepseek-r1/v4-pro)
 const MODEL_FALLBACK_CHAINS = {
   aiprime: {
-    fast: ['gpt-4o-mini','gpt-4o','gemini-2.5-flash','gemini-3.1-flash-lite','claude-haiku-4.5','gemini-2.5-pro'],
-    deepseek: ['deepseek-v3.2','deepseek-v3.1','deepseek-v4.1-flash','deepseek-v4-flash','deepseek-v4-pro','deepseek-v4.1-flash-1017','deepseek-r1'],
-    premium: ['claude-sonnet-5.5','claude-sonnet-5','claude-opus-5.5','claude-sonnet-4.6','claude-opus-5','claude-sonnet-4.5']
+    fast: ['gpt-4o-mini', 'gpt-4o', 'gemini-2.5-flash'],
+    deepseek: ['deepseek-v4.1-flash', 'deepseek-v4-flash', 'deepseek-v3.2', 'deepseek-reasoner'],
+    premium: ['claude-sonnet-5.5', 'claude-sonnet-5', 'claude-sonnet-4.6']
   },
   gapgpt: {
-    fast: ['gpt-4o-mini','gpt-4o','gemini-2.5-flash'],
-    deepseek: ['deepseek-v3.2','deepseek-v3.1','deepseek-v4.1-flash','deepseek-v4-flash','deepseek-v4-pro'],
-    premium: ['claude-sonnet-5.5','claude-sonnet-5','claude-opus-5.5','claude-sonnet-4.6']
+    fast: ['gpt-4o-mini', 'gpt-4o', 'gemini-2.5-flash'],
+    deepseek: ['deepseek-v4.1-flash', 'deepseek-v4-flash', 'deepseek-reasoner', 'deepseek-v3.2'],
+    premium: ['claude-sonnet-5.5', 'claude-sonnet-5', 'claude-sonnet-4.6']
   }
 };
+
 const VISION_MODELS_BY_PROVIDER = {
   gemini: ['gemini-2.5-flash', 'gemini-2.0-flash'],
   aiprime: ['gpt-4o', 'gpt-4o-mini', 'claude-sonnet-5.5'],
   gapgpt: ['gpt-4o', 'gpt-4o-mini']
 };
 
-// 🔑 per-model token limits (مطابق HTML)
+// 🔑 DeepSeek=32000 (v8.2.10) · reasoner=12000 · gpt-4o-mini=4000
 function getMaxTokens(model) {
   var m = String(model || '').toLowerCase();
   if (/gpt-4o-mini|gpt-3\.5/.test(m)) return 4000;
-  if (/gemini/.test(m)) return 8000;
+  if (/deepseek-r1|deepseek-reasoner/.test(m)) return 12000;
+  if (/gemini/.test(m)) return 12000;
   if (/claude/.test(m)) return 8000;
-  if (/deepseek/.test(m)) return 32000;   // ← THE FIX (بود 8000)
+  if (/deepseek/.test(m)) return 32000;
   if (/gpt-4o$/.test(m)) return 16000;
   return 8000;
 }
@@ -60,22 +66,21 @@ const EXPIRY_TTL_BY_TF = { '1min': 20, '3min': 15, '5min': 12, '15min': 10, '1h'
 const EXPIRY_TTL_DEFAULT = 12;
 const EXPIRY_WARN_PCT = 0.75;
 const FILLED_TIMEOUT_BY_TF = { '1min': 40, '3min': 30, '5min': 24, '15min': 20, '1h': 16, '4h': 12 };
+const FILLED_TIMEOUT_DEFAULT = 24;
 
 const STRICTNESS_MODES = {
   hard: { label: '🔴 سختگیر', icon: '🔴', desc: 'همه فیلترها + TP1 الزامی + R/R سخت' },
-  easy: { label: '🟢 آسان', icon: '🟢', desc: 'آستانه نرم‌تر + TP1 اختیاری + سیگنال بیشتر' },
-  both: { label: '⚖️ هر دو', icon: '⚖️', desc: 'ارزیابی دوگانه: سخت + آسان' }
+  easy: { label: '🟢 آسان', icon: '🟢', desc: 'آستانه نرم‌تر' },
+  both: { label: '⚖️ هر دو', icon: '⚖️', desc: 'ارزیابی دوگانه' }
 };
-
 const KZ_MODES = {
-  off: { label: '۲۴/۷', icon: '🌐', desc: 'بی‌توجه به KZ' },
-  priority: { label: 'اولویت KZ', icon: '⭐', desc: 'همیشه + بج اولویت' },
-  only: { label: 'فقط KZ', icon: '🔒', desc: 'skip خارج از KZ' }
+  off: { label: '۲۴/۷', icon: '🌐', desc: 'بی‌توجه' },
+  priority: { label: 'اولویت KZ', icon: '⭐', desc: 'همیشه' },
+  only: { label: 'فقط KZ', icon: '🔒', desc: 'skip' }
 };
-
 const FALLBACK_MODES = {
-  strict: { label: '🔴 سختگیر', icon: '🔴', desc: 'اگر مدل انتخابی شکست خورد، سیگنال نمی‌دهد (پیش‌فرض)' },
-  warn: { label: '🟡 با هشدار', icon: '🟡', desc: 'از مدل پایین‌تر با هشدار قرمز استفاده می‌کند' }
+  strict: { label: '🔴 سختگیر', icon: '🔴', desc: 'اگر مدل انتخابی شکست خورد، سیگنال نمی‌دهد' },
+  warn: { label: '🟡 با هشدار', icon: '🟡', desc: 'از مدل پایین‌تر با هشدار استفاده می‌کند' }
 };
 
 const CRYPTO_BASES = ['BTC','ETH','SOL','BNB','XRP','ADA','DOGE','DOT','AVAX','MATIC','LINK','LTC','ATOM','UNI','NEAR','APT','ARB','OP','TRX','SHIB','PEPE','TON','SUI','INJ','SEI','FIL','ETC','BCH','XLM','HBAR','VET','ALGO','FTM','SAND','MANA','AXS','GALA'];
@@ -90,137 +95,32 @@ const MODE_CONFIG = {
   confident: { label: 'مطمئن',  icon: '🛡️', color: '#4ade80', minConfidence: 75, minRR: 2.5, minConfluence: 6.0, allowedTFs: ['15min','1h','4h'] }
 };
 
-// 🔑 تنظیمات timeout — fit در 30s wallTime
-const AI_PER_MODEL_TIMEOUT = 15000;   // 15 ثانیه هر مدل
-const AI_MAX_ATTEMPTS = 4;
-const AI_TOTAL_BUDGET = 27000;        // ۲۷ ثانیه بودجهٔ کل
+// 🔑 زمان‌بندی
+const AI_SHORT_BUDGET = 22000;
+const AI_LONG_BUDGET = 280000;
+const JOB_PROCESSING_TTL_MS = 5 * 60 * 1000;
+const JOB_MAX_ATTEMPTS = 3;
+const DISCOVERY_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
-// ============================================
-// MODEL DISCOVERY + CACHE
-// ============================================
-async function getDiscoveredModels(env, chatId, provider) {
-  try { return await env.KV.get('models:' + chatId + ':' + provider, 'json'); } catch (e) { return null; }
-}
-async function setDiscoveredModels(env, chatId, provider, models) {
-  try { await env.KV.put('models:' + chatId + ':' + provider, JSON.stringify(models), { expirationTtl: 86400 * 7 }); } catch (e) {}
-}
-async function getWorkingModel(env, chatId, provider, tier) {
-  try { return await env.KV.get('workmodel:' + chatId + ':' + provider + ':' + tier); } catch (e) { return null; }
-}
-async function setWorkingModel(env, chatId, provider, tier, model) {
-  try { await env.KV.put('workmodel:' + chatId + ':' + provider + ':' + tier, model, { expirationTtl: 86400 * 30 }); } catch (e) {}
-}
-async function resetModelCacheFor(env, chatId, provider) {
-  try {
-    await env.KV.delete('models:' + chatId + ':' + provider);
-    await env.KV.delete('workmodel:' + chatId + ':' + provider + ':fast');
-    await env.KV.delete('workmodel:' + chatId + ':' + provider + ':deepseek');
-    await env.KV.delete('workmodel:' + chatId + ':' + provider + ':premium');
-  } catch (e) {}
-}
-async function discoverProviderModels(env, chatId, provider, key) {
-  if (!key) return null;
-  var base = provider === 'aiprime' ? 'https://api.aiprime.shop/v1' : provider === 'gapgpt' ? 'https://api.gapgpt.app/v1' : '';
-  if (!base) return null;
-  try {
-    var r = await fetchWithTimeout(base + '/models', { headers: { 'Authorization': 'Bearer ' + key } }, 12000, 'Discovery');
-    if (!r.ok) return null;
-    var d = await r.json();
-    var ids = (d.data || []).map(function(m) { return m.id; }).filter(Boolean);
-    if (ids.length) {
-      await setDiscoveredModels(env, chatId, provider, ids);
-      console.log('[Discovery] ' + provider + '/' + chatId + ' → ' + ids.length + ' models');
-      return ids;
-    }
-    return null;
-  } catch (e) {
-    console.warn('[Discovery] ' + provider + ': ' + e.message);
-    return null;
-  }
-}
+const OAI_BASES = { aiprime: 'https://api.aiprime.shop/v1', gapgpt: 'https://api.gapgpt.app/v1' };
+const ERR_FA = {
+  auth: 'کلید نامعتبر', quota: 'اعتبار/سهمیه', rate: 'محدودیت نرخ',
+  perm: 'مجوز مدل در پلن نیست', missing: 'مدل در گیت‌وی نیست',
+  param: 'پارامتر ناسازگار', upstream: 'خطای بالادست', other: 'نامشخص'
+};
 
-// 🔑 مطابق HTML — saved + scored + chain (بدون cross-tier)
-function scoreModelCandidate(m, tier) {
-  var s = 0, ml = String(m).toLowerCase();
-  if (tier === 'fast') {
-    if (/gpt-4o-mini/.test(ml)) s += 100;
-    else if (/gpt-3\.5/.test(ml)) s += 80;
-    else if (/gemini.*flash/.test(ml)) s += 70;
-    else if (/haiku/.test(ml)) s += 60;
-    else if (/llama.*8b/.test(ml)) s += 50;
-  } else if (tier === 'deepseek') {
-    if (/^deepseek-v4-pro$/.test(ml)) s += 100;
-    else if (/^deepseek-v4\.1-flash/.test(ml)) s += 95;
-    else if (/^deepseek-v4-flash$/.test(ml)) s += 90;
-    else if (/^deepseek-v3\.2$/.test(ml)) s += 85;
-    else if (/^deepseek-v3\.1$/.test(ml)) s += 80;
-    else if (/deepseek/.test(ml)) s += 40;
-  } else if (tier === 'premium') {
-    if (/claude-sonnet-5\.5/.test(ml)) s += 100;
-    else if (/claude-sonnet-5$/.test(ml)) s += 95;
-    else if (/claude-opus-5\.5/.test(ml)) s += 93;
-    else if (/claude-sonnet-4\.6/.test(ml)) s += 85;
-    else if (/claude-opus-5$/.test(ml)) s += 80;
-    else if (/claude/.test(ml) && !/haiku/.test(ml)) s += 40;
-  }
-  return s;
-}
-
-function normModelId(m) {
-  return String(m).toLowerCase().replace(/^[^\/]*\//, '').replace(/[._]/g, '-');
-}
-function exactFromList(list, name) {
-  if (!list) return name;
-  var n = normModelId(name);
-  for (var i = 0; i < list.length; i++) if (list[i] === name) return list[i];
-  for (var j = 0; j < list.length; j++) if (normModelId(list[j]) === n) return list[j];
-  return null;
-}
-
-async function getTierCandidates(env, chatId, provider, tier, hasImage) {
-  if (hasImage) {
-    var tv = MODEL_TIERS[provider] && MODEL_TIERS[provider][tier] && MODEL_TIERS[provider][tier].vision;
-    var vis = (VISION_MODELS_BY_PROVIDER[provider] || ['gpt-4o']).slice();
-    if (tv && vis.indexOf(tv) === -1) vis.unshift(tv);
-    return vis.slice(0, 4);
-  }
-
-  var chain = (MODEL_FALLBACK_CHAINS[provider] && MODEL_FALLBACK_CHAINS[provider][tier]) || ['gpt-4o-mini'];
-  var out = [], seen = {};
-  function add(m) { if (m && !seen[m]) { seen[m] = 1; out.push(m); } }
-
-  // saved working model از KV
-  var saved = await getWorkingModel(env, chatId, provider, tier);
-  if (saved) add(saved);
-
-  // discovered models با score-based ordering (مثل HTML)
-  var discovered = await getDiscoveredModels(env, chatId, provider);
-  if (discovered && discovered.length) {
-    // اول: مدل‌های chain که در discovery هستند
-    chain.forEach(function(c) { add(exactFromList(discovered, c)); });
-    // بعد: بقیه discovered با score
-    discovered
-      .map(function(m) { return { m: m, s: scoreModelCandidate(m, tier) }; })
-      .filter(function(x) { return x.s > 0; })
-      .sort(function(a, b) { return b.s - a.s; })
-      .forEach(function(x) { add(x.m); });
-    if (out.length) return out.slice(0, 4);
-  }
-
-  // fallback: خود chain
-  chain.forEach(add);
-  if (!out.length) return chain.slice(0, 3);
-  return out.slice(0, 4);
-}
 // ============================================
 // UTILS
 // ============================================
-function isAdmin(env, c) { if (!env.ADMIN_CHAT_ID) return true; return String(c) === String(env.ADMIN_CHAT_ID); }
-function isSecurityEnabled(env) { return !!env.ADMIN_CHAT_ID; }
+function isAdmin(env, c) {
+  if (!env.ADMIN_CHAT_ID) return true;  // v8.2.10: اختیاری
+  return String(env.ADMIN_CHAT_ID).split(',').map(function(x){return x.trim();}).indexOf(String(c)) !== -1;
+}
+function isSecurityEnabled(env) { return !!env.ADMIN_CHAT_ID; }  // v8.2.10: اختیاری
+function sleep(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
 function withTimeout(p, ms, l) {
   return Promise.race([p, new Promise(function(_, r) { setTimeout(function() { r(new Error(l + ' timeout')); }, ms); })]);
 }
-function sleep(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
 async function fetchWithTimeout(url, opts, timeoutMs, label) {
   var ctrl = new AbortController();
   var t = setTimeout(function() { ctrl.abort(); }, timeoutMs || 12000);
@@ -228,10 +128,7 @@ async function fetchWithTimeout(url, opts, timeoutMs, label) {
     var r = await fetch(url, Object.assign({}, opts || {}, { signal: ctrl.signal }));
     clearTimeout(t);
     return r;
-  } catch (e) {
-    clearTimeout(t);
-    throw new Error((label || 'fetch') + ': ' + (e.message || 'timeout'));
-  }
+  } catch (e) { clearTimeout(t); throw new Error((label || 'fetch') + ': ' + (e.message || 'timeout')); }
 }
 function formatTime(dt) {
   if (!dt) return '';
@@ -248,6 +145,7 @@ function num(v) {
 }
 function normDir(d) { if (!d) return 'WAIT'; var v = String(d).trim().toUpperCase(); if (v === 'BUY' || v === 'LONG') return 'BUY'; if (v === 'SELL' || v === 'SHORT') return 'SELL'; return 'WAIT'; }
 function esc(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+
 function calcATR(klines, period) {
   period = period || 14;
   if (!klines || klines.length < period + 1) return null;
@@ -260,56 +158,56 @@ function calcATR(klines, period) {
   if (!trs.length) return null;
   return trs.reduce(function(a, b) { return a + b; }, 0) / trs.length;
 }
+
+// 🔑 effTf fix از v8.3
 function dropForming(klines, tf) {
+  var eff = klines.effTf || tf;
   var a = klines.slice();
+  a.effTf = eff;
   var last = a[a.length - 1];
   if (!last || !last.datetime) return a;
   var t = Date.parse(String(last.datetime).includes('T') ? last.datetime : String(last.datetime).replace(' ', 'T') + 'Z');
-  if (Number.isFinite(t) && t + (TF_MINUTES[tf] || 5) * 60000 > Date.now()) a.pop();
+  if (Number.isFinite(t) && t + (TF_MINUTES[eff] || 5) * 60000 > Date.now()) a.pop();
   return a;
 }
+
 function getExpiryTTL(tf) { return EXPIRY_TTL_BY_TF[tf] || EXPIRY_TTL_DEFAULT; }
-function getFilledTimeoutTTL(tf) { return FILLED_TIMEOUT_BY_TF[tf] || 24; }
+function getFilledTimeoutTTL(tf) { return FILLED_TIMEOUT_BY_TF[tf] || FILLED_TIMEOUT_DEFAULT; }
 function getExpiryInfo(signal) {
-  var ttl = getExpiryTTL(signal.tf);
-  var tfm = (TF_MINUTES[signal.tf] || 5) * 60000;
-  var elapsed = Date.now() - signal.t;
-  var ec = elapsed / tfm;
-  return { ttl: ttl, elapsedCandles: Math.round(ec * 10) / 10, remainingCandles: Math.round(Math.max(0, ttl - ec) * 10) / 10, remainingMs: Math.max(0, ttl * tfm - elapsed), expired: ec >= ttl, warning: ec >= ttl * EXPIRY_WARN_PCT };
+  var ttl = getExpiryTTL(signal.tf), tfm = (TF_MINUTES[signal.tf] || 5) * 60000;
+  var ec = (Date.now() - signal.t) / tfm;
+  return { ttl: ttl, elapsedCandles: Math.round(ec*10)/10, remainingCandles: Math.round(Math.max(0, ttl - ec)*10)/10, remainingMs: Math.max(0, ttl*tfm - (Date.now() - signal.t)), expired: ec >= ttl, warning: ec >= ttl * EXPIRY_WARN_PCT };
 }
 function getFilledExpiryInfo(signal) {
-  var ttl = getFilledTimeoutTTL(signal.tf);
-  var tfm = (TF_MINUTES[signal.tf] || 5) * 60000;
+  var ttl = getFilledTimeoutTTL(signal.tf), tfm = (TF_MINUTES[signal.tf] || 5) * 60000;
   var startT = signal.fillT || signal.t;
-  var elapsed = Date.now() - startT;
-  var ec = elapsed / tfm;
-  return { ttl: ttl, elapsedCandles: Math.round(ec * 10) / 10, remainingCandles: Math.round(Math.max(0, ttl - ec) * 10) / 10, remainingMs: Math.max(0, ttl * tfm - elapsed), expired: ec >= ttl };
+  var ec = (Date.now() - startT) / tfm;
+  return { ttl: ttl, elapsedCandles: Math.round(ec*10)/10, remainingCandles: Math.round(Math.max(0, ttl - ec)*10)/10, remainingMs: Math.max(0, ttl*tfm - (Date.now() - startT)), expired: ec >= ttl };
 }
 function formatRemainingTime(ms) {
   if (ms <= 0) return '0';
-  var sec = Math.floor(ms / 1000);
-  var min = Math.floor(sec / 60);
-  var hour = Math.floor(min / 60);
-  if (hour > 0) return hour + 'ساعت ' + (min % 60) + 'دقیقه';
-  if (min > 0) return min + 'دقیقه';
-  return sec + 'ثانیه';
+  var s = Math.floor(ms/1000), m = Math.floor(s/60), h = Math.floor(m/60);
+  if (h > 0) return h+'ساعت '+(m%60)+'دقیقه';
+  if (m > 0) return m+'دقیقه';
+  return s+'ثانیه';
 }
-function localStructure(kl, L) {
-  L = L || 5;
+
+function localStructure(kl, L, K) {
+  L = L || 5; K = K || 2;
   var ph = null, pl = null, state = 0, events = [];
   for (var i = 0; i < kl.length; i++) {
     var c = i - L;
     if (c >= L) {
       var H = true, Lw = true;
       for (var j = 1; j <= L; j++) {
-        if (kl[c - j].high > kl[c].high || kl[c + j].high > kl[c].high) H = false;
-        if (kl[c - j].low < kl[c].low || kl[c + j].low < kl[c].low) Lw = false;
+        if (kl[c-j].high > kl[c].high || kl[c+j].high > kl[c].high) H = false;
+        if (kl[c-j].low < kl[c].low || kl[c+j].low < kl[c].low) Lw = false;
       }
       if (H) ph = kl[c].high;
       if (Lw) pl = kl[c].low;
     }
     if (i > 0) {
-      var cl = kl[i].close, pc = kl[i - 1].close;
+      var cl = kl[i].close, pc = kl[i-1].close;
       if (ph != null && cl > ph && pc <= ph) { events.push({ idx: i, type: state === 1 ? 'BOS' : 'MSS', dir: 'BUY', level: ph }); state = 1; }
       else if (pl != null && cl < pl && pc >= pl) { events.push({ idx: i, type: state === -1 ? 'BOS' : 'MSS', dir: 'SELL', level: pl }); state = -1; }
     }
@@ -317,28 +215,30 @@ function localStructure(kl, L) {
   var recent = null;
   var lastIdx = kl.length - 1;
   for (var k = events.length - 1; k >= 0; k--) {
-    if (lastIdx - events[k].idx <= 6) { recent = events[k]; break; }
+    if (lastIdx - events[k].idx <= (K - 1)) { recent = events[k]; break; }
   }
   return { state: state, ph: ph, pl: pl, fresh: recent };
 }
+
 function detectEntryType(levels, currentPrice) {
   if (!levels.entry || !currentPrice || levels.direction === 'WAIT') return { type: 'N/A', action: '—', icon: '⚪️', cls: '', desc: '', pct: 0, currentPrice: currentPrice || 0 };
   var diff = levels.entry - currentPrice;
   var pct = Math.abs(diff) / currentPrice * 100;
   var thresholdPct = 0.1;
   var atr = levels._atr;
-  if (atr && atr > 0 && currentPrice > 0) thresholdPct = Math.max(0.05, (atr / currentPrice * 100) * 0.15);
-  if (pct < thresholdPct) return { type: 'MARKET', action: levels.direction + ' MARKET', icon: '⚡', cls: 'market', desc: 'قیمت ≈ Entry', pct: pct, currentPrice: currentPrice };
+  if (atr && atr > 0 && currentPrice > 0) thresholdPct = Math.max(0.05, (atr/currentPrice*100)*0.15);
+  if (pct < thresholdPct) return { type: 'MARKET', action: levels.direction+' MARKET', icon: '⚡', cls: 'market', desc: 'قیمت ≈ Entry', pct: pct, currentPrice: currentPrice };
   if (levels.direction === 'BUY') {
-    if (diff < 0) return { type: 'BUY LIMIT', action: 'BUY LIMIT', icon: '🔵', cls: 'limit', desc: 'منتظر ریزش ' + pct.toFixed(2) + '٪', pct: pct, currentPrice: currentPrice };
-    return { type: 'BUY STOP', action: 'BUY STOP', icon: '🟡', cls: 'stop', desc: 'منتظر شکست ' + pct.toFixed(2) + '٪', pct: pct, currentPrice: currentPrice };
+    if (diff < 0) return { type: 'BUY LIMIT', action: 'BUY LIMIT', icon: '🔵', cls: 'limit', desc: 'منتظر ریزش '+pct.toFixed(2)+'٪', pct: pct, currentPrice: currentPrice };
+    return { type: 'BUY STOP', action: 'BUY STOP', icon: '🟡', cls: 'stop', desc: 'منتظر شکست '+pct.toFixed(2)+'٪', pct: pct, currentPrice: currentPrice };
   }
   if (levels.direction === 'SELL') {
-    if (diff > 0) return { type: 'SELL LIMIT', action: 'SELL LIMIT', icon: '🔵', cls: 'limit', desc: 'منتظر رشد ' + pct.toFixed(2) + '٪', pct: pct, currentPrice: currentPrice };
-    return { type: 'SELL STOP', action: 'SELL STOP', icon: '🟡', cls: 'stop', desc: 'منتظر شکست ' + pct.toFixed(2) + '٪', pct: pct, currentPrice: currentPrice };
+    if (diff > 0) return { type: 'SELL LIMIT', action: 'SELL LIMIT', icon: '🔵', cls: 'limit', desc: 'منتظر رشد '+pct.toFixed(2)+'٪', pct: pct, currentPrice: currentPrice };
+    return { type: 'SELL STOP', action: 'SELL STOP', icon: '🟡', cls: 'stop', desc: 'منتظر شکست '+pct.toFixed(2)+'٪', pct: pct, currentPrice: currentPrice };
   }
-  return { type: 'LIMIT', action: levels.direction + ' LIMIT', icon: '🔵', cls: 'limit', desc: '', pct: pct, currentPrice: currentPrice };
+  return { type: 'LIMIT', action: levels.direction+' LIMIT', icon: '🔵', cls: 'limit', desc: '', pct: pct, currentPrice: currentPrice };
 }
+
 function isCryptoSymbol(sym) {
   var s = String(sym || '').toUpperCase().replace(/[\/\-_]/g, '');
   for (var i = 0; i < CRYPTO_BASES.length; i++) if (s.indexOf(CRYPTO_BASES[i]) === 0) return true;
@@ -347,12 +247,11 @@ function isCryptoSymbol(sym) {
 function getLondonHour() { try { return parseInt(new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/London', hour: 'numeric', hour12: false }).format(new Date())); } catch (e) { return new Date().getUTCHours(); } }
 function getNYHour() { try { return parseInt(new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: 'numeric', hour12: false }).format(new Date())); } catch (e) { return new Date().getUTCHours() - 5; } }
 function getKillZoneInfo() {
-  var londonH = getLondonHour(), nyH = getNYHour();
-  var inLondon = londonH >= 7 && londonH < 10;
-  var inNY = nyH >= 8 && nyH < 11;
-  return { active: inLondon || inNY, london: inLondon, ny: inNY, overlap: inLondon && inNY, londonH: londonH, nyH: nyH };
+  var l = getLondonHour(), n = getNYHour();
+  var inL = l >= 7 && l < 10, inN = n >= 8 && n < 11;
+  return { active: inL || inN, london: inL, ny: inN, overlap: inL && inN, londonH: l, nyH: n };
 }
-function getCryptoLiquidityWindow() { var nyH = getNYHour(); return { active: nyH >= 8 && nyH < 18, high: nyH >= 13 && nyH < 17, nyH: nyH }; }
+function getCryptoLiquidityWindow() { var n = getNYHour(); return { active: n >= 8 && n < 18, high: n >= 13 && n < 17, nyH: n }; }
 function getKZBadge(symbol) {
   if (isCryptoSymbol(symbol)) {
     var w = getCryptoLiquidityWindow();
@@ -376,6 +275,7 @@ function shouldCheckNow(symbol, kzMode) {
   }
   return { ok: true, reason: 'پیش‌فرض' };
 }
+
 function normalizeProviderKey(providerName) {
   var s = String(providerName || '').toLowerCase();
   if (s.indexOf('aiprime') !== -1) return 'aiprime';
@@ -398,13 +298,123 @@ function normalizeProviderKey(providerName) {
 }
 
 // ============================================
-// REGIME (Wilder ADX)
+// MODEL DISCOVERY + CACHE + BAD MODELS
+// ============================================
+async function getDiscoveredModels(env, chatId, provider) {
+  try { return await env.KV.get('models:' + chatId + ':' + provider, 'json'); } catch (e) { return null; }
+}
+async function setDiscoveredModels(env, chatId, provider, models) {
+  try { await env.KV.put('models:' + chatId + ':' + provider, JSON.stringify(models), { expirationTtl: 86400 * 7 }); } catch (e) {}
+}
+async function getWorkingModel(env, chatId, provider, tier) {
+  try { return await env.KV.get('workmodel:' + chatId + ':' + provider + ':' + tier); } catch (e) { return null; }
+}
+async function setWorkingModel(env, chatId, provider, tier, model) {
+  try { await env.KV.put('workmodel:' + chatId + ':' + provider + ':' + tier, model, { expirationTtl: 86400 * 30 }); } catch (e) {}
+}
+async function getBadModels(env, chatId, p) {
+  try { return (await env.KV.get('bad:' + chatId + ':' + p, 'json')) || {}; } catch (e) { return {}; }
+}
+async function markBadModel(env, chatId, p, m) {
+  try {
+    var b = await getBadModels(env, chatId, p);
+    b[m] = Date.now();
+    await env.KV.put('bad:' + chatId + ':' + p, JSON.stringify(b), { expirationTtl: 10800 });
+  } catch (e) {}
+}
+async function resetModelCacheFor(env, chatId, provider) {
+  try {
+    await env.KV.delete('models:' + chatId + ':' + provider);
+    await env.KV.delete('bad:' + chatId + ':' + provider);
+    ['fast','deepseek','premium'].forEach(function(t){
+      env.KV.delete('workmodel:' + chatId + ':' + provider + ':' + t).catch(function(){});
+    });
+  } catch (e) {}
+}
+async function discoverProviderModels(env, chatId, provider, key) {
+  if (!key) return null;
+  var base = OAI_BASES[provider];
+  if (!base) return null;
+  try {
+    var r = await fetchWithTimeout(base + '/models', { headers: { 'Authorization': 'Bearer ' + key } }, 12000, 'Discovery');
+    if (!r.ok) return null;
+    var d = await r.json();
+    var ids = (d.data || []).map(function(m) { return m.id; }).filter(Boolean);
+    if (ids.length) {
+      await setDiscoveredModels(env, chatId, provider, ids);
+      console.log('[Discovery] ' + provider + '/' + chatId + ' → ' + ids.length);
+      return ids;
+    }
+    return null;
+  } catch (e) { console.warn('[Discovery] ' + provider + ': ' + e.message); return null; }
+}
+
+function normModelId(m) { return String(m).toLowerCase().replace(/^[^\/]*\//, '').replace(/[._]/g, '-'); }
+function exactFromList(list, name) {
+  if (!list) return null;
+  var n = normModelId(name), i;
+  for (i = 0; i < list.length; i++) if (list[i] === name) return list[i];
+  for (i = 0; i < list.length; i++) if (normModelId(list[i]) === n) return list[i];
+  return null;
+}
+
+// 🔑 getTierCandidates = v8.2.10 (saved first) + v8.3 (bad filter + blacklist)
+async function getTierCandidates(env, chatId, provider, tier, hasImage) {
+  var discovered = await getDiscoveredModels(env, chatId, provider);
+  var bad = await getBadModels(env, chatId, provider);
+  var out = [], seen = {};
+  function add(m) {
+    if (!m || seen[m]) return;
+    if (bad[m] && Date.now() - bad[m] < 3 * 3600 * 1000) return;
+    seen[m] = 1; out.push(m);
+  }
+
+  if (hasImage) {
+    var tv = MODEL_TIERS[provider] && MODEL_TIERS[provider][tier] && MODEL_TIERS[provider][tier].vision;
+    var vis = (VISION_MODELS_BY_PROVIDER[provider] || ['gpt-4o']).slice();
+    if (tv) { vis = vis.filter(function(x) { return x !== tv; }); vis.unshift(tv); }
+    vis.forEach(function(m) { var ex = discovered ? exactFromList(discovered, m) : m; add(ex || (discovered ? null : m)); });
+    return out.length ? out.slice(0, 3) : vis.slice(0, 3);
+  }
+
+  // 🔑 saved اول (از v8.2.10)
+  var saved = await getWorkingModel(env, chatId, provider, tier);
+  if (saved) add(saved);
+
+  var chain = (MODEL_FALLBACK_CHAINS[provider] && MODEL_FALLBACK_CHAINS[provider][tier]) || ['gpt-4o-mini'];
+  var blacklist = /deepseek-r1|deepseek-v4-pro|deepseek-v4\.1-flash-1017|deepseek-v4-pro-0813/i;
+
+  chain.forEach(function(m) {
+    if (discovered && discovered.length) {
+      var ex = exactFromList(discovered, m);
+      if (ex) add(ex);
+    } else { add(m); }
+  });
+
+  if (discovered && discovered.length) {
+    var patterns = {
+      fast: /gpt-4o-mini|gpt-3\.5|gemini.*flash|haiku|llama.*8b|mistral-small/i,
+      deepseek: /deepseek-v4\.1-flash|deepseek-v4-flash|deepseek-v3\.2|deepseek-reasoner/i,
+      premium: /claude-sonnet|claude-opus/i
+    };
+    var pat = patterns[tier] || patterns.fast;
+    discovered.forEach(function(m) {
+      if (pat.test(m) && !blacklist.test(m) && !(tier === 'premium' && /haiku/i.test(m))) add(m);
+    });
+  }
+
+  if (!out.length) chain.forEach(add);
+  console.log('[Pick] ' + provider + '/' + tier + ' → ' + out.length + ': ' + out.slice(0, 5).join(', '));
+  return out.length ? out.slice(0, 4) : ['gpt-4o-mini'];
+}
+
+// ============================================
+// REGIME
 // ============================================
 function calcEMA(arr, period) {
   if (!arr.length || period < 1) return [];
-  var k = 2 / (period + 1);
-  var ema = [arr[0]];
-  for (var i = 1; i < arr.length; i++) ema.push(arr[i] * k + ema[i - 1] * (1 - k));
+  var k = 2 / (period + 1), ema = [arr[0]];
+  for (var i = 1; i < arr.length; i++) ema.push(arr[i]*k + ema[i-1]*(1-k));
   return ema;
 }
 function computeLocalRegime(kl, tf) {
@@ -412,17 +422,17 @@ function computeLocalRegime(kl, tf) {
   if (!kl || kl.length < 30) return { regime: 'UNKNOWN', emaSlope: 0, atrPct: 50, adx: 0, lastAtr: 0 };
   var closes = kl.map(function(k) { return k.close; });
   var ema20 = calcEMA(closes, 20);
-  var slope20 = ema20.length > 2 ? ((ema20[ema20.length - 1] - ema20[ema20.length - 3]) / ema20[ema20.length - 3]) * 100 : 0;
+  var slope20 = ema20.length > 2 ? ((ema20[ema20.length-1] - ema20[ema20.length-3]) / ema20[ema20.length-3]) * 100 : 0;
   var atrs = [];
   for (var i = 20; i <= kl.length; i += 3) { var a = calcATR(kl.slice(0, i), 14); if (a) atrs.push(a); }
   var lastAtr = calcATR(kl, 14) || 0;
   var atrPct = 50;
-  if (atrs.length >= 5) { var below = atrs.filter(function(x) { return x < lastAtr; }).length; atrPct = Math.round(below / atrs.length * 100); }
+  if (atrs.length >= 5) atrPct = Math.round(atrs.filter(function(x) { return x < lastAtr; }).length / atrs.length * 100);
   var period = 14, n = kl.length;
   var trs = [], pDMs = [], nDMs = [];
   for (var j = 1; j < n; j++) {
-    var up = kl[j].high - kl[j - 1].high, dn = kl[j - 1].low - kl[j].low;
-    trs.push(Math.max(kl[j].high - kl[j].low, Math.abs(kl[j].high - kl[j - 1].close), Math.abs(kl[j].low - kl[j - 1].close)));
+    var up = kl[j].high - kl[j-1].high, dn = kl[j-1].low - kl[j].low;
+    trs.push(Math.max(kl[j].high - kl[j].low, Math.abs(kl[j].high - kl[j-1].close), Math.abs(kl[j].low - kl[j-1].close)));
     pDMs.push((up > dn && up > 0) ? up : 0);
     nDMs.push((dn > up && dn > 0) ? dn : 0);
   }
@@ -432,16 +442,16 @@ function computeLocalRegime(kl, tf) {
     for (var k = 0; k < period; k++) { sTR += trs[k]; sPDM += pDMs[k]; sNDM += nDMs[k]; }
     var dxs = [];
     for (var k2 = period; k2 < trs.length; k2++) {
-      sTR = sTR - sTR / period + trs[k2];
-      sPDM = sPDM - sPDM / period + pDMs[k2];
-      sNDM = sNDM - sNDM / period + nDMs[k2];
-      var pdi = sTR ? (sPDM / sTR) * 100 : 0, ndi = sTR ? (sNDM / sTR) * 100 : 0;
-      dxs.push((pdi + ndi) ? Math.abs(pdi - ndi) / (pdi + ndi) * 100 : 0);
+      sTR = sTR - sTR/period + trs[k2];
+      sPDM = sPDM - sPDM/period + pDMs[k2];
+      sNDM = sNDM - sNDM/period + nDMs[k2];
+      var pdi = sTR ? (sPDM/sTR)*100 : 0, ndi = sTR ? (sNDM/sTR)*100 : 0;
+      dxs.push((pdi+ndi) ? Math.abs(pdi-ndi)/(pdi+ndi)*100 : 0);
     }
     if (dxs.length >= period) {
       var s = 0; for (var k3 = 0; k3 < period; k3++) s += dxs[k3];
       adx = s / period;
-      for (var k4 = period; k4 < dxs.length; k4++) adx = (adx * (period - 1) + dxs[k4]) / period;
+      for (var k4 = period; k4 < dxs.length; k4++) adx = (adx*(period-1) + dxs[k4]) / period;
     }
   }
   var adxR = Math.round(adx);
@@ -451,7 +461,7 @@ function computeLocalRegime(kl, tf) {
   if (atrPct > 85) regime = 'HIGH_VOL';
   else if (atrPct < 20 && adxR < 15) regime = 'COMPRESSION';
   else if (Math.abs(slope20) > slopeThresh && adxR > 20) regime = slope20 > 0 ? 'TRENDING_UP' : 'TRENDING_DOWN';
-  return { regime: regime, emaSlope: Math.round(slope20 * 100) / 100, atrPct: atrPct, adx: adxR, lastAtr: lastAtr };
+  return { regime: regime, emaSlope: Math.round(slope20*100)/100, atrPct: atrPct, adx: adxR, lastAtr: lastAtr };
 }
 function adversarialCheck(levels, klines, regime, atr) {
   var issues = [], warnings = [];
@@ -459,8 +469,8 @@ function adversarialCheck(levels, klines, regime, atr) {
   var last = klines[klines.length - 1];
   if (levels.entry != null && levels.sl != null && atr > 0) {
     var risk = Math.abs(levels.entry - levels.sl);
-    if (risk < 0.35 * atr) issues.push('SL < 0.35×ATR');
-    if (risk > 3.5 * atr) issues.push('SL > 3.5×ATR');
+    if (risk < 0.35*atr) issues.push('SL < 0.35×ATR');
+    if (risk > 3.5*atr) issues.push('SL > 3.5×ATR');
   }
   if (levels.entry != null && levels.sl != null && levels.tp1 != null) {
     var rr = Math.abs(levels.tp1 - levels.entry) / Math.abs(levels.entry - levels.sl);
@@ -468,13 +478,13 @@ function adversarialCheck(levels, klines, regime, atr) {
   }
   if (regime.regime === 'TRENDING_UP' && levels.direction === 'SELL') warnings.push('SELL خلاف روند');
   if (regime.regime === 'TRENDING_DOWN' && levels.direction === 'BUY') warnings.push('BUY خلاف روند');
-  if (levels.entry != null && last && atr > 0 && Math.abs(levels.entry - last.close) > 4.5 * atr) issues.push('Entry > 4.5×ATR');
+  if (levels.entry != null && last && atr > 0 && Math.abs(levels.entry - last.close) > 4.5*atr) issues.push('Entry > 4.5×ATR');
   var recent = klines.slice(-5);
   if (recent.length >= 5) {
-    var net = recent[recent.length - 1].close - recent[0].close;
-    var range = Math.max.apply(null, recent.map(function(k) { return k.high; })) - Math.min.apply(null, recent.map(function(k) { return k.low; }));
+    var net = recent[recent.length-1].close - recent[0].close;
+    var range = Math.max.apply(null, recent.map(function(k){return k.high;})) - Math.min.apply(null, recent.map(function(k){return k.low;}));
     if (range > 0) {
-      var m = net / range;
+      var m = net/range;
       if (levels.direction === 'BUY' && m < -0.65) warnings.push('مومنتوم نزولی');
       if (levels.direction === 'SELL' && m > 0.65) warnings.push('مومنتوم صعودی');
     }
@@ -487,12 +497,12 @@ function strictSchemaValidate(levels) {
   if (!levels || typeof levels !== 'object') return { passed: false, issues: ['levels null'] };
   var dir = levels.direction;
   if (!dir) issues.push('direction missing');
-  else if (['BUY', 'SELL', 'WAIT'].indexOf(dir) === -1) issues.push('direction invalid');
+  else if (['BUY','SELL','WAIT'].indexOf(dir) === -1) issues.push('direction invalid');
   if (levels.confidence != null && (!isFinite(levels.confidence) || levels.confidence < 0 || levels.confidence > 100)) issues.push('confidence invalid');
-  ['entry', 'sl', 'tp1', 'tp2', 'tp3'].forEach(function(k) {
+  ['entry','sl','tp1','tp2','tp3'].forEach(function(k) {
     var v = levels[k]; if (v == null) return;
-    if (typeof v !== 'number' || !isFinite(v)) { issues.push(k + ' invalid'); return; }
-    if (v <= 0) issues.push(k + ' not positive');
+    if (typeof v !== 'number' || !isFinite(v)) { issues.push(k+' invalid'); return; }
+    if (v <= 0) issues.push(k+' not positive');
   });
   if (levels.direction === 'BUY' && levels.entry != null && levels.sl != null && levels.sl >= levels.entry) issues.push('BUY sl>=entry');
   if (levels.direction === 'SELL' && levels.entry != null && levels.sl != null && levels.sl <= levels.entry) issues.push('SELL sl<=entry');
@@ -510,7 +520,7 @@ function validateSignalStrict(levels, opts) {
 }
 
 // ============================================
-// PROVIDERS
+// PROVIDERS + KEY
 // ============================================
 const PROVIDER_NAMES = {
   customvision: '⭐ Custom Vision', gemini: 'Google Gemini', aiprime: 'AIPrime',
@@ -521,29 +531,14 @@ const PROVIDER_NAMES = {
 };
 function getKey(env, p) {
   var m = {
-    gemini: env.GEMINI_KEY_1 || env.GEMINI_KEY,
-    aiprime: env.AIPRIME_KEY,
-    github: env.GITHUB_MODELS_TOKEN,
-    groq: env.GROQ_KEY,
-    together: env.TOGETHER_KEY,
-    gapgpt: env.GAPGPT_KEY,
-    openrouter: env.OPENROUTER_KEY,
-    mistral: env.MISTRAL_KEY,
-    huggingface: env.HUGGINGFACE_KEY,
-    cloudflare: env.CLOUDFLARE_KEY,
-    nvidia: env.NVIDIA_KEY,
-    llm7: env.LLM7_KEY || 'unused',
-    avalai: env.AVALAI_KEY,
-    metis: env.METIS_KEY,
-    onexai: env.ONEXAI_KEY,
-    customvision: env.CUSTOM_VISION_KEY
+    gemini: env.GEMINI_KEY_1 || env.GEMINI_KEY, aiprime: env.AIPRIME_KEY, github: env.GITHUB_MODELS_TOKEN,
+    groq: env.GROQ_KEY, together: env.TOGETHER_KEY, gapgpt: env.GAPGPT_KEY, openrouter: env.OPENROUTER_KEY,
+    mistral: env.MISTRAL_KEY, huggingface: env.HUGGINGFACE_KEY, cloudflare: env.CLOUDFLARE_KEY,
+    nvidia: env.NVIDIA_KEY, llm7: env.LLM7_KEY || 'unused', avalai: env.AVALAI_KEY,
+    metis: env.METIS_KEY, onexai: env.ONEXAI_KEY, customvision: env.CUSTOM_VISION_KEY
   };
-  var v = m[p] || '';
-  // 🔑 پاک‌سازی خودکار کلید
-  v = String(v).trim();                        // حذف فاصله/newline اول و آخر
-  v = v.replace(/^["'`]|["'`]$/g, '');         // حذف گیومه
-  v = v.replace(/^Bearer\s+/i, '');            // حذف Bearer اشتباهی
-  v = v.trim();
+  var v = String(m[p] || '').trim();
+  v = v.replace(/^["'`]|["'`]$/g, '').replace(/^Bearer\s+/i, '').trim();
   return v;
 }
 function getGeminiKeys(env) {
@@ -584,20 +579,23 @@ async function getStrictness(env, c) { try { return (await env.KV.get('strictnes
 async function setStrictness(env, c, s) { if (!STRICTNESS_MODES[s]) s = 'hard'; await env.KV.put('strictness:' + c, s); }
 async function getKzMode(env, c) { try { return (await env.KV.get('kzmode:' + c)) || 'priority'; } catch (e) { return 'priority'; } }
 async function setKzMode(env, c, m) { if (!KZ_MODES[m]) m = 'priority'; await env.KV.put('kzmode:' + c, m); }
-async function getMonitors(env, c) { try { return await env.KV.get('monitors:' + c, 'json') || []; } catch (e) { return []; } }
+async function getMonitors(env, c) {
+  try {
+    var l = await env.KV.get('monitors:' + c, 'json') || [];
+    var ch = false;
+    for (var i = 0; i < l.length; i++) { if (!l[i].id) { l[i].id = Date.now().toString(36) + Math.random().toString(36).slice(2, 5); ch = true; } }
+    if (ch) await env.KV.put('monitors:' + c, JSON.stringify(l));
+    return l;
+  } catch (e) { return []; }
+}
 async function saveMonitors(env, c, l) { await env.KV.put('monitors:' + c, JSON.stringify(l)); }
 async function getLocalFilter(env, c) { try { var v = await env.KV.get('localfilter:' + c); return v === null ? 'on' : v; } catch (e) { return 'on'; } }
 async function setLocalFilter(env, c, v) { await env.KV.put('localfilter:' + c, v); }
-async function getFallbackMode(env, c) {
-  try { var v = await env.KV.get('fallbackmode:' + c); return FALLBACK_MODES[v] ? v : 'strict'; } catch (e) { return 'strict'; }
-}
-async function setFallbackMode(env, c, m) {
-  if (!FALLBACK_MODES[m]) m = 'strict';
-  await env.KV.put('fallbackmode:' + c, m);
-}
+async function getFallbackMode(env, c) { try { var v = await env.KV.get('fallbackmode:' + c); return FALLBACK_MODES[v] ? v : 'strict'; } catch (e) { return 'strict'; } }
+async function setFallbackMode(env, c, m) { if (!FALLBACK_MODES[m]) m = 'strict'; await env.KV.put('fallbackmode:' + c, m); }
 
 // ============================================
-// CALIBRATION
+// CALIBRATION (با ثابت‌های تعریف‌شده)
 // ============================================
 async function calibrationLoad(env, chatId) { try { return await env.KV.get('calib:' + chatId, 'json') || {}; } catch (e) { return {}; } }
 async function calibrationSave(env, chatId, data) { try { await env.KV.put('calib:' + chatId, JSON.stringify(data)); } catch (e) {} }
@@ -616,13 +614,12 @@ async function calibrationStats(env, chatId, provider, tier, regime) {
   var records = (d[key] && d[key].records) || [];
   if (!records.length) return null;
   var n = records.length;
-  var brier = records.reduce(function(s, r) { return s + Math.pow(r.c / 100 - r.o, 2); }, 0) / n;
+  var brier = records.reduce(function(s, r) { return s + Math.pow(r.c/100 - r.o, 2); }, 0) / n;
   var buckets = {};
   records.forEach(function(r) {
-    var bin = Math.floor(r.c / 10) * 10;
+    var bin = Math.floor(r.c/10)*10;
     if (!buckets[bin]) buckets[bin] = { n: 0, wins: 0 };
-    buckets[bin].n++;
-    buckets[bin].wins += r.o;
+    buckets[bin].n++; buckets[bin].wins += r.o;
   });
   return { n: n, brier: brier, buckets: buckets };
 }
@@ -633,10 +630,9 @@ async function calibrateConfidence(env, chatId, provider, tier, regime, rawConf)
   if (rawConf == null) return { conf: rawConf, adjusted: false, n: 0 };
   var stats = await calibrationStats(env, chatId, provider, tier, regime);
   if (!stats || stats.n < CALIB_MIN_SAMPLES) return { conf: rawConf, adjusted: false, n: stats ? stats.n : 0 };
-  var bin = Math.floor(rawConf / 10) * 10;
-  var b = stats.buckets[bin];
+  var bin = Math.floor(rawConf/10)*10, b = stats.buckets[bin];
   if (!b || b.n < CALIB_BUCKET_MIN) return { conf: rawConf, adjusted: false, n: b ? b.n : 0 };
-  return { conf: Math.round(b.wins / b.n * 100), adjusted: true, n: b.n, raw: rawConf };
+  return { conf: Math.round(b.wins/b.n*100), adjusted: true, n: b.n, raw: rawConf };
 }
 
 // ============================================
@@ -650,16 +646,15 @@ async function logRejectedSignal(env, chatId, levels, reason, currentPrice, opts
     if (levels.entry == null || levels.sl == null || levels.tp1 == null) return;
     opts = opts || {};
     var a = await opLedgerLoad(env, chatId);
-    var id = a.length ? (a[a.length - 1].id || 0) + 1 : 1;
-    a.push({ id: id, t: Date.now(), sym: opts.symbol || '?', tf: opts.tf || '?', dir: levels.direction, entry: levels.entry, sl: levels.sl, tp1: levels.tp1, tp2: levels.tp2, tp3: levels.tp3, confidence: levels.confidence, provider: opts.provider || '?', reason: reason, status: 'OPEN', filled: false, currentPrice: currentPrice, isCrypto: isCryptoSymbol(opts.symbol || ''), day: new Date(Date.now() + 3.5 * 3600 * 1000).toISOString().slice(0, 10) });
+    var id = a.length ? (a[a.length-1].id || 0) + 1 : 1;
+    a.push({ id: id, t: Date.now(), sym: opts.symbol || '?', tf: opts.tf || '?', dir: levels.direction, entry: levels.entry, sl: levels.sl, tp1: levels.tp1, tp2: levels.tp2, tp3: levels.tp3, confidence: levels.confidence, provider: opts.provider || '?', reason: reason, status: 'OPEN', filled: false, currentPrice: currentPrice, isCrypto: isCryptoSymbol(opts.symbol || ''), day: new Date(Date.now()+3.5*3600*1000).toISOString().slice(0,10) });
     await opLedgerSave(env, chatId, a);
-  } catch (e) { console.error('logRejectedSignal:', e.message); }
+  } catch (e) {}
 }
 async function resolveRejectedSignals(env, chatId, klines, symbol, tf) {
   try {
     var a = await opLedgerLoad(env, chatId);
-    var ch = false;
-    var tfm = (TF_MINUTES[tf] || 5) * 60000;
+    var ch = false, tfm = (TF_MINUTES[tf] || 5) * 60000;
     for (var i = 0; i < a.length; i++) {
       var s = a[i];
       if (s.status !== 'OPEN' && s.status !== 'WIN') continue;
@@ -667,7 +662,7 @@ async function resolveRejectedSignals(env, chatId, klines, symbol, tf) {
       if (s.tp1 == null) continue;
       for (var j = 0; j < klines.length; j++) {
         var k = klines[j];
-        var kt = Date.parse(String(k.datetime).includes('T') ? k.datetime : String(k.datetime).replace(' ', 'T') + 'Z');
+        var kt = Date.parse(String(k.datetime).includes('T') ? k.datetime : String(k.datetime).replace(' ','T')+'Z');
         if (!Number.isFinite(kt) || kt < s.t - tfm) continue;
         if (s.status === 'WIN') continue;
         if (!s.filled) { if (!(k.low <= s.entry && k.high >= s.entry)) continue; s.filled = true; ch = true; }
@@ -683,17 +678,17 @@ async function resolveRejectedSignals(env, chatId, klines, symbol, tf) {
 }
 
 // ============================================
-// PORTFOLIO
+// PORTFOLIO (با PORTFOLIO_DEFAULTS تعریف‌شده)
 // ============================================
 async function getPortfolioConfig(env, chatId) {
-  try { var c = await env.KV.get('prcfg:' + chatId, 'json'); if (c) return c; } catch (e) {}
+  try { var c = await env.KV.get('prcfg:' + chatId, 'json'); if (c) return Object.assign({}, PORTFOLIO_DEFAULTS, c); } catch (e) {}
   return Object.assign({}, PORTFOLIO_DEFAULTS);
 }
 async function setPortfolioConfig(env, chatId, cfg) { await env.KV.put('prcfg:' + chatId, JSON.stringify(cfg)); }
 async function getPortfolioState(env, chatId) {
   var a = await getJournal(env, chatId) || [];
   var open = a.filter(function(s) { return s.status === 'OPEN'; });
-  var today = new Date(Date.now() + 3.5 * 3600 * 1000).toISOString().slice(0, 10);
+  var today = new Date(Date.now()+3.5*3600*1000).toISOString().slice(0,10);
   var todayRSum = 0;
   a.filter(function(s) { return s.day === today; }).forEach(function(s) {
     if (s.status === 'WIN') todayRSum += (s.rr || 0);
@@ -708,7 +703,7 @@ async function getPortfolioState(env, chatId) {
     openByMarket[market] = (openByMarket[market] || 0) + 1;
     if (isCryptoSymbol(sym)) openCrypto++;
   });
-  var hasBTC = open.some(function(s) { var ss = (s.sym || '').toUpperCase().replace(/[\/\-_]/g, ''); return ss.indexOf('BTC') === 0; });
+  var hasBTC = open.some(function(s) { var ss = (s.sym || '').toUpperCase().replace(/[\/\-_]/g,''); return ss.indexOf('BTC') === 0; });
   return { open: open, openBySymbol: openBySymbol, openByMarket: openByMarket, openCrypto: openCrypto, hasBTC: hasBTC, todayRSum: todayRSum, totalOpen: open.length };
 }
 async function portfolioCheck(env, chatId, newSignal) {
@@ -718,25 +713,24 @@ async function portfolioCheck(env, chatId, newSignal) {
   if (state.todayRSum <= cfg.maxDailyLossRR) issues.push('سقف ضرر روزانه');
   var sym = newSignal.sym || '?';
   var market = newSignal.market || (isCryptoSymbol(sym) ? 'crypto' : 'forex');
-  if ((state.openBySymbol[sym] || 0) >= cfg.maxPerSymbol) issues.push('هم‌نماد ' + (state.openBySymbol[sym] || 0) + '/' + cfg.maxPerSymbol);
+  if ((state.openBySymbol[sym] || 0) >= cfg.maxPerSymbol) issues.push('هم‌نماد');
   if ((state.openByMarket[market] || 0) >= cfg.maxPerMarket) issues.push('این بازار');
-  if (state.totalOpen >= cfg.maxTotal) issues.push('کل ' + state.totalOpen + '/' + cfg.maxTotal);
-  if (isCryptoSymbol(sym) && state.hasBTC && sym.toUpperCase().replace(/[\/\-_]/g, '').indexOf('BTC') !== 0 && state.openCrypto >= cfg.maxCorrelatedAlts) issues.push('آلت‌کوین همبسته');
+  if (state.totalOpen >= cfg.maxTotal) issues.push('کل '+state.totalOpen+'/'+cfg.maxTotal);
+  if (isCryptoSymbol(sym) && state.hasBTC && sym.toUpperCase().replace(/[\/\-_]/g,'').indexOf('BTC') !== 0 && state.openCrypto >= cfg.maxCorrelatedAlts) issues.push('آلت‌کوین همبسته');
   return { ok: issues.length === 0, issues: issues, state: state };
 }
 
 // ============================================
-// PARSING
+// PARSING + VALIDATE + CONFLUENCE
 // ============================================
 function parseJsonBlock(text) {
   if (!text) return null;
   var matches = text.match(/```json\s*([\s\S]*?)```/gi);
   if (matches && matches.length) {
-    var last = matches[matches.length - 1].replace(/```json\s*/i, '').replace(/```$/, '').trim();
-    try { return JSON.parse(last); } catch (e) {}
+    try { return JSON.parse(matches[matches.length-1].replace(/```json\s*/i,'').replace(/```$/,'').trim()); } catch (e) {}
   }
   var m2 = text.match(/\{[\s\S]*?"direction"[\s\S]*?\}/g);
-  if (m2 && m2.length) { try { return JSON.parse(m2[m2.length - 1]); } catch (e) {} }
+  if (m2 && m2.length) { try { return JSON.parse(m2[m2.length-1]); } catch (e) {} }
   return null;
 }
 function findValue(text, labels) {
@@ -768,44 +762,38 @@ function extractLevels(rawText) {
   }
   var blocks = rawText.match(/---\s*\n([\s\S]*?)\n\s*---/g);
   var text = rawText;
-  if (blocks && blocks.length) text = blocks[blocks.length - 1];
+  if (blocks && blocks.length) text = blocks[blocks.length-1];
   var regimeMatch = text.match(/Regime\s*[:：]\s*(TRENDING_UP|TRENDING_DOWN|RANGING|TRANSITIONAL)/i);
   var rrMatch = text.match(/R\/R\s*[:：=]\s*([\d\.:]+)/i);
   var confMatch = text.match(/ConfluenceScore\s*[:：=]\s*([\d\.]+)/i);
   return {
     direction: detectDirection(rawText),
     regime: regimeMatch ? regimeMatch[1].toUpperCase() : null,
-    confidence: findValue(text, ['ConfidenceScore', 'امتیاز\\s*اطمینان']),
-    entry: findValue(text, ['Entry', 'ورود']),
-    sl: findValue(text, ['Stop[\\s-]?Loss', 'SL', 'حد\\s*ضرر']),
+    confidence: findValue(text, ['ConfidenceScore','امتیاز\\s*اطمینان']),
+    entry: findValue(text, ['Entry','ورود']),
+    sl: findValue(text, ['Stop[\\s-]?Loss','SL','حد\\s*ضرر']),
     tp1: findValue(text, ['TP\\s*1']), tp2: findValue(text, ['TP\\s*2']), tp3: findValue(text, ['TP\\s*3']),
     rr: rrMatch ? rrMatch[1] : null,
     confluenceScore: confMatch ? parseFloat(confMatch[1]) : null,
     aiScores: null, validationIssues: []
   };
 }
-
-// ============================================
-// VALIDATE
-// ============================================
 function validateSignalSingle(levels, opts) {
   opts = opts || {};
   var strict = opts.strict || 'hard';
-  var minRR = opts.minRR || 1.5;
-  var minConfidence = opts.minConfidence || 65;
-  var issues = [];
-  var originalDir = levels.direction;
-  if (strict === 'easy') { minRR = Math.max(1.0, minRR * 0.7); minConfidence = Math.max(55, minConfidence - 5); }
+  var minRR = opts.minRR || 1.5, minConfidence = opts.minConfidence || 65;
+  var issues = [], originalDir = levels.direction;
+  if (strict === 'easy') { minRR = Math.max(1.0, minRR*0.7); minConfidence = Math.max(55, minConfidence-5); }
   if (originalDir !== 'WAIT') {
     var conf = levels.confidence;
-    if (conf === null || conf === undefined) { issues.push('⚠️ امتیاز نیست'); levels.direction = 'WAIT'; }
+    if (conf == null) { issues.push('⚠️ امتیاز نیست'); levels.direction = 'WAIT'; }
     else if (conf > 100 || conf < 0) { issues.push('⚠️ امتیاز نامعتبر'); levels.confidence = null; levels.direction = 'WAIT'; }
-    else if (conf < minConfidence) { issues.push('⚠️ اطمینان ' + conf + '% < ' + minConfidence + '%'); levels.direction = 'WAIT'; }
+    else if (conf < minConfidence) { issues.push('⚠️ اطمینان '+conf+'% < '+minConfidence+'%'); levels.direction = 'WAIT'; }
   }
   if (levels.direction === 'BUY' || levels.direction === 'SELL') {
     var entry = levels.entry, sl = levels.sl;
-    if (entry === null) { issues.push('⚠️ Entry نیست'); levels.direction = 'WAIT'; }
-    else if (sl === null) { issues.push('⚠️ SL نیست'); levels.direction = 'WAIT'; }
+    if (entry == null) { issues.push('⚠️ Entry نیست'); levels.direction = 'WAIT'; }
+    else if (sl == null) { issues.push('⚠️ SL نیست'); levels.direction = 'WAIT'; }
     else {
       if (levels.direction === 'BUY' && sl >= entry) { issues.push('❌ SL بالای Entry'); levels.direction = 'WAIT'; }
       if (levels.direction === 'SELL' && sl <= entry) { issues.push('❌ SL زیر Entry'); levels.direction = 'WAIT'; }
@@ -815,16 +803,16 @@ function validateSignalSingle(levels, opts) {
         var wrongDir = (levels.direction === 'BUY' && levels.tp1 <= entry) || (levels.direction === 'SELL' && levels.tp1 >= entry);
         if (wrongDir) { issues.push('❌ TP1 سمت اشتباه'); levels.direction = 'WAIT'; }
         else {
-          var risk = Math.abs(entry - sl), reward = Math.abs(levels.tp1 - entry);
-          var actualRR = risk > 0 ? reward / risk : 0;
-          if (actualRR < minRR) { issues.push('❌ R/R 1:' + actualRR.toFixed(2) + ' < 1:' + minRR); levels.direction = 'WAIT'; }
+          var risk = Math.abs(entry-sl), reward = Math.abs(levels.tp1-entry);
+          var actualRR = risk > 0 ? reward/risk : 0;
+          if (actualRR < minRR) { issues.push('❌ R/R 1:'+actualRR.toFixed(2)+' < 1:'+minRR); levels.direction = 'WAIT'; }
           else levels.rr = '1:' + actualRR.toFixed(2);
         }
       } else if (strict === 'hard') { issues.push('⚠️ TP1 نیست'); levels.direction = 'WAIT'; }
     }
     if (opts.atr && opts.price && levels.direction !== 'WAIT') {
-      if (Math.abs(levels.entry - opts.price) > 3 * opts.atr) { issues.push('❌ Entry > 3×ATR'); levels.direction = 'WAIT'; }
-      else if (strict === 'hard' && Math.abs(levels.entry - levels.sl) < 0.5 * opts.atr) { issues.push('❌ SL < 0.5×ATR'); levels.direction = 'WAIT'; }
+      if (Math.abs(levels.entry - opts.price) > 3*opts.atr) { issues.push('❌ Entry > 3×ATR'); levels.direction = 'WAIT'; }
+      else if (strict === 'hard' && Math.abs(levels.entry - levels.sl) < 0.5*opts.atr) { issues.push('❌ SL < 0.5×ATR'); levels.direction = 'WAIT'; }
     }
   }
   levels.validationIssues = issues;
@@ -836,25 +824,20 @@ function validateSignal(levels, opts) {
   var mode = opts.strict || 'hard';
   if (mode === 'hard' || mode === 'easy') return validateSignalSingle(levels, opts);
   if (mode === 'both') {
-    var hardLv = JSON.parse(JSON.stringify(levels));
-    var easyLv = JSON.parse(JSON.stringify(levels));
-    var hardRes = validateSignalSingle(hardLv, Object.assign({}, opts, { strict: 'hard' }));
-    var easyRes = validateSignalSingle(easyLv, Object.assign({}, opts, { strict: 'easy' }));
-    var result = easyRes;
+    var hL = JSON.parse(JSON.stringify(levels)), eL = JSON.parse(JSON.stringify(levels));
+    var hR = validateSignalSingle(hL, Object.assign({}, opts, { strict: 'hard' }));
+    var eR = validateSignalSingle(eL, Object.assign({}, opts, { strict: 'easy' }));
+    var result = eR;
     result.appliedStrictness = 'both';
     result.dualEval = {
-      hard: { approved: hardRes.direction !== 'WAIT', direction: hardRes.direction, confidence: hardRes.confidence, rr: hardRes.rr || null, issues: hardRes.validationIssues || [] },
-      easy: { approved: easyRes.direction !== 'WAIT', direction: easyRes.direction, confidence: easyRes.confidence, rr: easyRes.rr || null, issues: easyRes.validationIssues || [] }
+      hard: { approved: hR.direction !== 'WAIT', direction: hR.direction, confidence: hR.confidence, rr: hR.rr || null, issues: hR.validationIssues || [] },
+      easy: { approved: eR.direction !== 'WAIT', direction: eR.direction, confidence: eR.confidence, rr: eR.rr || null, issues: eR.validationIssues || [] }
     };
     if (!result.dualEval.hard.approved && !result.dualEval.easy.approved) result.direction = 'WAIT';
     return result;
   }
   return validateSignalSingle(levels, opts);
 }
-
-// ============================================
-// CONFLUENCE
-// ============================================
 function extractScores(text) {
   var j = parseJsonBlock(text);
   if (j && j.scores) {
@@ -868,29 +851,28 @@ function extractScores(text) {
   return null;
 }
 function calculateConfluenceAuto(levels, rawText) {
-  var t = String(rawText || '');
-  var tClean = t.replace(/(?:FVG|OB|BOS|CHOCH|Order\s*Block|Sweep)\s*(?:وجود\s*ندارد|نیست|no|not|absent)/gi, '');
-  var hasBOS = /\bBOS\b/i.test(tClean), hasCHoCH = /CHOCH|CHoCH/i.test(tClean), hasRetest = /Retest|پولبک/i.test(tClean);
-  var hasOB = /Order\s*Block|\bOB\b/i.test(tClean), hasPD = /Premium|Discount/i.test(tClean);
-  var hasFVG = /FVG|Fair\s*Value\s*Gap/i.test(tClean), hasImb = /Imbalance/i.test(tClean);
-  var hasEngulf = /Engulf|پوششی/i.test(tClean), hasPin = /Pin\s*Bar|Hammer|Doji/i.test(tClean);
-  var hasSweep = /Liquidity\s*Sweep|Sweep/i.test(tClean), hasLiq = /نقدینگی/i.test(tClean);
+  var t = String(rawText || '').replace(/(?:FVG|OB|BOS|CHOCH|Order\s*Block|Sweep)\s*(?:وجود\s*ندارد|نیست|no|not|absent)/gi, '');
+  var hasBOS = /\bBOS\b/i.test(t), hasCHoCH = /CHOCH|CHoCH/i.test(t), hasRetest = /Retest|پولبک/i.test(t);
+  var hasOB = /Order\s*Block|\bOB\b/i.test(t), hasPD = /Premium|Discount/i.test(t);
+  var hasFVG = /FVG|Fair\s*Value\s*Gap/i.test(t), hasImb = /Imbalance/i.test(t);
+  var hasEngulf = /Engulf|پوششی/i.test(t), hasPin = /Pin\s*Bar|Hammer|Doji/i.test(t);
+  var hasSweep = /Liquidity\s*Sweep|Sweep/i.test(t), hasLiq = /نقدینگی/i.test(t);
   var s = {};
-  s.structure = (hasBOS || hasCHoCH) ? Math.min(100, 55 + (hasBOS ? 12 : 0) + (hasCHoCH ? 10 : 0) + (hasRetest ? 8 : 0)) : 15;
-  s.smc = (hasOB || hasPD) ? Math.min(100, 55 + (hasOB ? 18 : 0) + (hasPD ? 8 : 0)) : 15;
-  s.ict = (hasFVG || hasImb) ? Math.min(100, 55 + (hasFVG ? 22 : 0) + (hasImb ? 12 : 0)) : 15;
-  s.candle = (hasEngulf || hasPin) ? Math.min(100, 55 + (hasEngulf ? 18 : 0) + (hasPin ? 15 : 0)) : 15;
-  s.liquidity = (hasSweep || hasLiq) ? Math.min(100, 55 + (hasSweep ? 20 : 0) + (hasLiq ? 10 : 0)) : 15;
+  s.structure = (hasBOS || hasCHoCH) ? Math.min(100, 55 + (hasBOS?12:0) + (hasCHoCH?10:0) + (hasRetest?8:0)) : 15;
+  s.smc = (hasOB || hasPD) ? Math.min(100, 55 + (hasOB?18:0) + (hasPD?8:0)) : 15;
+  s.ict = (hasFVG || hasImb) ? Math.min(100, 55 + (hasFVG?22:0) + (hasImb?12:0)) : 15;
+  s.candle = (hasEngulf || hasPin) ? Math.min(100, 55 + (hasEngulf?18:0) + (hasPin?15:0)) : 15;
+  s.liquidity = (hasSweep || hasLiq) ? Math.min(100, 55 + (hasSweep?20:0) + (hasLiq?10:0)) : 15;
   var rr = 20;
   if (levels.entry && levels.sl && levels.tp1) {
     var r = Math.abs(levels.entry - levels.sl), rw = Math.abs(levels.tp1 - levels.entry);
-    var rrRatio = r > 0 ? rw / r : 0;
-    rr = Math.min(100, Math.round(Math.min(rrRatio, 4) * 25 + 25));
+    var rrRatio = r > 0 ? rw/r : 0;
+    rr = Math.min(100, Math.round(Math.min(rrRatio, 4)*25 + 25));
   }
   s.riskReward = rr;
-  var avg = (s.structure + s.smc + s.ict + s.candle + s.liquidity + s.riskReward) / 6;
-  var n = avg < 25 ? 2 : Math.max(2, Math.min(9, avg / 10));
-  return { scores: s, confluence: Math.round(n * 10) / 10, auto: true, hasEvidence: hasBOS || hasCHoCH || hasOB || hasPD || hasFVG || hasImb || hasEngulf || hasPin || hasSweep || hasLiq };
+  var avg = (s.structure+s.smc+s.ict+s.candle+s.liquidity+s.riskReward)/6;
+  var n = avg < 25 ? 2 : Math.max(2, Math.min(9, avg/10));
+  return { scores: s, confluence: Math.round(n*10)/10, auto: true, hasEvidence: hasBOS||hasCHoCH||hasOB||hasPD||hasFVG||hasImb||hasEngulf||hasPin||hasSweep||hasLiq };
 }
 async function resolveConfluence(env, chatId, levels, rawText) {
   var mode = await getConfluenceMode(env, chatId);
@@ -902,7 +884,7 @@ async function resolveConfluence(env, chatId, levels, rawText) {
     var sum = 0;
     for (var j = 0; j < CONF_KEYS.length; j++) sum += (aiScores[CONF_KEYS[j]] || 0);
     result.scores = aiScores;
-    result.confluence = (levels.confluenceScore != null) ? levels.confluenceScore : Math.round((sum / 6 / 10) * 10) / 10;
+    result.confluence = (levels.confluenceScore != null) ? levels.confluenceScore : Math.round((sum/6/10)*10)/10;
     return result;
   }
   if (mode === 'auto' || mode === 'force') {
@@ -916,222 +898,130 @@ async function resolveConfluence(env, chatId, levels, rawText) {
 }
 
 // ============================================
-// AI CALLERS — ۱۵s timeout، ۲ attempts
+// AI CALLERS — v8.3 classifyErr + v8.2.10 saved-first
 // ============================================
-async function callAIPrimeText(env, prompt, imgB64, imgMime, chatId, opts) {
+function classifyErr(st, msg) {
+  var m = String(msg || '').toLowerCase();
+  if (st === 401) {
+    // 🔑 v8.2.10-style: 401 non-auth → perm (continue to next model)
+    if (/invalid.*api.*key|unauthorized|authentication|api.?key.*invalid|invalid.?key/i.test(m)) return 'auth';
+    return 'perm';
+  }
+  if (st === 402 || /quota|balance|credit|insufficient|billing|payment|اعتبار|سهمیه/.test(m)) return 'quota';
+  if (st === 429 || /rate.?limit|too many/.test(m)) return 'rate';
+  if (st === 403 || /permission|not allowed|forbidden|no access/.test(m)) return 'perm';
+  if (st === 404 || /not found|no available channel|does not exist|invalid.*model|unknown model|not available/.test(m)) return 'missing';
+  if (st === 400 && /unsupported|max_tokens|max_completion|temperature|parameter/.test(m)) return 'param';
+  if (st >= 500 || st === 0) return 'upstream';
+  return 'other';
+}
+async function oaiOnce(base, key, model, content, mt, ms) {
+  var ctrl = new AbortController();
+  var to = setTimeout(function() { ctrl.abort(); }, ms);
+  try {
+    var rsn = /^(gpt-5|o\d)/i.test(String(model).replace(/^.*\//, ''));
+    var body = { model: model, messages: [{ role: 'user', content: content }] };
+    if (rsn) body.max_completion_tokens = mt;
+    else { body.temperature = 0.2; body.max_tokens = mt; }
+    var r = await fetch(base + '/chat/completions', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + key },
+      body: JSON.stringify(body), signal: ctrl.signal
+    });
+    var raw = await r.text(), d = null;
+    try { d = JSON.parse(raw); } catch (e) {}
+    return { status: r.status, ok: r.ok, d: d, raw: raw };
+  } finally { clearTimeout(to); }
+}
+function oaiErrMsg(res) {
+  return (res.d && res.d.error) ? (res.d.error.message || JSON.stringify(res.d.error))
+    : String(res.raw || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').slice(0, 140);
+}
+async function callOAICompat(env, pkey, prompt, imgB64, imgMime, chatId, opts) {
   opts = opts || {};
-  var key = getKey(env, 'aiprime');
-  if (!key) throw new Error('AIPRIME_KEY تنظیم نشده');
+  var key = getKey(env, pkey), name = PROVIDER_NAMES[pkey];
+  if (!key) throw new Error(name + ' کلید تنظیم نشده');
+  var base = OAI_BASES[pkey];
   var hasImage = !!imgB64;
-  var content = hasImage ? [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: 'data:' + imgMime + ';base64,' + imgB64 } }] : prompt;
-  var requestedTier = chatId ? await getUserModelTier(env, chatId, 'aiprime') : 'fast';
+  var content = hasImage
+    ? [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: 'data:' + imgMime + ';base64,' + imgB64 } }]
+    : prompt;
+  var tier = chatId ? await getUserModelTier(env, chatId, pkey) : 'fast';
+  var long = !!opts.long;
 
-  if (!hasImage && chatId) {
-    var discovered = await getDiscoveredModels(env, chatId, 'aiprime');
-    if (!discovered) { try { await discoverProviderModels(env, chatId, 'aiprime', key); } catch (e) {} }
+  if (long && chatId && !hasImage) {
+    var dsc = await getDiscoveredModels(env, chatId, pkey);
+    if (!dsc) { try { await discoverProviderModels(env, chatId, pkey, key); } catch (e) {} }
   }
 
-  var candidates = await getTierCandidates(env, chatId, 'aiprime', requestedTier, hasImage);
-  var startTime = Date.now();
-  var TOTAL_BUDGET = 27000;          // ۲۷ ثانیه بودجه کل (در ۳۰s ورکر جا می‌شود)
-  var PER_MODEL_MAX = 20000;         // حداکثر ۲۰s برای یک مدل
-  var MIN_REMAINING = 4000;          // کمتر از ۴s باقی مانده → تلاش جدید نکن
-  var lastErr = '', authFatal = false, tried = [];
+  var cands = await getTierCandidates(env, chatId, pkey, tier, hasImage);
+  var perTimeout = long ? 100000 : 18000;
+  var maxAttempts = long ? 3 : 2;
+  var budget = opts.budget || (long ? AI_LONG_BUDGET : AI_SHORT_BUDGET);
+  var fb = chatId ? await getFallbackMode(env, chatId) : 'strict';
+  var errs = [], start = Date.now();
 
-  console.log('[AIPrime] tier=' + requestedTier + ' budget=' + TOTAL_BUDGET + 'ms candidates=[' + candidates.slice(0, 4).join(', ') + ']');
-
-  for (var mi = 0; mi < candidates.length; mi++) {
-    var elapsed = Date.now() - startTime;
-    var remaining = TOTAL_BUDGET - elapsed;
-    if (remaining < MIN_REMAINING) {
-      lastErr = 'بودجه تمام شد بعد از ' + mi + ' مدل';
-      break;
-    }
-    var perModelTimeout = Math.min(PER_MODEL_MAX, remaining - 1500);
-    if (perModelTimeout < 2000) { lastErr = 'زمان کافی نیست'; break; }
-
-    var model = candidates[mi];
-    tried.push(model);
-    var ctrl = new AbortController();
-    var abortTimer = setTimeout(function() { ctrl.abort(); }, perModelTimeout);
-
+  async function attempt(model, allowRetry) {
+    var left = budget - (Date.now() - start);
+    if (left < 4000) { errs.push(model + ': بودجه‌ی زمانی تمام'); return null; }
+    var mt = getMaxTokens(model), res;
     try {
-      var r = await fetch('https://api.aiprime.shop/v1/chat/completions', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + key },
-        body: JSON.stringify({ model: model, messages: [{ role: 'user', content: content }], temperature: 0.2, max_tokens: getMaxTokens(model) }),
-        signal: ctrl.signal
-      });
-      clearTimeout(abortTimer);
-      var d = await r.json();
-      var mt = getMaxTokens(model);
-
-      if (r.ok) {
-        var choice = d && d.choices && d.choices[0];
-        var msg = choice && choice.message;
-        var t = msg ? msg.content : null;
-        var rs = msg ? msg.reasoning_content : null;
-        var finish = choice ? choice.finish_reason : null;
-        console.log('[AIPrime:' + model + '] finish=' + finish + ' len=' + (t ? t.length : 0) + ' max_tokens=' + mt);
-
-        // پاسخ قطع شده → تلاش با مدل بعدی
-        if (finish === 'length') { lastErr = model + ': پاسخ قطع (max_tokens=' + mt + ')'; continue; }
-        // فقط reasoning بدون content → تلاش با مدل بعدی
-        if ((!t || t.length < 10) && rs && rs.length > 100) { lastErr = model + ': فقط reasoning'; continue; }
-        if (t && t.length > 10) {
-          if (chatId) { try { await setWorkingModel(env, chatId, 'aiprime', requestedTier, model); } catch (e) {} }
-          return { text: t, model: model, tier: requestedTier };
+      res = await oaiOnce(base, key, model, content, mt, Math.min(perTimeout, left));
+      if (allowRetry && !res.ok && mt > 3500) {
+        var kind0 = classifyErr(res.status, oaiErrMsg(res));
+        if (kind0 === 'quota' || kind0 === 'param') {
+          mt = 3500;
+          res = await oaiOnce(base, key, model, content, mt, Math.min(perTimeout, Math.max(4000, budget - (Date.now() - start))));
         }
-        lastErr = model + ': خالی';
-        continue;
-      }
-
-      var errMsg = d && d.error ? (d.error.message || JSON.stringify(d.error)) : 'HTTP ' + r.status;
-      console.log('[AIPrime:' + model + '] FAIL status=' + r.status + ' err=' + String(errMsg).slice(0, 80));
-      lastErr = model + ': [' + r.status + '] ' + String(errMsg).slice(0, 100);
-
-      if (r.status === 401 || r.status === 403) {
-        if (/invalid.*api.*key|unauthorized|authentication.*fail/i.test(errMsg)) { authFatal = true; break; }
-      }
-      // quota → retry با mt کوچکتر (مثل HTML)
-      if (/quota|credit|insufficient|billing|402/i.test(errMsg) && mt > 16000) {
-        var ctrl2 = new AbortController(), t2 = setTimeout(function() { ctrl2.abort(); }, 8000);
-        try {
-          var r2 = await fetch('https://api.aiprime.shop/v1/chat/completions', {
-            method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + key },
-            body: JSON.stringify({ model: model, messages: [{ role: 'user', content: content }], temperature: 0.2, max_tokens: 16000 }),
-            signal: ctrl2.signal
-          });
-          clearTimeout(t2);
-          var d2 = await r2.json();
-          if (r2.ok) {
-            var c2 = d2 && d2.choices && d2.choices[0], m2 = c2 && c2.message, tt = m2 ? m2.content : null;
-            if (tt && tt.length > 10) {
-              if (chatId) { try { await setWorkingModel(env, chatId, 'aiprime', requestedTier, model); } catch (e) {} }
-              return { text: tt, model: model, tier: requestedTier };
-            }
-          }
-        } catch (e) { clearTimeout(t2); }
       }
     } catch (e) {
-      clearTimeout(abortTimer);
-      if (e.name === 'AbortError') { lastErr = model + ': timeout ' + perModelTimeout + 'ms'; }
-      else { lastErr = model + ': ' + e.message; }
+      errs.push(model + ': ' + (e.name === 'AbortError' ? 'timeout ' + Math.round(perTimeout/1000) + 's' : e.message));
+      return { kind: 'upstream' };
+    }
+    if (res.ok && res.d) {
+      var ch = res.d.choices && res.d.choices[0], msg = ch && ch.message;
+      var t = msg ? msg.content : null, rs = msg ? msg.reasoning_content : null, fin = ch ? ch.finish_reason : null;
+      console.log('[' + pkey + ':' + model + '(' + tier + ')] finish=' + fin + ' len=' + (t ? t.length : 0) + ' mt=' + mt);
+      if (fin === 'length') { errs.push(model + ': پاسخ قطع (mt=' + mt + ')'); return { kind: 'other' }; }
+      if ((!t || t.length < 10) && rs && rs.length > 100) { errs.push(model + ': reasoning-only'); return { kind: 'other' }; }
+      if (t && t.length > 10) return { ok: true, text: t, model: model };
+      errs.push(model + ': خالی'); return { kind: 'other' };
+    }
+    var em = oaiErrMsg(res), kind = classifyErr(res.status, em);
+    errs.push(model + ': [' + res.status + ' ' + ERR_FA[kind] + '] ' + String(em).slice(0, 120));
+    console.log('[' + pkey + ':' + model + '] FAIL status=' + res.status + ' kind=' + kind);
+    if (kind === 'missing' || kind === 'perm') await markBadModel(env, chatId, pkey, model);
+    return { kind: kind };
+  }
+
+  for (var mi = 0; mi < Math.min(cands.length, maxAttempts); mi++) {
+    var r = await attempt(cands[mi], true);
+    if (r && r.ok) {
+      if (chatId && !hasImage) { try { await setWorkingModel(env, chatId, pkey, tier, r.model); } catch (e) {} }
+      return { text: r.text, model: r.model, tier: tier };
+    }
+    if (!r) break;
+    if (r.kind === 'auth' || r.kind === 'quota' || r.kind === 'rate') break;
+  }
+
+  // 🔑 Fallback در حالت warn فقط
+  if (fb === 'warn' && tier !== 'fast' && !hasImage) {
+    var fastC = await getTierCandidates(env, chatId, pkey, 'fast', false);
+    if (fastC[0]) {
+      var rf = await attempt(fastC[0], false);
+      if (rf && rf.ok) return { text: rf.text, model: rf.model, tier: 'fast', emergencyFallback: true, requestedTier: tier };
     }
   }
 
-  if (authFatal) throw new Error('AIPrime auth (401/403) — کلید AIPRIME_KEY را بررسی کنید');
-  var totalTime = Math.round((Date.now() - startTime) / 1000);
-  throw new Error('AIPrime tier=' + requestedTier + ' در ' + totalTime + 's پاسخ نداد [' + tried.join(', ') + '] — ' + lastErr);
+  throw new Error(name + ' tier=' + tier + ' :: ' + errs.join(' | '));
 }
 
-async function callGapGPTText(env, prompt, imgB64, imgMime, chatId, opts) {
-  opts = opts || {};
-  var key = getKey(env, 'gapgpt');
-  if (!key) throw new Error('GAPGPT_KEY تنظیم نشده');
-
-  var hasImage = !!imgB64;
-  var content = hasImage ? [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: 'data:' + imgMime + ';base64,' + imgB64 } }] : prompt;
-  var requestedTier = chatId ? await getUserModelTier(env, chatId, 'gapgpt') : 'fast';
-
-  if (!hasImage && chatId) {
-    var discovered = await getDiscoveredModels(env, chatId, 'gapgpt');
-    if (!discovered) { try { await discoverProviderModels(env, chatId, 'gapgpt', key); } catch (e) {} }
-  }
-
-  var candidates = await getTierCandidates(env, chatId, 'gapgpt', requestedTier, hasImage);
-  var startTime = Date.now();
-  var TOTAL_BUDGET = 27000;
-  var PER_MODEL_MAX = 20000;
-  var MIN_REMAINING = 4000;
-  var lastErr = '', authFatal = false, tried = [];
-
-  console.log('[GapGPT] tier=' + requestedTier + ' budget=' + TOTAL_BUDGET + 'ms candidates=[' + candidates.slice(0, 4).join(', ') + ']');
-
-  for (var mi = 0; mi < candidates.length; mi++) {
-    var elapsed = Date.now() - startTime;
-    var remaining = TOTAL_BUDGET - elapsed;
-    if (remaining < MIN_REMAINING) { lastErr = 'بودجه تمام شد بعد از ' + mi + ' مدل'; break; }
-    var perModelTimeout = Math.min(PER_MODEL_MAX, remaining - 1500);
-    if (perModelTimeout < 2000) { lastErr = 'زمان کافی نیست'; break; }
-
-    var model = candidates[mi];
-    tried.push(model);
-    var ctrl = new AbortController();
-    var abortTimer = setTimeout(function() { ctrl.abort(); }, perModelTimeout);
-
-    try {
-      var r = await fetch('https://api.gapgpt.app/v1/chat/completions', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + key },
-        body: JSON.stringify({ model: model, messages: [{ role: 'user', content: content }], temperature: 0.2, max_tokens: getMaxTokens(model) }),
-        signal: ctrl.signal
-      });
-      clearTimeout(abortTimer);
-      var d = await r.json();
-      var mt = getMaxTokens(model);
-
-      if (r.ok) {
-        var choice = d && d.choices && d.choices[0];
-        var msg = choice && choice.message;
-        var t = msg ? msg.content : null;
-        var rs = msg ? msg.reasoning_content : null;
-        var finish = choice ? choice.finish_reason : null;
-        console.log('[GapGPT:' + model + '] finish=' + finish + ' len=' + (t ? t.length : 0) + ' max_tokens=' + mt);
-
-        if (finish === 'length') { lastErr = model + ': پاسخ قطع (max_tokens=' + mt + ')'; continue; }
-        if ((!t || t.length < 10) && rs && rs.length > 100) { lastErr = model + ': فقط reasoning'; continue; }
-        if (t && t.length > 10) {
-          if (chatId) { try { await setWorkingModel(env, chatId, 'gapgpt', requestedTier, model); } catch (e) {} }
-          return { text: t, model: model, tier: requestedTier };
-        }
-        lastErr = model + ': خالی';
-        continue;
-      }
-
-      var errMsg = d && d.error ? (d.error.message || JSON.stringify(d.error)) : 'HTTP ' + r.status;
-      console.log('[GapGPT:' + model + '] FAIL status=' + r.status);
-      lastErr = model + ': [' + r.status + '] ' + String(errMsg).slice(0, 100);
-
-      if (r.status === 401 || r.status === 403) {
-        if (/invalid.*api.*key|unauthorized|authentication.*fail|api.?key.*invalid/i.test(errMsg)) { authFatal = true; break; }
-      }
-      if (/quota|credit|insufficient|billing|402/i.test(errMsg) && mt > 16000) {
-        var ctrl2 = new AbortController(), t2 = setTimeout(function() { ctrl2.abort(); }, 8000);
-        try {
-          var r2 = await fetch('https://api.gapgpt.app/v1/chat/completions', {
-            method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + key },
-            body: JSON.stringify({ model: model, messages: [{ role: 'user', content: content }], temperature: 0.2, max_tokens: 16000 }),
-            signal: ctrl2.signal
-          });
-          clearTimeout(t2);
-          var d2 = await r2.json();
-          if (r2.ok) {
-            var c2 = d2 && d2.choices && d2.choices[0], m2 = c2 && c2.message, tt = m2 ? m2.content : null;
-            if (tt && tt.length > 10) {
-              if (chatId) { try { await setWorkingModel(env, chatId, 'gapgpt', requestedTier, model); } catch (e) {} }
-              return { text: tt, model: model, tier: requestedTier };
-            }
-          }
-        } catch (e) { clearTimeout(t2); }
-      }
-    } catch (e) {
-      clearTimeout(abortTimer);
-      if (e.name === 'AbortError') { lastErr = model + ': timeout ' + perModelTimeout + 'ms'; }
-      else { lastErr = model + ': ' + e.message; }
-    }
-  }
-
-  if (authFatal) throw new Error('GapGPT auth (401/403) — کلید GAPGPT_KEY را بررسی کنید');
-  var totalTime = Math.round((Date.now() - startTime) / 1000);
-  throw new Error('GapGPT tier=' + requestedTier + ' در ' + totalTime + 's پاسخ نداد [' + tried.join(', ') + '] — ' + lastErr);
-}
+async function callAIPrimeText(env, prompt, imgB64, imgMime, chatId, opts) { return callOAICompat(env, 'aiprime', prompt, imgB64, imgMime, chatId, opts); }
+async function callGapGPTText(env, prompt, imgB64, imgMime, chatId, opts) { return callOAICompat(env, 'gapgpt', prompt, imgB64, imgMime, chatId, opts); }
 
 async function callGeminiText(env, prompt, imgB64, imgMime) {
   var keys = getGeminiKeys(env);
   if (!keys.length) throw new Error('no key');
-  var hasImage = !!imgB64;
-  var models = hasImage ? VISION_MODELS_BY_PROVIDER.gemini : ['gemini-2.5-flash', 'gemini-2.0-flash'];
+  var models = imgB64 ? VISION_MODELS_BY_PROVIDER.gemini : ['gemini-2.5-flash', 'gemini-2.0-flash'];
   var parts = [{ text: prompt }];
   if (imgB64) parts.push({ inline_data: { mime_type: imgMime, data: imgB64 } });
   var last = '';
@@ -1144,8 +1034,7 @@ async function callGeminiText(env, prompt, imgB64, imgMime) {
         });
         var d = await r.json();
         if (r.ok) {
-          var cand = d && d.candidates && d.candidates[0];
-          var t = null;
+          var cand = d && d.candidates && d.candidates[0], t = null;
           if (cand && cand.content && cand.content.parts) {
             for (var pi = 0; pi < cand.content.parts.length; pi++) {
               var pt = cand.content.parts[pi];
@@ -1162,7 +1051,6 @@ async function callGeminiText(env, prompt, imgB64, imgMime) {
   }
   throw new Error('Gemini: ' + last);
 }
-
 async function callGroqText(env, prompt, imgB64, imgMime) {
   var key = env.GROQ_KEY; if (!key) throw new Error('no key');
   var models = imgB64 ? ['meta-llama/llama-4-scout-17b-16e-instruct'] : ['llama-3.3-70b-versatile'];
@@ -1181,7 +1069,6 @@ async function callGroqText(env, prompt, imgB64, imgMime) {
   }
   throw new Error('Groq: ' + last);
 }
-
 async function callGitHubText(env, prompt, imgB64, imgMime) {
   var tk = env.GITHUB_MODELS_TOKEN; if (!tk) throw new Error('no token');
   var c = imgB64 ? [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: 'data:' + imgMime + ';base64,' + imgB64 } }] : prompt;
@@ -1193,7 +1080,6 @@ async function callGitHubText(env, prompt, imgB64, imgMime) {
   if (!r.ok) throw new Error(d && d.error ? d.error.message : 'HTTP ' + r.status);
   return { text: d && d.choices && d.choices[0] && d.choices[0].message ? d.choices[0].message.content : '', model: 'gpt-4o-mini', tier: 'fast' };
 }
-
 async function callTogetherText(env, prompt, imgB64, imgMime) {
   var key = env.TOGETHER_KEY; if (!key) throw new Error('no key');
   var model = imgB64 ? 'meta-llama/Llama-3.2-11B-Vision-Instruct-Turbo' : 'meta-llama/Llama-3.3-70B-Instruct-Turbo';
@@ -1206,7 +1092,6 @@ async function callTogetherText(env, prompt, imgB64, imgMime) {
   if (!r.ok) throw new Error(d && d.error ? d.error.message : 'HTTP ' + r.status);
   return { text: d && d.choices && d.choices[0] && d.choices[0].message ? d.choices[0].message.content : '', model: model, tier: 'fast' };
 }
-
 async function callOpenRouterText(env, prompt, imgB64, imgMime) {
   var key = env.OPENROUTER_KEY; if (!key) throw new Error('no key');
   var models = imgB64 ? ['google/gemini-2.0-flash-exp:free'] : ['meta-llama/llama-3.3-70b-instruct:free'];
@@ -1225,7 +1110,6 @@ async function callOpenRouterText(env, prompt, imgB64, imgMime) {
   }
   throw new Error('OR: ' + last);
 }
-
 async function callMistralText(env, prompt, imgB64, imgMime) {
   var key = env.MISTRAL_KEY; if (!key) throw new Error('no key');
   var model = imgB64 ? 'pixtral-12b-2409' : 'mistral-small-latest';
@@ -1238,7 +1122,6 @@ async function callMistralText(env, prompt, imgB64, imgMime) {
   if (!r.ok) throw new Error(d && d.error ? d.error.message : 'HTTP ' + r.status);
   return { text: d && d.choices && d.choices[0] && d.choices[0].message ? d.choices[0].message.content : '', model: model, tier: 'fast' };
 }
-
 async function callAvalAIText(env, prompt, imgB64, imgMime) {
   var key = env.AVALAI_KEY; if (!key) throw new Error('no key');
   var c = imgB64 ? [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: 'data:' + imgMime + ';base64,' + imgB64 } }] : prompt;
@@ -1250,7 +1133,6 @@ async function callAvalAIText(env, prompt, imgB64, imgMime) {
   if (!r.ok) throw new Error(d && d.error ? d.error.message : 'HTTP ' + r.status);
   return { text: d && d.choices && d.choices[0] && d.choices[0].message ? d.choices[0].message.content : '', model: 'gemini-2.0-flash', tier: 'fast' };
 }
-
 async function callHuggingFaceText(env, prompt, imgB64, imgMime) {
   var key = env.HUGGINGFACE_KEY; if (!key) throw new Error('no key');
   var model = imgB64 ? 'Qwen/Qwen2.5-VL-7B-Instruct' : 'meta-llama/Meta-Llama-3-8B-Instruct';
@@ -1263,7 +1145,6 @@ async function callHuggingFaceText(env, prompt, imgB64, imgMime) {
   if (!r.ok) throw new Error(d && d.error ? d.error.message : 'HTTP ' + r.status);
   return { text: d && d.choices && d.choices[0] && d.choices[0].message ? d.choices[0].message.content : '', model: model, tier: 'fast' };
 }
-
 async function callCloudflareText(env, prompt, imgB64, imgMime) {
   var key = env.CLOUDFLARE_KEY; if (!key) throw new Error('no key');
   var parts = key.split(':');
@@ -1278,7 +1159,6 @@ async function callCloudflareText(env, prompt, imgB64, imgMime) {
   if (!r.ok) throw new Error(d && d.errors && d.errors[0] ? d.errors[0].message : 'HTTP ' + r.status);
   return { text: d && d.result ? d.result.response : '', model: model, tier: 'fast' };
 }
-
 async function callNvidiaText(env, prompt, imgB64, imgMime) {
   var key = env.NVIDIA_KEY; if (!key) throw new Error('no key');
   var model = imgB64 ? 'meta/llama-3.2-90b-vision-instruct' : 'meta/llama-3.3-70b-instruct';
@@ -1291,8 +1171,7 @@ async function callNvidiaText(env, prompt, imgB64, imgMime) {
   if (!r.ok) throw new Error(d && d.error ? d.error.message : 'HTTP ' + r.status);
   return { text: d && d.choices && d.choices[0] && d.choices[0].message ? d.choices[0].message.content : '', model: model, tier: 'fast' };
 }
-
-async function callLLM7Text(env, prompt, imgB64, imgMime) {
+async function callLLM7Text(env, prompt) {
   var key = env.LLM7_KEY || 'unused';
   var r = await fetch('https://api.llm7.io/v1/chat/completions', {
     method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + key },
@@ -1302,8 +1181,7 @@ async function callLLM7Text(env, prompt, imgB64, imgMime) {
   if (!r.ok) throw new Error(d && d.error ? d.error.message : 'HTTP ' + r.status);
   return { text: d && d.choices && d.choices[0] && d.choices[0].message ? d.choices[0].message.content : '', model: 'pro', tier: 'fast' };
 }
-
-async function callMetisText(env, prompt, imgB64, imgMime) {
+async function callMetisText(env, prompt) {
   var key = env.METIS_KEY; if (!key) throw new Error('no key');
   var r = await fetch('https://api.metisai.ir/openai/v1/chat/completions', {
     method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + key },
@@ -1313,8 +1191,7 @@ async function callMetisText(env, prompt, imgB64, imgMime) {
   if (!r.ok) throw new Error(d && d.error ? d.error.message : 'HTTP ' + r.status);
   return { text: d && d.choices && d.choices[0] && d.choices[0].message ? d.choices[0].message.content : '', model: 'gemini-2.5-flash', tier: 'fast' };
 }
-
-async function callOneXAiText(env, prompt, imgB64, imgMime) {
+async function callOneXAiText(env, prompt) {
   var key = env.ONEXAI_KEY; if (!key) throw new Error('no key');
   var r = await fetch('https://1xai.ir/v1/chat/completions', {
     method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + key },
@@ -1333,12 +1210,9 @@ var PROVIDER_FUNCS = {
   llm7: callLLM7Text, avalai: callAvalAIText, metis: callMetisText, onexai: callOneXAiText
 };
 
-// 🔑 پارامترهای گسترده برای اپتایمز
 async function callWithFallback(env, prompt, imgB64, imgMime, chatId, forcedProvider, aiOpts) {
   aiOpts = aiOpts || {};
-  var hasImg = !!imgB64;
-  var providers;
-
+  var hasImg = !!imgB64, providers;
   if (forcedProvider && forcedProvider !== 'auto' && PROVIDER_FUNCS[forcedProvider] &&
       (forcedProvider === 'gemini' ? getGeminiKeys(env).length > 0 : getKey(env, forcedProvider))) {
     providers = [forcedProvider];
@@ -1353,27 +1227,26 @@ async function callWithFallback(env, prompt, imgB64, imgMime, chatId, forcedProv
     var pri2 = { aiprime: 1, gapgpt: 2, groq: 3, together: 4, openrouter: 5, mistral: 6, llm7: 7, avalai: 8, metis: 9, onexai: 10, github: 11, huggingface: 12, nvidia: 13, cloudflare: 14, gemini: 99 };
     providers.sort(function(a, b) { return (pri2[a] || 50) - (pri2[b] || 50); });
   }
-  if (!providers.length) throw new Error('هیچ سرویس فعال نیست — کلیدها را در Variables چک کنید');
-
-  console.log('[callWithFallback] providers=[' + providers.join(',') + '] hasImg=' + hasImg);
-  var errs = [];
+  if (!providers.length) throw new Error('هیچ سرویس فعال نیست');
+  var total = aiOpts.long ? AI_LONG_BUDGET : 25000, t0 = Date.now(), errs = [];
   for (var i = 0; i < providers.length; i++) {
-    var p = providers[i];
+    var p = providers[i], left = total - (Date.now() - t0);
+    if (left < 4000) { errs.push('بودجه‌ی زمانی تمام'); break; }
     try {
-      var r = await PROVIDER_FUNCS[p](env, prompt, imgB64, imgMime, chatId, aiOpts);
-      // نرمال‌سازی: اگر string برگشت
+      var po = Object.assign({}, aiOpts, { budget: left });
+      var r = await withTimeout(PROVIDER_FUNCS[p](env, prompt, imgB64, imgMime, chatId, po), left, PROVIDER_NAMES[p] || p);
       var u = typeof r === 'string' ? { text: r, model: null, tier: null } : r;
       if (u && u.text && u.text.length > 10) {
         console.log('[callWithFallback] ✅ ' + p + ' model=' + (u.model || '?') + ' len=' + u.text.length);
-        return { text: u.text, provider: PROVIDER_NAMES[p], providerKey: p, model: u.model || null, tier: u.tier || null };
+        return { text: u.text, provider: PROVIDER_NAMES[p], providerKey: p, model: u.model || null, tier: u.tier || null, emergencyFallback: !!u.emergencyFallback, requestedTier: u.requestedTier || null };
       }
       errs.push(p + ': کوتاه');
     } catch (e) {
-      console.log('[callWithFallback] ❌ ' + p + ': ' + e.message.slice(0, 150));
-      errs.push(p + ': ' + e.message);
+      console.log('[callWithFallback] ❌ ' + p + ': ' + String(e.message).slice(0, 150));
+      errs.push((PROVIDER_NAMES[p] || p) + ': ' + e.message);
     }
   }
-  throw new Error('همه سرویس‌ها خطا:\n' + errs.slice(0, 4).join('\n'));
+  throw new Error('همه سرویس‌ها خطا:\n' + errs.slice(0, 6).join('\n'));
 }
 
 // ============================================
@@ -1398,7 +1271,9 @@ async function fetchBinanceData(symbol, tf) {
       if (!r.ok) { last = 'HTTP ' + r.status; continue; }
       var d = await r.json();
       if (!Array.isArray(d) || !d.length) { last = 'empty'; continue; }
-      return d.map(function(k) { return { datetime: new Date(k[0]).toISOString(), open: +k[1], high: +k[2], low: +k[3], close: +k[4], volume: +k[5] }; });
+      var result = d.map(function(k) { return { datetime: new Date(k[0]).toISOString(), open: +k[1], high: +k[2], low: +k[3], close: +k[4], volume: +k[5] }; });
+      result.effTf = interval;
+      return result;
     } catch (e) { last = e.message; }
   }
   throw new Error('Binance: ' + last);
@@ -1419,6 +1294,7 @@ async function fetchTwelveData(symbol, interval, apiKey, size) {
     var v = d.values[i];
     result.push({ datetime: v.datetime || '', open: parseFloat(v.open), high: parseFloat(v.high), low: parseFloat(v.low), close: parseFloat(v.close), volume: parseFloat(v.volume || 0) });
   }
+  result.effTf = interval;  // 🔑 effTf fix
   return result;
 }
 async function getCurrentPrice(symbol, apiKey) {
@@ -1445,20 +1321,19 @@ async function fetchMarketData(symbol, tf, env, provider) {
     return await withTimeout(fetchBinanceData(symbol, tf), 20000, 'Binance');
   }
   if (provider === 'twelve') {
-    if (!tk) throw new Error('TWELVE_KEY تنظیم نشده است');
+    if (!tk) throw new Error('TWELVE_KEY تنظیم نشده');
     return await withTimeout(fetchTwelveData(symbol, tdInterval, tk, 300), 18000, 'Twelve');
   }
   if (isCrypto) {
     try { return await withTimeout(fetchBinanceData(symbol, tf), 20000, 'Binance'); }
     catch (e1) { if (tk) return await withTimeout(fetchTwelveData(symbol, tdInterval, tk, 300), 18000, 'Twelve'); throw new Error('Binance fail و TWELVE_KEY نداری'); }
   }
-  if (!tk) throw new Error('TWELVE_KEY تنظیم نشده — فارکس/طلا لازم دارد');
+  if (!tk) throw new Error('TWELVE_KEY تنظیم نشده');
   return await withTimeout(fetchTwelveData(symbol, tdInterval, tk, 300), 18000, 'Twelve');
 }
 function klinesToText(klines, symbol, tfName) {
   if (!klines || !klines.length) return '';
-  var last = klines[klines.length - 1];
-  var slice = klines.slice(-60);
+  var last = klines[klines.length - 1], slice = klines.slice(-60);
   var rows = slice.map(function(k) {
     var t = k.datetime ? formatTime(k.datetime) : '';
     return '  ' + t + ' | O:' + k.open + ' H:' + k.high + ' L:' + k.low + ' C:' + k.close;
@@ -1477,7 +1352,7 @@ function normalizeSymbol(s) {
 function timeframeLabel(tf) { return TF_LABELS[tf] || tf; }
 
 // ============================================
-// FORMATTING
+// FORMATTING + BLOCKS
 // ============================================
 function tgFormat(text) {
   var c = text.replace(/```json[\s\S]*?```/gi, '').replace(/```[\s\S]*?```/g, '');
@@ -1495,9 +1370,7 @@ function buildRegimeBlock(levels) {
 }
 function buildAdversarialBlock(levels) {
   if (!levels._adversarial) return '';
-  var issues = levels._adversarial.issues || [];
-  var warnings = levels._adversarial.warnings || [];
-  var c = '';
+  var issues = levels._adversarial.issues || [], warnings = levels._adversarial.warnings || [], c = '';
   if (issues.length) { c += '\n🛡️ <b>Adversarial:</b>\n'; issues.forEach(function(i) { c += '• ' + esc(i) + '\n'; }); }
   if (warnings.length) { c += '\nℹ️ <b>هشدار:</b>\n'; warnings.forEach(function(w) { c += '• ' + esc(w) + '\n'; }); }
   return c;
@@ -1510,6 +1383,7 @@ function buildModelBlock(result) {
     var tierLabel = result.tier ? (' <i>(' + esc(result.tier) + ')</i>') : '';
     parts.push('<b>مدل:</b> <code>' + esc(result.model) + '</code>' + tierLabel);
   }
+  if (result.emergencyFallback) parts.push('⚡ <b>Fallback از ' + esc(result.requestedTier) + ' به fast</b>');
   if (!parts.length) return '';
   return '\n' + parts.join('\n') + '\n';
 }
@@ -1519,12 +1393,11 @@ function buildCalibBadge(levels) {
 }
 function buildConfBlock(conf, levels) {
   if (!conf) return '';
-  var c = '';
-  var score = conf.confluence != null ? conf.confluence : (levels ? levels.confluenceScore : null);
+  var c = '', score = conf.confluence != null ? conf.confluence : (levels ? levels.confluenceScore : null);
   if (score == null && conf.scores) {
     var sum = 0, cnt = 0;
     for (var k in conf.scores) if (typeof conf.scores[k] === 'number') { sum += conf.scores[k]; cnt++; }
-    if (cnt) score = Math.round((sum / cnt / 10) * 10) / 10;
+    if (cnt) score = Math.round((sum/cnt/10)*10)/10;
   }
   if (score != null) {
     var e = score >= 8 ? '🔥' : score >= 6 ? '✅' : score >= 4 ? '⚠️' : '❌';
@@ -1550,8 +1423,7 @@ function buildDualEvalBlock(levels) {
 }
 function buildCaption(levels, symbol, tf, result, conf, currentPrice) {
   var isCrypto = isCryptoSymbol(symbol);
-  var symIcon = isCrypto ? '🪙' : '💱';
-  var c = '<b>📊 تحلیل</b>\n\n<b>نماد:</b> ' + symIcon + ' ' + esc(symbol) + '\n<b>TF:</b> ' + timeframeLabel(tf) + '\n';
+  var c = '<b>📊 تحلیل</b>\n\n<b>نماد:</b> ' + (isCrypto ? '🪙' : '💱') + ' ' + esc(symbol) + '\n<b>TF:</b> ' + timeframeLabel(tf) + '\n';
   c += buildModelBlock(result);
   c += '<b>وضعیت:</b> ' + getKZBadge(symbol) + '\n';
   c += buildRegimeBlock(levels) + buildAdversarialBlock(levels) + buildCalibBadge(levels);
@@ -1574,17 +1446,16 @@ function buildCaption(levels, symbol, tf, result, conf, currentPrice) {
 }
 
 // ============================================
-// AUTO JOURNAL
+// AUTO JOURNAL + RESOLVE
 // ============================================
 async function autoJournalAdd(env, chatId, levels, provider, symbol, tf, currentPrice, opts) {
   try {
     opts = opts || {};
     var a = await getJournal(env, chatId) || [];
-    var kz = getKillZoneInfo();
-    var isCrypto = isCryptoSymbol(symbol);
+    var kz = getKillZoneInfo(), isCrypto = isCryptoSymbol(symbol);
     var cryptoW = isCrypto ? getCryptoLiquidityWindow() : null;
-    var id = a.length ? (a[a.length - 1].id || 0) + 1 : 1;
-    var day = new Date(Date.now() + 3.5 * 3600 * 1000).toISOString().slice(0, 10);
+    var id = a.length ? (a[a.length-1].id || 0) + 1 : 1;
+    var day = new Date(Date.now()+3.5*3600*1000).toISOString().slice(0, 10);
     var providerKey = normalizeProviderKey(provider);
     a.push({
       id: id, t: Date.now(), sym: symbol, tf: tf,
@@ -1597,42 +1468,38 @@ async function autoJournalAdd(env, chatId, levels, provider, symbol, tf, current
       dual: levels.dualEval ? { h: levels.dualEval.hard.approved, e: levels.dualEval.easy.approved } : null,
       strictness: opts.strictness || null, day: day,
       passport: {
-        atr: opts.atr != null ? Math.round(opts.atr * 10000) / 10000 : null,
+        atr: opts.atr != null ? Math.round(opts.atr*10000)/10000 : null,
         regime: opts.regime ? opts.regime.regime : null,
         adversarial: opts.adversarial ? { passed: opts.adversarial.passed, issues: opts.adversarial.issues || [], warnings: opts.adversarial.warnings || [] } : null,
         aiProvider: provider, modelName: opts.modelName || null, modelTier: opts.modelTier || null,
-        promptVersion: 'v8.2.10',
+        promptVersion: 'v8.3.5',
         confidenceRaw: opts.confidenceRaw != null ? opts.confidenceRaw : levels.confidence,
         confidenceAdjusted: opts.confidenceAdjusted === true
       },
       calibrated: false
     });
     await saveJournal(env, chatId, a);
-    console.log('[AUTO-JOURNAL] ' + chatId + ' #' + id + ' ' + levels.direction + ' ' + symbol + ' @' + levels.entry + ' model=' + (opts.modelName || '?'));
+    console.log('[AUTO-JOURNAL] ' + chatId + ' #' + id + ' ' + levels.direction + ' ' + symbol + ' model=' + (opts.modelName || '?'));
     return true;
   } catch (e) { return false; }
 }
 function calcRRR(s, tpNum) {
   var tp = tpNum === 1 ? s.tp1 : tpNum === 2 ? s.tp2 : s.tp3;
   if (tp == null) return 0;
-  var risk = Math.abs(s.entry - s.sl);
-  var reward = Math.abs(tp - s.entry);
-  return risk > 0 ? reward / risk : 0;
+  var risk = Math.abs(s.entry - s.sl), reward = Math.abs(tp - s.entry);
+  return risk > 0 ? reward/risk : 0;
 }
 async function resolveJournalForChat(env, chatId, klines, symbol, tf) {
   try {
-    var a = await getJournal(env, chatId) || [];
-    var ch = false;
-    var tfm = (TF_MINUTES[tf] || 5) * 60 * 1000;
-    var calibQueue = [];
+    var a = await getJournal(env, chatId) || [], ch = false;
+    var tfm = (TF_MINUTES[tf] || 5) * 60 * 1000, calibQueue = [];
     for (var i = 0; i < a.length; i++) {
       var s = a[i];
       if (s.status !== 'OPEN' && s.status !== 'WIN') continue;
       if (s.sym !== symbol || s.tf !== tf) continue;
       if (s.tp1 == null) continue;
       for (var j = 0; j < klines.length; j++) {
-        var k = klines[j];
-        var kt = Date.parse(String(k.datetime).includes('T') ? k.datetime : String(k.datetime).replace(' ', 'T') + 'Z');
+        var k = klines[j], kt = Date.parse(String(k.datetime).includes('T') ? k.datetime : String(k.datetime).replace(' ','T')+'Z');
         if (!Number.isFinite(kt) || kt < s.t - tfm) continue;
         if (s.status === 'WIN') continue;
         if (!s.filled) { if (!(k.low <= s.entry && k.high >= s.entry)) continue; s.filled = true; s.fillT = kt; ch = true; }
@@ -1665,13 +1532,10 @@ async function resolveJournalForChat(env, chatId, klines, symbol, tf) {
 }
 async function runExpiryWatchdog(env) {
   try {
-    var token = env.TG_TOKEN;
-    if (!token) return;
-    var list = await env.KV.list({ prefix: 'journal:' });
-    var now = Date.now();
+    var token = env.TG_TOKEN; if (!token) return;
+    var list = await env.KV.list({ prefix: 'journal:' }), now = Date.now();
     for (var ki = 0; ki < list.keys.length; ki++) {
-      var key = list.keys[ki].name;
-      var chatId = key.replace('journal:', '');
+      var key = list.keys[ki].name, chatId = key.replace('journal:', '');
       var journal = await env.KV.get(key, 'json') || [];
       if (!journal.length) continue;
       var changed = false, unfilled = [], expired = [];
@@ -1689,25 +1553,50 @@ async function runExpiryWatchdog(env) {
     }
   } catch (e) { console.error('runExpiryWatchdog: ' + e.message); }
 }
+async function resolveOpenSignalsCron(env, epochMin) {
+  try {
+    if (epochMin % 2 !== 0) return;
+    var list = await env.KV.list({ prefix: 'journal:' });
+    for (var ki = 0; ki < list.keys.length; ki++) {
+      var chatId = list.keys[ki].name.replace('journal:', '');
+      var j = await env.KV.get(list.keys[ki].name, 'json') || [];
+      var groups = {}, order = [];
+      j.forEach(function(s) {
+        if (s.status === 'OPEN' && s.sym && s.tf) {
+          var g = s.sym + '|' + s.tf;
+          if (!groups[g]) { groups[g] = { sym: s.sym, tf: s.tf }; order.push(g); }
+        }
+      });
+      for (var gi = 0; gi < Math.min(order.length, 3); gi++) {
+        var g = groups[order[gi]];
+        try {
+          var kl = await fetchMarketData(g.sym, g.tf, env, 'auto');
+          kl = dropForming(kl, g.tf);
+          await resolveJournalForChat(env, chatId, kl, g.sym, g.tf);
+          await resolveRejectedSignals(env, chatId, kl, g.sym, g.tf);
+        } catch (e) {}
+      }
+    }
+  } catch (e) { console.error('resolveOpenSignalsCron: ' + e.message); }
+}
 
 // ============================================
-// PROMPTS — ۵۰۰ کلمه مطابق HTML
+// PROMPTS (۵۰۰ کلمه)
 // ============================================
-const JSON_SPEC = "\n\n**JSON انتها (الزامی — حتماً بعد از فرمت متنی):**\n```json\n" +
+const JSON_SPEC = "\n\n**JSON انتها (الزامی):**\n```json\n" +
 '{"direction":"BUY|SELL|WAIT","regime":"TRENDING_UP|TRENDING_DOWN|RANGING|TRANSITIONAL","confidence":0,"entry":0,"stopLoss":0,"tp1":0,"tp2":0,"tp3":0,"rr":"1:2.5","confluenceScore":0,"scores":{"structure":0,"smc":0,"ict":0,"candle":0,"liquidity":0,"riskReward":0}}\n' +
 "```";
 
 const SYSTEM_PROMPT = "شما یک تحلیل‌گر ارشد بازارهای مالی با ۱۵ سال تجربه در SMC، ICT و پرایس اکشن هستید.\n\n" +
-"**روش کار**\n۱. استخراج داده خام\n۲. تشخیص رژیم بازار\n۳. شناسایی BOS، CHoCH\n۴. کشف Order Blocks و FVG\n۵. الگوهای کندلی\n۶. امتیازدهی ۶ لایه\n۷. تصمیم نهایی\n\n" +
-"**در انتهای پاسخ دقیقاً این فرمت متنی:**\n---\nDirection: [BUY/SELL/WAIT]\nRegime: [TRENDING_UP/TRENDING_DOWN/RANGING/TRANSITIONAL]\nConfidenceScore: [0-100]\nEntry: [عدد یا N/A]\nStop Loss: [عدد یا N/A]\nTP1: [عدد یا N/A]\nTP2: [عدد یا N/A]\nTP3: [عدد یا N/A]\nR/R: [نسبت یا N/A]\n---\n\n" +
-"**قوانین:**\n1. اگر Confidence < 65 → WAIT\n2. حد ضرر ساختاری\n3. در BUY، SL زیر Entry · در SELL، SL بالای Entry\n4. R/R با محاسبه واقعی\n5. تحلیل کامل ۵۰۰ کلمه بنویس با ذکر جزئیات هر لایه" + JSON_SPEC;
+"**روش کار**\n۱. استخراج داده\n۲. تشخیص رژیم\n۳. BOS/CHoCH\n۴. OB/FVG\n۵. کندلی\n۶. امتیازدهی ۶ لایه\n۷. تصمیم\n\n" +
+"**فرمت متنی:**\n---\nDirection: [BUY/SELL/WAIT]\nRegime: [TRENDING_UP/TRENDING_DOWN/RANGING/TRANSITIONAL]\nConfidenceScore: [0-100]\nEntry: [عدد یا N/A]\nStop Loss: [عدد یا N/A]\nTP1: [عدد یا N/A]\nTP2: [عدد یا N/A]\nTP3: [عدد یا N/A]\nR/R: [نسبت یا N/A]\n---\n\n" +
+"**قوانین:** Conf<65→WAIT · SL ساختاری · BUY:SL<Entry · SELL:SL>Entry · R/R واقعی · تحلیل ۵۰۰ کلمه" + JSON_SPEC;
 
-const MULTI_TF_PROMPT = "شما یک تحلیل‌گر ارشد MTF هستید.\n\n" +
-"**MTF:**\n🎯 HTF (4H): روند اصلی\n🔍 MTF (1H): تأیید\n📊 LTF (15M): ستاپ\n⏱️ EntryTF (1M): تایمینگ\n\n" +
-"**فرمت متنی:**\n---\nDirection: [BUY/SELL/WAIT]\nConfluenceScore: [0-10]\nHTF4H: [BULLISH/BEARISH/RANGING]\nMTF1H: [BULLISH/BEARISH/RANGING]\nLTF15M: [BULLISH/BEARISH/RANGING]\nEntryTF1M: [BULLISH/BEARISH/RANGING]\nConfidenceScore: [0-100]\nEntry: [عدد یا N/A]\nStop Loss: [عدد یا N/A]\nTP1: [عدد یا N/A]\nTP2: [عدد یا N/A]\nTP3: [عدد یا N/A]\nR/R: [نسبت یا N/A]\n---\n\n**تحلیل ۵۰۰ کلمه با شرح هر TF.**" + JSON_SPEC;
+const MULTI_TF_PROMPT = "شما تحلیل‌گر MTF هستید.\n\n🎯 HTF (4H)\n🔍 MTF (1H)\n📊 LTF (15M)\n⏱️ Entry (1M)\n\n" +
+"**فرمت:**\n---\nDirection: [BUY/SELL/WAIT]\nConfluenceScore: [0-10]\nHTF4H: [BULLISH/BEARISH/RANGING]\nMTF1H: [BULLISH/BEARISH/RANGING]\nLTF15M: [BULLISH/BEARISH/RANGING]\nEntryTF1M: [BULLISH/BEARISH/RANGING]\nConfidenceScore: [0-100]\nEntry: [عدد یا N/A]\nStop Loss: [عدد یا N/A]\nTP1: [عدد یا N/A]\nTP2: [عدد یا N/A]\nTP3: [عدد یا N/A]\nR/R: [نسبت یا N/A]\n---\n\nتحلیل ۵۰۰ کلمه." + JSON_SPEC;
 
-const IMAGE_PROMPT = "شما یک تحلیل‌گر ارشد هستید.\n\n**تحلیل چارت ۵۰۰ کلمه**\n\n" +
-"**فرمت متنی:**\n---\nDirection: [BUY/SELL/WAIT]\nSymbol: [نماد یا UNKNOWN]\nTimeframe: [TF یا UNKNOWN]\nRegime: [...]\nConfidenceScore: [0-100]\nEntry: [عدد یا N/A]\nStop Loss: [عدد یا N/A]\nTP1: [عدد یا N/A]\nTP2: [عدد یا N/A]\nTP3: [عدد یا N/A]\nR/R: [نسبت یا N/A]\n---" + JSON_SPEC;
+const IMAGE_PROMPT = "شما تحلیل‌گر ارشد هستید. **تحلیل چارت ۵۰۰ کلمه**\n\n" +
+"**فرمت:**\n---\nDirection: [BUY/SELL/WAIT]\nSymbol: [UNKNOWN]\nTimeframe: [UNKNOWN]\nRegime: [...]\nConfidenceScore: [0-100]\nEntry: [N/A]\nStop Loss: [N/A]\nTP1: [N/A]\nTP2: [N/A]\nTP3: [N/A]\nR/R: [N/A]\n---" + JSON_SPEC;
 
 const CRYPTO_NOTE = "\n\n**🪙 کریپتو:** بازار ۲۴/۷. ساعات لیکویید بالا (US/EU) بهترین فرصت";
 function buildPromptForMode(basePrompt, mode) { return basePrompt; }
@@ -1776,9 +1665,10 @@ async function downloadTelegramPhoto(token, fileId) {
 function mainMenu() {
   return { inline_keyboard: [
     [{ text: '📊 تحلیل جدید', callback_data: 'menu_analyze' }, { text: '🎯 MTF', callback_data: 'menu_mtf' }],
-    [{ text: '🤖 مانیتور خودکار', callback_data: 'menu_monitor' }, { text: '📸 تحلیل تصویر', callback_data: 'menu_image' }],
+    [{ text: '🤖 مانیتور', callback_data: 'menu_monitor' }, { text: '📸 تحلیل تصویر', callback_data: 'menu_image' }],
     [{ text: '📓 ژورنال', callback_data: 'menu_journal' }, { text: '🔔 هشدارها', callback_data: 'menu_watch' }],
     [{ text: '⚙️ تنظیمات', callback_data: 'menu_settings' }, { text: '📈 وضعیت', callback_data: 'menu_status' }],
+    [{ text: '🧪 تست مدل', callback_data: 'menu_modeltest' }],
     [{ text: '📖 راهنما', callback_data: 'menu_help' }]
   ]};
 }
@@ -1789,20 +1679,20 @@ function symbolMenu() {
     [{ text: '₿ BTC/USD', callback_data: 'sym_BTCUSD' }, { text: 'Ξ ETH/USD', callback_data: 'sym_ETHUSD' }],
     [{ text: '◎ SOL/USD', callback_data: 'sym_SOLUSD' }, { text: '🟡 BNB/USD', callback_data: 'sym_BNBUSD' }],
     [{ text: '✏️ نماد دیگر', callback_data: 'sym_custom' }],
-    [{ text: '🏠 منوی اصلی', callback_data: 'menu_main' }]
+    [{ text: '🏠', callback_data: 'menu_main' }]
   ]};
 }
 function timeframeMenu(sr) {
   return { inline_keyboard: [
     [{ text: '🎯 MTF', callback_data: 'mtf_' + sr }],
-    [{ text: '⏱️ 1 دقیقه', callback_data: 'tf_' + sr + '_1min' }, { text: '⏱️ 3 دقیقه', callback_data: 'tf_' + sr + '_3min' }],
-    [{ text: '⏱️ 5 دقیقه', callback_data: 'tf_' + sr + '_5min' }, { text: '⏱️ 15 دقیقه', callback_data: 'tf_' + sr + '_15min' }],
-    [{ text: '🕐 1 ساعت', callback_data: 'tf_' + sr + '_1h' }, { text: '📅 4 ساعت', callback_data: 'tf_' + sr + '_4h' }],
-    [{ text: '◀️ بازگشت', callback_data: 'menu_analyze' }]
+    [{ text: '⏱️ 1m', callback_data: 'tf_' + sr + '_1min' }, { text: '⏱️ 3m', callback_data: 'tf_' + sr + '_3min' }],
+    [{ text: '⏱️ 5m', callback_data: 'tf_' + sr + '_5min' }, { text: '⏱️ 15m', callback_data: 'tf_' + sr + '_15min' }],
+    [{ text: '🕐 1h', callback_data: 'tf_' + sr + '_1h' }, { text: '📅 4h', callback_data: 'tf_' + sr + '_4h' }],
+    [{ text: '◀️', callback_data: 'menu_analyze' }]
   ]};
 }
 function providerMenu(list, sr, tf, isMTF) {
-  var b = []; var row = [];
+  var b = [], row = [];
   for (var i = 0; i < list.length; i++) {
     var p = list[i];
     var ic = { customvision:'⭐',gemini:'🌟',aiprime:'🅰️',groq:'⚡',openrouter:'🔀',mistral:'🌬️',github:'🐙',together:'🤝',gapgpt:'💎',huggingface:'🤗',cloudflare:'☁️',nvidia:'🟢',llm7:'🎁',avalai:'🇮🇷',metis:'🇮🇷',onexai:'🇮🇷' }[p] || '🤖';
@@ -1810,7 +1700,7 @@ function providerMenu(list, sr, tf, isMTF) {
     if (row.length === 2) { b.push(row); row = []; }
   }
   if (row.length) b.push(row);
-  b.push([{ text: '◀️ بازگشت', callback_data: isMTF ? 'menu_main' : 'menu_analyze' }]);
+  b.push([{ text: '◀️', callback_data: isMTF ? 'menu_main' : 'menu_analyze' }]);
   return { inline_keyboard: b };
 }
 function journalMenu() { return { inline_keyboard: [
@@ -1920,14 +1810,15 @@ function monitorDataMenu(sym, tf, ai) {
 // ============================================
 // VIEW FUNCTIONS
 // ============================================
+function TIER_ICON(t) { return t === 'premium' ? '💎' : t === 'deepseek' ? '🧠' : '🚀'; }
 async function showMainMenu(token, chatId, mid, env) {
   var fbMode = env ? await getFallbackMode(env, chatId) : 'strict';
   var fb = FALLBACK_MODES[fbMode];
   await sendOrEdit(token, chatId, mid,
-    '🎯 <b>Everest v8.2.10</b>\n\n' +
-    '📊 مدل‌های واقعی (claude-sonnet-5.5، deepseek-v3.2)\n' +
-    '⏱️ تحلیل ۵۰۰ کلمه\n' +
-    '📌 نمایش مدل واقعی در هر پاسخ\n' +
+    '🎯 <b>Everest v8.3.5</b>\n\n' +
+    '📊 صف مدل‌های قوی\n' +
+    '🧪 /modeltest برای تست مدل‌ها\n' +
+    '📌 نمایش مدل واقعی در همه پاسخ‌ها\n' +
     '🔻 <b>Fallback:</b> ' + fb.icon + ' ' + fb.label + '\n\n' +
     'از منو انتخاب کنید:', mainMenu());
 }
@@ -1938,11 +1829,9 @@ async function showTimeframeMenu(token, chatId, mid, sr) {
 }
 async function showProviderMenu(token, chatId, mid, symbolRaw, timeframe, isMTF, env) {
   try {
-    console.log('[showProviderMenu] START sr=' + symbolRaw + ' tf=' + timeframe + ' isMTF=' + isMTF + ' mid=' + mid);
+    console.log('[showProviderMenu] START sr=' + symbolRaw + ' tf=' + timeframe + ' mid=' + mid);
     var available = getAvailableProviders(env);
-    console.log('[showProviderMenu] available=[' + available.join(',') + ']');
     if (!available.length) {
-      console.log('[showProviderMenu] NO PROVIDERS');
       await sendOrEdit(token, chatId, mid, '❌ هیچ سرویس AI فعالی نیست', { inline_keyboard: [[{ text: '🏠', callback_data: 'menu_main' }]] });
       return;
     }
@@ -1950,14 +1839,11 @@ async function showProviderMenu(token, chatId, mid, symbolRaw, timeframe, isMTF,
     var tfDisplay = isMTF ? 'MTF' : timeframeLabel(timeframe);
     var strict = await getStrictness(env, chatId);
     var kzMode = await getKzMode(env, chatId);
-    console.log('[showProviderMenu] strict=' + strict + ' kz=' + kzMode);
     var text = '<b>🎯 انتخاب سرویس</b>\n\n<b>نماد:</b> ' + esc(symbolDisplay) + '\n<b>روش:</b> ' + tfDisplay + '\n<b>نوع:</b> ' + STRICTNESS_MODES[strict].icon + '\n<b>KZ:</b> ' + KZ_MODES[kzMode].icon + '\n\n<i>کدوم سرویس؟</i>';
-    var kb = providerMenu(available, symbolRaw, timeframe, isMTF);
-    console.log('[showProviderMenu] SENDING textLen=' + text.length + ' btns=' + kb.inline_keyboard.length);
-    var result = await sendOrEdit(token, chatId, mid, text, kb);
-    console.log('[showProviderMenu] RESULT ok=' + (result && result.ok) + ' desc=' + (result && result.description ? result.description.slice(0, 100) : 'none'));
+    var result = await sendOrEdit(token, chatId, mid, text, providerMenu(available, symbolRaw, timeframe, isMTF));
+    console.log('[showProviderMenu] RESULT ok=' + (result && result.ok));
   } catch (e) {
-    console.error('[showProviderMenu] FATAL: ' + e.message + '\n' + (e.stack || ''));
+    console.error('[showProviderMenu] FATAL: ' + e.message);
     try { await sendMessage(token, chatId, '❌ Menu error: ' + e.message); } catch (x) {}
   }
 }
@@ -1970,18 +1856,15 @@ async function showSettingsMenu(token, chatId, mid, env) {
   var fb = FALLBACK_MODES[fbMode];
   var aT = await getUserModelTier(env, chatId, 'aiprime');
   var gT = await getUserModelTier(env, chatId, 'gapgpt');
-  var aL = TIER_ICON(aT), gL = TIER_ICON(gT);
   var aSaved = await getWorkingModel(env, chatId, 'aiprime', aT);
-  var aStatus = aSaved ? '✅ ' + esc(aSaved) : '⏳ (تأیید نشده)';
-  var text = '⚙️ <b>تنظیمات v8.2.10</b>\n\n' +
+  var text = '⚙️ <b>تنظیمات v8.3.5</b>\n\n' +
     '<b>🎚️ نوع:</b> ' + STRICTNESS_MODES[st].icon + ' ' + STRICTNESS_MODES[st].label + '\n' +
     '<b>KZ:</b> ' + KZ_MODES[kz].icon + ' ' + KZ_MODES[kz].label + '\n' +
     '<b>🎯 حالت:</b> ' + MODE_CONFIG[um].icon + ' ' + MODE_CONFIG[um].label + '\n' +
-    '<b>🔍 فیلتر محلی:</b> ' + (lf === 'on' ? '✅' : '❌') + '\n' +
-    '<b>مدل AIPrime:</b> ' + aL + ' · ' + aStatus + '\n' +
-    '<b>مدل GapGPT:</b> ' + gL + '\n\n' +
-    '🔻 <b>Fallback:</b> ' + fb.icon + ' ' + fb.label + '\n' +
-    '<i>' + esc(fb.desc) + '</i>';
+    '<b>🔍 فیلتر:</b> ' + (lf === 'on' ? '✅' : '❌') + '\n' +
+    '<b>مدل AIPrime:</b> ' + TIER_ICON(aT) + ' ' + (aSaved ? '✅ ' + esc(aSaved) : '⏳') + '\n' +
+    '<b>مدل GapGPT:</b> ' + TIER_ICON(gT) + '\n\n' +
+    '🔻 <b>Fallback:</b> ' + fb.icon + ' ' + fb.label;
   await sendOrEdit(token, chatId, mid, text, {
     inline_keyboard: [
       [{ text: '🔻 Fallback', callback_data: 'settings_fallback' }],
@@ -1989,42 +1872,36 @@ async function showSettingsMenu(token, chatId, mid, env) {
       [{ text: '🎚️ نوع تحلیل', callback_data: 'settings_strict' }],
       [{ text: '⚙️ KZ Mode', callback_data: 'settings_kz' }],
       [{ text: '🎯 حالت', callback_data: 'settings_mode' }],
-      [{ text: '🔍 فیلتر محلی', callback_data: 'settings_localfilter' }],
+      [{ text: '🔍 فیلتر', callback_data: 'settings_localfilter' }],
       [{ text: '🏠', callback_data: 'menu_main' }]
     ]
   });
 }
-function TIER_ICON(t) { return t === 'premium' ? '💎' : t === 'deepseek' ? '🧠' : '🚀'; }
 async function showStatus(token, chatId, mid, env) {
   var all = ['gemini','aiprime','groq','github','together','gapgpt','openrouter','mistral','huggingface','cloudflare','nvidia','llm7','avalai','metis','onexai'];
-  var text = '📈 <b>وضعیت v8.2.10</b>\n\n<b>🔑 کلیدها:</b>\n';
-  var active = 0;
-    // 🔑 دیباگ کلیدها
-  text += '\n<b>🔍 دیباگ کلید (اول ۴ + آخر ۴ کاراکتر):</b>\n';
-  var debugProviders = ['aiprime', 'gapgpt', 'groq', 'openrouter', 'mistral', 'gemini'];
+  var text = '📈 <b>وضعیت v8.3.5</b>\n\n';
+  text += '<b>🔍 دیباگ کلید:</b>\n';
+  var debugProviders = ['aiprime', 'gapgpt', 'groq', 'openrouter'];
   for (var dpi = 0; dpi < debugProviders.length; dpi++) {
     var dpp = debugProviders[dpi];
     var rawKey = env[dpp === 'aiprime' ? 'AIPRIME_KEY' : dpp === 'gapgpt' ? 'GAPGPT_KEY' : dpp.toUpperCase() + '_KEY'] || '';
     var cleanKey = getKey(env, dpp);
-    if (!rawKey) {
-      text += '❌ ' + dpp + ': تعریف نشده\n';
-    } else {
+    if (!rawKey) text += '❌ ' + dpp + ': تعریف نشده\n';
+    else {
       var diff = rawKey.length - cleanKey.length;
-      var warn = diff > 0 ? ' ⚠️' + diff + ' فاصله/کاراکتر اضافه' : ' ✅';
-      text += '🔑 ' + dpp + ': len=' + cleanKey.length + ' ' +
-              (cleanKey.length > 8 ? cleanKey.slice(0, 4) + '…' + cleanKey.slice(-4) : '?') + warn + '\n';
+      var warn = diff > 0 ? ' ⚠️' + diff + ' اضافه' : ' ✅';
+      text += '🔑 ' + dpp + ': len=' + cleanKey.length + ' ' + (cleanKey.length > 8 ? cleanKey.slice(0, 4) + '…' + cleanKey.slice(-4) : '?') + warn + '\n';
     }
   }
-  text += '\n';
+  text += '\n<b>🔑 کلیدها:</b>\n';
+  var active = 0;
   for (var i = 0; i < all.length; i++) {
     var p = all[i];
     var hasKey = (p === 'gemini') ? getGeminiKeys(env).length > 0 : (p === 'llm7') ? true : !!getKey(env, p);
     if (hasKey) active++;
     text += (hasKey ? '✅' : '❌') + ' ' + PROVIDER_NAMES[p] + '\n';
   }
-  text += '\n🎯 ' + active + '/' + all.length + ' فعال\n';
-  text += '📊 Twelve: ' + (env.TWELVE_KEY ? '✅' : '❌') + '\n';
-  text += '💾 KV: ' + (env.KV ? '✅' : '❌') + '\n\n';
+  text += '\n🎯 ' + active + '/' + all.length + '\n📊 Twelve: ' + (env.TWELVE_KEY ? '✅' : '❌') + '\n💾 KV: ' + (env.KV ? '✅' : '❌') + '\n\n';
 
   text += '<b>🤖 مدل‌های فعال (saved):</b>\n';
   for (var prov of ['aiprime', 'gapgpt']) {
@@ -2032,32 +1909,38 @@ async function showStatus(token, chatId, mid, env) {
     text += '<b>' + PROVIDER_NAMES[prov] + ':</b>\n';
     for (var t of ['fast', 'deepseek', 'premium']) {
       var saved = await getWorkingModel(env, chatId, prov, t);
-      var lbl = t === 'fast' ? '🚀' : t === 'deepseek' ? '🧠' : '💎';
-      text += '  ' + lbl + ' ' + t + ': ' + (saved ? '✅ <code>' + esc(saved) + '</code>' : '⏳ (اولین استفاده)') + '\n';
+      text += '  ' + TIER_ICON(t) + ' ' + t + ': ' + (saved ? '✅ <code>' + esc(saved) + '</code>' : '⏳') + '\n';
     }
+    var bad = await getBadModels(env, chatId, prov);
+    var badCount = Object.keys(bad).filter(function(k) { return Date.now() - bad[k] < 3*3600*1000; }).length;
+    if (badCount) text += '  ⚠️ ' + badCount + ' مدل bad (۳ ساعت)\n';
   }
-
   var discoveredA = await getDiscoveredModels(env, chatId, 'aiprime');
-  if (discoveredA) text += '\n📡 Discovery AIPrime: ' + discoveredA.length + ' مدل\n';
-
-  var fbMode = await getFallbackMode(env, chatId);
-  text += '\n🔻 Fallback: ' + FALLBACK_MODES[fbMode].icon + ' ' + FALLBACK_MODES[fbMode].label;
-
-  await sendOrEdit(token, chatId, mid, text, { inline_keyboard: [[{ text: '🏠', callback_data: 'menu_main' }]] });
+  if (discoveredA) text += '\n📡 Discovery: ' + discoveredA.length + ' مدل\n';
+  await sendOrEdit(token, chatId, mid, text, { inline_keyboard: [[{ text: '🧪 تست کامل', callback_data: 'menu_modeltest' }], [{ text: '🏠', callback_data: 'menu_main' }]] });
 }
 async function showHelp(token, chatId, mid) {
   await sendOrEdit(token, chatId, mid,
-    '📖 <b>راهنما v8.2.10</b>\n\n' +
+    '📖 <b>راهنما v8.3.5</b>\n\n' +
     '📊 <b>مدل‌ها:</b>\n' +
-    '• 🚀 سریع: gpt-4o-mini (پایدار)\n' +
-    '• 🧠 DeepSeek: deepseek-v3.2 (تحلیل عمیق)\n' +
-    '• 💎 Claude: claude-sonnet-5.5 (بهترین کیفیت)\n\n' +
-    '🔻 <b>Fallback:</b>\n' +
-    '• 🔴 سختگیر: اگر مدل نیست، سیگنال نمی‌دهد (پیش‌فرض)\n' +
-    '• 🟡 با هشدار: از gpt-4o-mini استفاده می‌کند ولی هشدار می‌دهد\n\n' +
-    '📌 <b>مدل واقعی</b> در هر پاسخ و در <code>/status</code> نمایش داده می‌شود.\n\n' +
-    '<b>دستورات:</b>\n/menu /analyze /monitor /journal /status',
+    '• 🚀 سریع: gpt-4o-mini\n' +
+    '• 🧠 DeepSeek: تحلیل عمیق (صف)\n' +
+    '• 💎 Claude: بهترین کیفیت (صف)\n\n' +
+    '⏳ <b>مدل‌های قوی</b> در صف پردازش می‌شوند (۱-۳ دقیقه).\n\n' +
+    '🧪 <b>/modeltest:</b> تست کامل تمام مدل‌ها\n' +
+    '🔻 <b>Fallback:</b> سختگیر یا با هشدار\n\n' +
+    '<b>دستورات:</b>\n/menu /analyze /monitor /journal /status /modeltest',
     { inline_keyboard: [[{ text: '🏠', callback_data: 'menu_main' }]] });
+}
+async function showFallbackMenu(token, chatId, mid, env) {
+  var cur = await getFallbackMode(env, chatId);
+  var fb = FALLBACK_MODES[cur];
+  await sendOrEdit(token, chatId, mid,
+    '🔻 <b>Fallback</b>\n\n' +
+    '🔴 <b>سختگیر (پیش‌فرض):</b>\nاگر مدل شکست خورد، سیگنال نمی‌دهد\n\n' +
+    '🟡 <b>اجازه با هشدار:</b>\nاز gpt-4o-mini با هشدار استفاده می‌کند\n\n' +
+    '📌 <b>فعلی:</b> ' + fb.icon + ' ' + fb.label,
+    fallbackMenu(cur));
 }
 async function showJournalMenu(token, chatId, mid, env) {
   var j = await getJournal(env, chatId) || [];
@@ -2068,46 +1951,6 @@ async function showJournalMenu(token, chatId, mid, env) {
     t += '📈 ' + j.length + '\n✅ ' + w + ' · ❌ ' + l + ' · ⏳ ' + op;
   } else t += '<i>خالی</i>';
   await sendOrEdit(token, chatId, mid, t, journalMenu());
-}
-async function showMonitorMenu(token, chatId, mid, env) {
-  var list = await getMonitors(env, chatId);
-  var t = '🤖 <b>مانیتور</b>\n\n';
-  if (list.length) { t += '📋 ' + list.length + ':\n'; for (var i = 0; i < list.length; i++) t += (list[i].active ? '🟢' : '⏸️') + ' #' + (i + 1) + ' ' + list[i].symbol + ' ' + timeframeLabel(list[i].timeframe) + '\n'; }
-  else t += '<i>غیرفعال</i>';
-  await sendOrEdit(token, chatId, mid, t, monitorMenu());
-}
-async function showMonitorList(token, chatId, mid, env) {
-  var list = await getMonitors(env, chatId);
-  if (!list.length) { await sendOrEdit(token, chatId, mid, '📋 خالی', { inline_keyboard: [[{ text: '◀️', callback_data: 'menu_monitor' }]] }); return; }
-  var b = list.map(function(m, i) { return [{ text: (m.active ? '🟢' : '⏸️') + ' #' + (i + 1) + ' ' + m.symbol + ' ' + timeframeLabel(m.timeframe), callback_data: 'mon_view_' + i }]; });
-  b.push([{ text: '◀️', callback_data: 'menu_monitor' }]);
-  await sendOrEdit(token, chatId, mid, '📋 <b>مانیتورها</b>', { inline_keyboard: b });
-}
-async function showMonitorView(token, chatId, mid, env, idx) {
-  var list = await getMonitors(env, chatId);
-  if (!list[idx]) { await sendOrEdit(token, chatId, mid, '❌', { inline_keyboard: [[{ text: '◀️', callback_data: 'mon_list' }]] }); return; }
-  var m = list[idx];
-  var t = '🤖 <b>#' + (idx + 1) + '</b>\n\n<b>نماد:</b> ' + m.symbol + '\n<b>TF:</b> ' + timeframeLabel(m.timeframe) + '\n<b>AI:</b> ' + (m.aiProvider === 'auto' ? '🤖' : (PROVIDER_NAMES[m.aiProvider] || m.aiProvider)) + '\n<b>وضعیت:</b> ' + (m.active ? '🟢' : '⏸️') + '\n\n📊 کل: ' + (m.signalCount || 0) + '\n';
-  if (m.skippedCount) t += '• skip: ' + m.skippedCount + '\n';
-  if (m.lastError) t += '\n⚠️ <code>' + esc(m.lastError) + '</code>';
-  await sendOrEdit(token, chatId, mid, t, { inline_keyboard: [
-    [{ text: m.active ? '⏸️ توقف' : '▶️ شروع', callback_data: 'mon_toggle_' + idx }],
-    [{ text: '🔄 restart', callback_data: 'mon_restart_' + idx }],
-    [{ text: '🗑️ حذف', callback_data: 'mon_del_' + idx }],
-    [{ text: '◀️', callback_data: 'mon_list' }]
-  ]});
-}
-async function showFallbackMenu(token, chatId, mid, env) {
-  var cur = await getFallbackMode(env, chatId);
-  var fb = FALLBACK_MODES[cur];
-  await sendOrEdit(token, chatId, mid,
-    '🔻 <b>Fallback</b>\n\nوقتی مدل انتخابی در دسترس نیست چه شود؟\n\n' +
-    '🔴 <b>سختگیر (پیش‌فرض):</b>\n' +
-    'سیگنال نمی‌دهد + پیام خطا با مدل‌های تلاش‌شده\n\n' +
-    '🟡 <b>اجازه با هشدار:</b>\n' +
-    'از gpt-4o-mini استفاده می‌کند ولی هشدار قرمز بالای پاسخ\n\n' +
-    '📌 <b>فعلی:</b> ' + fb.icon + ' ' + fb.label,
-    fallbackMenu(cur));
 }
 async function showJournalList(token, chatId, env) {
   var j = await getJournal(env, chatId) || [];
@@ -2135,21 +1978,19 @@ async function showJournalStats(token, chatId, env) {
     else if (x.status === 'UNFILLED') uf++;
     else ex++;
   }
-  var cl = w + l;
-  var wr = cl ? Math.round(w / cl * 100) : 0;
+  var cl = w + l, wr = cl ? Math.round(w/cl*100) : 0;
   await sendMessage(token, chatId, '<b>📊 آمار</b>\n\n📈 ' + j.length + '\n✅ ' + w + ' · ❌ ' + l + ' · ⏳ ' + op + '\n🚫 ' + uf + ' · ⌛ ' + ex + '\n\n🎯 WR: <b>' + wr + '%</b>\n⚖️ R: <b>' + rSum.toFixed(2) + '</b>', { inline_keyboard: [[{ text: '◀️', callback_data: 'menu_journal' }]] });
 }
 async function showJournalDaily(token, chatId, env) {
   var j = await getJournal(env, chatId) || [];
-  var today = new Date(Date.now() + 3.5 * 3600 * 1000).toISOString().slice(0, 10);
+  var today = new Date(Date.now()+3.5*3600*1000).toISOString().slice(0,10);
   var day = j.filter(function(s) { return s.day === today; });
   if (!day.length) { await sendMessage(token, chatId, '📅 امروز خالی', { inline_keyboard: [[{ text: '◀️', callback_data: 'menu_journal' }]] }); return; }
   var w = day.filter(function(s) { return s.status === 'WIN'; }).length;
   var l = day.filter(function(s) { return s.status === 'LOSS'; }).length;
   var rSum = 0;
   day.forEach(function(s) { if (s.status === 'WIN') rSum += (s.rr || 0); else if (s.status === 'LOSS') rSum -= 1; });
-  var cl = w + l;
-  var wr = cl ? Math.round(w / cl * 100) : 0;
+  var cl = w + l, wr = cl ? Math.round(w/cl*100) : 0;
   await sendMessage(token, chatId, '<b>📅 امروز ' + today + '</b>\n\n📈 ' + day.length + '\n✅ ' + w + ' · ❌ ' + l + '\n\n🎯 WR: ' + wr + '%\n⚖️ R: ' + rSum.toFixed(2), { inline_keyboard: [[{ text: '◀️', callback_data: 'menu_journal' }]] });
 }
 async function showOpportunityReport(token, chatId, env) {
@@ -2159,7 +2000,7 @@ async function showOpportunityReport(token, chatId, env) {
   var rw = rc.filter(function(s) { return s.status === 'WIN'; }).length;
   var ac = all.filter(function(s) { return s.status === 'WIN' || s.status === 'LOSS'; });
   var aw = ac.filter(function(s) { return s.status === 'WIN'; }).length;
-  await sendMessage(token, chatId, '🔬 <b>فرصت‌سنج</b>\n\n✅ Accepted: ' + ac.length + ' (WR ' + (ac.length ? Math.round(aw / ac.length * 100) : 0) + '%)\n🚫 Rejected: ' + rc.length + ' (WR ' + (rc.length ? Math.round(rw / rc.length * 100) : 0) + '%)', { inline_keyboard: [[{ text: '◀️', callback_data: 'menu_journal' }]] });
+  await sendMessage(token, chatId, '🔬 <b>فرصت‌سنج</b>\n\n✅ Accepted: ' + ac.length + ' (WR ' + (ac.length ? Math.round(aw/ac.length*100) : 0) + '%)\n🚫 Rejected: ' + rc.length + ' (WR ' + (rc.length ? Math.round(rw/rc.length*100) : 0) + '%)', { inline_keyboard: [[{ text: '◀️', callback_data: 'menu_journal' }]] });
 }
 async function showWatchMenu(token, chatId, mid, env) {
   var l = await getWatchlist(env, chatId);
@@ -2172,90 +2013,143 @@ async function showWatchList(token, chatId, env) {
   for (var i = 0; i < l.length; i++) t += '#' + l[i].id + ' ' + esc(l[i].symbol) + ' ' + (l[i].condition === 'above' ? '⬆️' : '⬇️') + ' ' + esc(l[i].price) + '\n';
   await sendMessage(token, chatId, t, { inline_keyboard: [[{ text: '◀️', callback_data: 'menu_watch' }]] });
 }
-async function showImageGuide(token, chatId, mid) {
-  await sendOrEdit(token, chatId, mid, '📸 عکس چارت بفرستید!\n⭐ Gemini → GapGPT → AIPrime', { inline_keyboard: [[{ text: '🏠', callback_data: 'menu_main' }]] });
+async function showMonitorMenu(token, chatId, mid, env) {
+  var list = await getMonitors(env, chatId);
+  var t = '🤖 <b>مانیتور</b>\n\n';
+  if (list.length) { t += '📋 ' + list.length + ':\n'; for (var i = 0; i < list.length; i++) t += (list[i].active ? '🟢' : '⏸️') + ' #' + (i+1) + ' ' + list[i].symbol + ' ' + timeframeLabel(list[i].timeframe) + '\n'; }
+  else t += '<i>غیرفعال</i>';
+  await sendOrEdit(token, chatId, mid, t, monitorMenu());
+}
+async function showMonitorList(token, chatId, mid, env) {
+  var list = await getMonitors(env, chatId);
+  if (!list.length) { await sendOrEdit(token, chatId, mid, '📋 خالی', { inline_keyboard: [[{ text: '◀️', callback_data: 'menu_monitor' }]] }); return; }
+  var b = list.map(function(m, i) { return [{ text: (m.active ? '🟢' : '⏸️') + ' #' + (i+1) + ' ' + m.symbol + ' ' + timeframeLabel(m.timeframe), callback_data: 'mon_view_' + i }]; });
+  b.push([{ text: '◀️', callback_data: 'menu_monitor' }]);
+  await sendOrEdit(token, chatId, mid, '📋 <b>مانیتورها</b>', { inline_keyboard: b });
+}
+async function showMonitorView(token, chatId, mid, env, idx) {
+  var list = await getMonitors(env, chatId);
+  if (!list[idx]) { await sendOrEdit(token, chatId, mid, '❌', { inline_keyboard: [[{ text: '◀️', callback_data: 'mon_list' }]] }); return; }
+  var m = list[idx];
+  var t = '🤖 <b>#' + (idx+1) + '</b>\n\n<b>نماد:</b> ' + m.symbol + '\n<b>TF:</b> ' + timeframeLabel(m.timeframe) + '\n<b>AI:</b> ' + (m.aiProvider === 'auto' ? '🤖' : (PROVIDER_NAMES[m.aiProvider] || m.aiProvider)) + '\n<b>وضعیت:</b> ' + (m.active ? '🟢' : '⏸️') + '\n\n📊 کل: ' + (m.signalCount || 0) + '\n';
+  if (m.skippedCount) t += '• skip: ' + m.skippedCount + '\n';
+  if (m.lastError) t += '\n⚠️ <code>' + esc(m.lastError) + '</code>';
+  await sendOrEdit(token, chatId, mid, t, { inline_keyboard: [
+    [{ text: m.active ? '⏸️ توقف' : '▶️ شروع', callback_data: 'mon_toggle_' + idx }],
+    [{ text: '🔄 restart', callback_data: 'mon_restart_' + idx }],
+    [{ text: '🗑️ حذف', callback_data: 'mon_del_' + idx }],
+    [{ text: '◀️', callback_data: 'mon_list' }]
+  ]});
 }
 async function showMonitorHelp(token, chatId, mid) {
-  await sendOrEdit(token, chatId, mid, '📖 <b>مانیتور</b>\n\n🆕 MSS dedupe + Fallback policy', { inline_keyboard: [[{ text: '◀️', callback_data: 'menu_monitor' }]] });
+  await sendOrEdit(token, chatId, mid, '📖 <b>مانیتور</b>\n\n🆕 MSS dedupe + Fallback + concurrency 2', { inline_keyboard: [[{ text: '◀️', callback_data: 'menu_monitor' }]] });
+}
+async function showImageGuide(token, chatId, mid) {
+  await sendOrEdit(token, chatId, mid, '📸 عکس چارت بفرستید!', { inline_keyboard: [[{ text: '🏠', callback_data: 'menu_main' }]] });
 }
 
 // ============================================
-// ANALYSIS RUNNERS
+// ANALYSIS RUNNERS (with job queue)
 // ============================================
-async function handleAIError(token, chatId, err) {
-  var msg = (err && err.message) || String(err);
-  console.error('[AI ERROR] ' + msg);
-
-  // 🔑 خطای احراز هویت — پیام شفاف
-  if (/auth \(401\/403\)/i.test(msg)) {
-    var provMatch = msg.match(/(gapgpt|aiprime|groq|gemini|openrouter|mistral|github|together|huggingface|cloudflare|nvidia|llm7|avalai|metis|onexai)\s*:/i);
-    var prov = provMatch ? provMatch[1].toLowerCase() : '?';
-    var provLabel = {
-      gapgpt: '💎 GapGPT', aiprime: '🅰️ AIPrime', groq: '⚡ Groq',
-      gemini: '🌟 Gemini', openrouter: '🔀 OpenRouter', mistral: '🌬️ Mistral',
-      github: '🐙 GitHub', together: '🤝 Together', huggingface: '🤗 HuggingFace',
-      cloudflare: '☁️ Cloudflare', nvidia: '🟢 NVIDIA', llm7: '🎁 LLM7',
-      avalai: '🇮🇷 AvalAI', metis: '🇮🇷 Metis', onexai: '🇮🇷 1xAi'
-    }[prov] || prov.toUpperCase();
-     if (/429|rate.?limit|too.?many.?request/i.test(msg)) {
-  await sendMessage(token, chatId,
-    '⏱️ <b>محدودیت درخواست (429)</b>\n\n' +
-    'GapGPT/AIPrime سقف درخواست شما را پر کرده.\n' +
-    'این یعنی مدل کند نیست، فقط صف پر است.\n\n' +
-    '💡 <b>راه‌حل فوری:</b>\n' +
-    '• ⏱️ ۱-۲ دقیقه صبر کنید و دوباره بزنید\n' +
-    '• 🎚️ سطح مدل را به 🚀 سریع تغییر دهید (gpt-4o-mini سقف بالاتری دارد)\n' +
-    '• 🔻 Fallback را به 🟡 اجازه با هشدار تغییر دهید',
-    { inline_keyboard: [
-      [{ text: '🎚️ سطح مدل', callback_data: 'settings_tier' }],
-      [{ text: '🏠', callback_data: 'menu_main' }]
-    ]});
-  return;
-}
-    await sendMessage(token, chatId,
-      '🔒 <b>خطای احراز هویت ' + provLabel + '</b>\n\n' +
-      'کد 401/403 یعنی کلید API رد شده.\n' +
-      'این مشکل <b>کد نیست</b> — کلید باید در Cloudflare تصحیح شود.\n\n' +
-      '💡 <b>راه‌حل:</b>\n' +
-      '1. در HTML → F12 → Console:\n' +
-      '   <code>localStorage.getItem(\'api_key_' + prov + '\')</code>\n' +
-      '2. کلید را کپی کنید\n' +
-      '3. Cloudflare Dashboard → Workers → everest-bot → Settings → Variables\n' +
-      '4. <code>' + prov.toUpperCase() + '_KEY</code> را با کلید کپی‌شده جایگزین کنید\n' +
-      '5. Save and Deploy\n\n' +
-      '⚠️ <b>توجه:</b> کلید HTML در مرورگر ذخیره می‌شود، بات از Cloudflare Variables می‌خواند — دو جای جدا!',
-      { inline_keyboard: [[{ text: '📈 وضعیت', callback_data: 'menu_status' }], [{ text: '🏠', callback_data: 'menu_main' }]] });
-    return;
+async function needsLong(env, chatId, forced, hasImg) {
+  var prov = (forced && forced !== 'auto') ? forced : null;
+  if (!prov) {
+    if (hasImg) {
+      if (getGeminiKeys(env).length > 0) return false;
+      prov = env.GAPGPT_KEY ? 'gapgpt' : (env.AIPRIME_KEY ? 'aiprime' : null);
+    } else prov = getKey(env, 'aiprime') ? 'aiprime' : (getKey(env, 'gapgpt') ? 'gapgpt' : null);
   }
+  if (prov !== 'aiprime' && prov !== 'gapgpt') return false;
+  return (await getUserModelTier(env, chatId, prov)) !== 'fast';
+}
+async function enqueueJob(env, job) {
+  var id = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  await env.KV.put('job:' + id, JSON.stringify(Object.assign({ status: 'pending', attempts: 0, createdAt: Date.now() }, job)), { expirationTtl: 1800 });
+  console.log('[JOB ENQUEUED] ' + id + ' type=' + job.type);
+  return id;
+}
+async function queueNotice(token, chatId, what) {
+  await sendMessage(token, chatId, '⏳ <b>' + esc(what) + '</b>\n\nمدل‌های قوی بیش از ۳۰ ثانیه زمان می‌خواهند و در وبهوک جا نمی‌شوند؛ تحلیل در صف است و نتیجه ۱ تا ۳ دقیقه می‌رسد.');
+}
+async function processJobs(env) {
+  try {
+    var list = await env.KV.list({ prefix: 'job:' });
+    var n = 0, now = Date.now();
+    for (var i = 0; i < list.keys.length && n < 2; i++) {
+      var k = list.keys[i].name;
+      var job = await env.KV.get(k, 'json');
+      if (!job) continue;
+      if (job.status === 'processing' && job.startedAt && (now - job.startedAt) < JOB_PROCESSING_TTL_MS) continue;
 
-  // خطای عمومی
-    // خطای عمومی — مدل‌های تلاش‌شده را دقیق نشان بده
-  var tierMatch = msg.match(/tier=(\w+)/);
-  var tier = tierMatch ? tierMatch[1] : '?';
-  var tierIcon = tier === 'premium' ? '💎' : tier === 'deepseek' ? '🧠' : tier === 'fast' ? '🚀' : '?';
-  var triedMatch = msg.match(/\[([^\]]+)\]/);
-  var tried = triedMatch ? triedMatch[1] : '(جزئیات در Workers Logs)';
+      job.status = 'processing';
+      job.startedAt = now;
+      job.attempts = (job.attempts || 0) + 1;
+      await env.KV.put(k, JSON.stringify(job), { expirationTtl: 1800 });
 
-  await sendMessage(token, chatId,
-    '❌ <b>مدل ' + tierIcon + ' ' + esc(tier) + ' پاسخ نداد</b>\n\n' +
-    '📋 <b>مدل‌های تلاش‌شده (به ترتیب):</b>\n<code>' + esc(tried.slice(0, 300)) + '</code>\n\n' +
-    '⚠️ <b>هیچ مدل دیگری به‌صورت خودکار استفاده نشد</b> (مطابق تنظیمات «سختگیر»)\n\n' +
-    '💡 <b>راه‌حل‌ها:</b>\n' +
-    '• ⏱️ ۱-۲ دقیقه صبر کنید (محدودیت نرخ)\n' +
-    '• 🧠 مدل را به DeepSeek تغییر دهید (max_tokens=32000)\n' +
-    '• 🚀 یا به سریع (gpt-4o-mini)\n' +
-    '• 🔄 کش مدل را پاک کنید (تنظیمات → سطح مدل → پاک‌کردن کش)',
-    { inline_keyboard: [
-      [{ text: '🎚️ سطح مدل', callback_data: 'settings_tier' }],
-      [{ text: '📈 وضعیت', callback_data: 'menu_status' }],
-      [{ text: '🏠', callback_data: 'menu_main' }]
-    ]});
+      n++;
+      var tok = env.TG_TOKEN;
+      var ok = false;
+      try {
+        if (job.type === 'analysis') { await runAnalysis(tok, job.chatId, job.symbol, env, job.tf, job.forced || undefined, { long: true }); ok = true; }
+        else if (job.type === 'mtf') { await runMultiTFAnalysis(tok, job.chatId, job.symbol, env, job.forced || undefined, { long: true }); ok = true; }
+        else if (job.type === 'image') { await runImageAnalysis(tok, job.chatId, job.fid, env, { long: true }); ok = true; }
+        else if (job.type === 'diag') { await runModelDiag(tok, job.chatId, env); ok = true; }
+      } catch (e) {
+        console.error('[job ' + k + '] ' + e.message);
+        try { await sendMessage(tok, job.chatId, '❌ <code>' + esc(e.message) + '</code>'); } catch (x) {}
+      }
 
+      if (ok || job.attempts >= JOB_MAX_ATTEMPTS) await env.KV.delete(k);
+      else {
+        job.status = 'pending';
+        job.startedAt = null;
+        await env.KV.put(k, JSON.stringify(job), { expirationTtl: 1800 });
+      }
+    }
+  } catch (e) { console.error('processJobs: ' + e.message); }
+}
+async function runModelDiag(token, chatId, env) {
+  var provs = ['aiprime', 'gapgpt'].filter(function(p) { return getKey(env, p); });
+  if (!provs.length) { await sendMessage(token, chatId, '⚠️ AIPRIME_KEY / GAPGPT_KEY تنظیم نشده'); return; }
+  var out = '🧪 <b>تست مدل‌ها</b>\n';
+  for (var pi = 0; pi < provs.length; pi++) {
+    var p = provs[pi], key = getKey(env, p), base = OAI_BASES[p];
+    out += '\n<b>' + esc(PROVIDER_NAMES[p]) + '</b>\n';
+    var list = await discoverProviderModels(env, chatId, p, key);
+    out += list ? ('📋 لیست: ' + list.length + ' مدل\n') : '❌ لیست دریافت نشد\n';
+    var tiers = ['fast', 'deepseek', 'premium'];
+    for (var ti = 0; ti < tiers.length; ti++) {
+      var chain = MODEL_FALLBACK_CHAINS[p][tiers[ti]].slice(0, 3);
+      out += '\n' + TIER_ICON(tiers[ti]) + ' ' + tiers[ti] + '\n';
+      for (var ci = 0; ci < chain.length; ci++) {
+        var nm = chain[ci];
+        var ex = list ? exactFromList(list, nm) : nm;
+        if (list && !ex) { out += '• ' + esc(nm) + ': ❌ در لیست نیست\n'; continue; }
+        var mtBig = getMaxTokens(ex);
+        var r1 = null, r2 = null;
+        try { r1 = await oaiOnce(base, key, ex, 'say OK', 16, 30000); } catch (e) {}
+        try { r2 = await oaiOnce(base, key, ex, 'say OK', mtBig, 30000); } catch (e) {}
+        var fmt = function(r, mt) {
+          if (!r) return '⏱️';
+          if (r.ok) return '✅ ' + mt;
+          return '❌ ' + mt + ' [' + r.status + ' ' + ERR_FA[classifyErr(r.status, oaiErrMsg(r))] + ']';
+        };
+        out += '• ' + esc(ex) + ': ' + fmt(r1, 16) + ' · ' + fmt(r2, mtBig) + '\n';
+      }
+    }
+  }
+  out += '\n<i>۱۶ توکن OK ولی سقف بزرگ ناموفق = مشکل پیش‌کسر اعتبار · «در لیست نیست» = نام مدل/پلن.</i>';
+  for (var i = 0; i < out.length; i += 3800) { await sendMessage(token, chatId, out.slice(i, i + 3800)); await sleep(300); }
 }
 
-async function runAnalysis(token, chatId, symbol, env, tf, forcedProvider) {
+async function runAnalysis(token, chatId, symbol, env, tf, forcedProvider, opts) {
   try {
-    console.log('[runAnalysis] START chat=' + chatId + ' sym=' + symbol + ' tf=' + tf + ' prov=' + (forcedProvider || 'auto'));
+    if (!(opts && opts.long) && await needsLong(env, chatId, forcedProvider, false)) {
+      await enqueueJob(env, { type: 'analysis', chatId: chatId, symbol: symbol, tf: tf, forced: forcedProvider || null });
+      await queueNotice(token, chatId, symbol + ' · تحلیل مدل قوی');
+      return;
+    }
+    console.log('[runAnalysis] START sym=' + symbol + ' tf=' + tf + ' prov=' + (forcedProvider || 'auto') + ' long=' + !!(opts && opts.long));
     var pl = forcedProvider ? (PROVIDER_NAMES[forcedProvider] || forcedProvider) : 'خودکار';
     var mode = await getConfluenceMode(env, chatId);
     var um = await getUserMode(env, chatId);
@@ -2264,64 +2158,40 @@ async function runAnalysis(token, chatId, symbol, env, tf, forcedProvider) {
     var kzMode = await getKzMode(env, chatId);
     var isCrypto = isCryptoSymbol(symbol);
     var fbMode = await getFallbackMode(env, chatId);
-
-    // تعیین tier برای نمایش
     var activeTier = forcedProvider && (forcedProvider === 'aiprime' || forcedProvider === 'gapgpt')
       ? await getUserModelTier(env, chatId, forcedProvider) : 'fast';
-    var activeTierIcon = TIER_ICON(activeTier);
 
     if (uc.allowedTFs.indexOf(tf) === -1) {
-      await sendMessage(token, chatId, '⚠️ TF مجاز نیست. مجاز: ' + uc.allowedTFs.map(timeframeLabel).join(', '), { inline_keyboard: [[{ text: '⚙️', callback_data: 'menu_settings' }]] });
+      await sendMessage(token, chatId, '⚠️ TF مجاز نیست: ' + uc.allowedTFs.map(timeframeLabel).join(', '));
       return;
     }
-
     await sendMessage(token, chatId,
-      '⏳ <b>' + symbol + '</b>\n' +
-      '🤖 ' + pl + ' · ' + activeTierIcon + ' ' + activeTier + '\n' +
-      '🎯 ' + uc.icon + ' · 🎚️ ' + STRICTNESS_MODES[st].icon + ' · 🔻 ' + FALLBACK_MODES[fbMode].icon);
+      '⏳ <b>' + symbol + '</b>\n🤖 ' + pl + ' · ' + TIER_ICON(activeTier) + ' ' + activeTier + '\n🎯 ' + uc.icon + ' · 🎚️ ' + STRICTNESS_MODES[st].icon + ' · 🔻 ' + FALLBACK_MODES[fbMode].icon);
 
     var klines;
-    try {
-      klines = await fetchMarketData(symbol, tf, env);
-    } catch (fe) {
-      console.error('[runAnalysis] fetch FAILED: ' + fe.message);
-      await sendMessage(token, chatId, '❌ داده‌گیری: <code>' + esc(fe.message) + '</code>\n' + (fe.message.indexOf('TWELVE_KEY') !== -1 ? 'کلید TWELVE_KEY را در Variables اضافه کنید.' : ''));
-      return;
-    }
-    if (!klines || klines.length < 30) { await sendMessage(token, chatId, '❌ داده کافی نیست'); return; }
+    try { klines = await fetchMarketData(symbol, tf, env); }
+    catch (fe) { await sendMessage(token, chatId, '❌ داده‌گیری: <code>' + esc(fe.message) + '</code>'); return; }
+    if (!klines || klines.length < 30) { await sendMessage(token, chatId, '❌ داده کم'); return; }
+    var livePrice = klines[klines.length - 1].close;
     klines = dropForming(klines, tf);
-    var currentPrice = klines[klines.length - 1].close;
-    var atr = calcATR(klines, 14);
-    console.log('[runAnalysis] klines=' + klines.length + ' price=' + currentPrice);
+    var currentPrice = livePrice, atr = calcATR(klines, 14);
 
     var body = 'نماد: ' + symbol + '\nTF: ' + TF_LABELS[tf] + '\n\n' + klinesToText(klines, symbol, TF_LABELS[tf]);
     var fullPrompt = buildPromptForMode(SYSTEM_PROMPT, mode);
     if (isCrypto) fullPrompt += CRYPTO_NOTE;
     fullPrompt += '\n\n' + body;
 
-    console.log('[runAnalysis] calling AI...');
     var result;
-    try {
-      result = await callWithFallback(env, fullPrompt, null, null, chatId, forcedProvider);
-    } catch (e) {
-      await handleAIError(token, chatId, e);
-      return;
-    }
+    try { result = await callWithFallback(env, fullPrompt, null, null, chatId, forcedProvider, { long: !!(opts && opts.long) }); }
+    catch (e) { await handleAIError(token, chatId, e); return; }
 
-    console.log('[runAnalysis] AI OK prov=' + result.provider + ' model=' + (result.model || '?') + ' len=' + result.text.length);
-
-    var levels = validateSignalStrict(extractLevels(result.text), {
-      strict: st, minRR: uc.minRR, minConfidence: uc.minConfidence,
-      atr: atr, price: currentPrice
-    });
+    var levels = validateSignalStrict(extractLevels(result.text), { strict: st, minRR: uc.minRR, minConfidence: uc.minConfidence, atr: atr, price: currentPrice });
     levels._atr = atr;
     var regime = computeLocalRegime(klines, tf);
     levels._regime = regime;
     var adv = adversarialCheck(levels, klines, regime, atr);
     levels._adversarial = adv;
     var conf = await resolveConfluence(env, chatId, levels, result.text);
-
-    console.log('[runAnalysis] dir=' + levels.direction + ' conf=' + levels.confidence + ' model=' + (result.model || '?'));
 
     await sendMessage(token, chatId, buildCaption(levels, symbol, TF_LABELS[tf], result, conf, currentPrice));
     var ft = tgFormat(result.text);
@@ -2333,27 +2203,26 @@ async function runAnalysis(token, chatId, symbol, env, tf, forcedProvider) {
     try { await sendMessage(token, chatId, '❌ <code>' + esc(e.message) + '</code>'); } catch (x) {}
   }
 }
-
-async function runMultiTFAnalysis(token, chatId, symbol, env, forcedProvider) {
+async function runMultiTFAnalysis(token, chatId, symbol, env, forcedProvider, opts) {
   try {
-    console.log('[runMTF] START');
+    if (!(opts && opts.long) && await needsLong(env, chatId, forcedProvider, false)) {
+      await enqueueJob(env, { type: 'mtf', chatId: chatId, symbol: symbol, forced: forcedProvider || null });
+      await queueNotice(token, chatId, symbol + ' · MTF مدل قوی');
+      return;
+    }
     var pl = forcedProvider ? (PROVIDER_NAMES[forcedProvider] || forcedProvider) : 'خودکار';
     var mode = await getConfluenceMode(env, chatId);
     var st = await getStrictness(env, chatId);
     var um = await getUserMode(env, chatId);
     var uc = MODE_CONFIG[um];
     var isCrypto = isCryptoSymbol(symbol);
-    var fbMode = await getFallbackMode(env, chatId);
+    await sendMessage(token, chatId, '🎯 MTF <b>' + symbol + '</b>\n🤖 ' + pl);
 
-    await sendMessage(token, chatId, '🎯 MTF <b>' + symbol + '</b>\n🤖 ' + pl + ' · 🔻 ' + FALLBACK_MODES[fbMode].icon);
-
-    var k4 = await fetchMarketData(symbol, '4h', env);
-    var k1 = await fetchMarketData(symbol, '1h', env);
-    var k15 = await fetchMarketData(symbol, '15min', env);
-    var k1m = await fetchMarketData(symbol, '1min', env);
+    var mtf = await Promise.all([fetchMarketData(symbol, '4h', env), fetchMarketData(symbol, '1h', env), fetchMarketData(symbol, '15min', env), fetchMarketData(symbol, '1min', env)]);
+    var k4 = mtf[0], k1 = mtf[1], k15 = mtf[2], k1m = mtf[3];
+    var mtfLive = k1m[k1m.length - 1].close;
     k4 = dropForming(k4, '4h'); k1 = dropForming(k1, '1h'); k15 = dropForming(k15, '15min'); k1m = dropForming(k1m, '1min');
-    var currentPrice = k1[k1.length - 1].close;
-    var atr = calcATR(k15, 14);
+    var currentPrice = mtfLive, atr = calcATR(k15, 14);
 
     var p = 'نماد: ' + symbol + '\n\n4H:\n' + klinesToText(k4, symbol, '4H') + '\n\n1H:\n' + klinesToText(k1, symbol, '1H') + '\n\n15M:\n' + klinesToText(k15, symbol, '15M') + '\n\n1M:\n' + klinesToText(k1m, symbol, '1M');
     var fullPrompt = buildPromptForMode(MULTI_TF_PROMPT, mode);
@@ -2361,13 +2230,10 @@ async function runMultiTFAnalysis(token, chatId, symbol, env, forcedProvider) {
     fullPrompt += '\n\n' + p;
 
     var result;
-    try {
-      result = await callWithFallback(env, fullPrompt, null, null, chatId, forcedProvider);
-    } catch (e) { await handleAIError(token, chatId, e); return; }
+    try { result = await callWithFallback(env, fullPrompt, null, null, chatId, forcedProvider, { long: !!(opts && opts.long) }); }
+    catch (e) { await handleAIError(token, chatId, e); return; }
 
-    var levels = validateSignalStrict(extractLevels(result.text), {
-      strict: st, minRR: uc.minRR, minConfidence: uc.minConfidence, atr: atr, price: currentPrice
-    });
+    var levels = validateSignalStrict(extractLevels(result.text), { strict: st, minRR: uc.minRR, minConfidence: uc.minConfidence, atr: atr, price: currentPrice });
     levels._atr = atr;
     var regime = computeLocalRegime(k15, '15min');
     levels._regime = regime;
@@ -2381,40 +2247,62 @@ async function runMultiTFAnalysis(token, chatId, symbol, env, forcedProvider) {
     await sendMessage(token, chatId, '🏠', { inline_keyboard: [[{ text: '🏠', callback_data: 'menu_main' }]] });
   } catch (e) { console.error('[runMTF] FATAL: ' + e.message); await sendMessage(token, chatId, '❌ MTF: <code>' + esc(e.message) + '</code>'); }
 }
-
-async function runImageAnalysis(token, chatId, photoFileId, env) {
+async function runImageAnalysis(token, chatId, photoFileId, env, opts) {
   try {
+    if (!(opts && opts.long) && await needsLong(env, chatId, null, true)) {
+      await enqueueJob(env, { type: 'image', chatId: chatId, fid: photoFileId });
+      await queueNotice(token, chatId, 'تحلیل تصویر با مدل قوی');
+      return;
+    }
     var mode = await getConfluenceMode(env, chatId);
     var st = await getStrictness(env, chatId);
     var um = await getUserMode(env, chatId);
     var uc = MODE_CONFIG[um];
-
     await sendMessage(token, chatId, '📸 دریافت تصویر...');
     var pd = await downloadTelegramPhoto(token, photoFileId);
     if (pd.size > 5 * 1024 * 1024) { await sendMessage(token, chatId, '❌ > ۵MB'); return; }
     await sendMessage(token, chatId, '⭐ تحلیل...');
-
     var fullPrompt = buildPromptForMode(IMAGE_PROMPT, mode);
     var result;
-    try { result = await callWithFallback(env, fullPrompt, pd.base64, 'image/jpeg', chatId); }
+    try { result = await callWithFallback(env, fullPrompt, pd.base64, 'image/jpeg', chatId, null, { long: !!(opts && opts.long) }); }
     catch (e) { await handleAIError(token, chatId, e); return; }
-
     var levels = validateSignalStrict(extractLevels(result.text), { strict: st, minRR: uc.minRR, minConfidence: uc.minConfidence });
     var conf = await resolveConfluence(env, chatId, levels, result.text);
     await sendMessage(token, chatId, buildCaption(levels, 'IMAGE', 'IMAGE', result, conf, null));
-
     var ft = tgFormat(result.text);
     if (ft.length > 20) for (var i = 0; i < ft.length; i += 3800) { await sendMessage(token, chatId, ft.slice(i, i + 3800)); await sleep(400); }
     await sendMessage(token, chatId, '🏠', { inline_keyboard: [[{ text: '🏠', callback_data: 'menu_main' }]] });
   } catch (e) { console.error('[runImage] FATAL: ' + e.message); await sendMessage(token, chatId, '❌ <code>' + esc(e.message) + '</code>'); }
 }
+async function handleAIError(token, chatId, err) {
+  var msg = (err && err.message) || String(err);
+  console.error('[AI ERROR] ' + msg);
+  // 🔑 429 جدا از auth
+  if (/429|rate.?limit|too.?many/i.test(msg)) {
+    await sendMessage(token, chatId,
+      '⏱️ <b>محدودیت درخواست (429)</b>\n\nصف سرویس پر است.\n\n💡 ۱-۲ دقیقه صبر کنید یا سطح را به 🚀 سریع تغییر دهید.',
+      { inline_keyboard: [[{ text: '🎚️ سطح مدل', callback_data: 'settings_tier' }], [{ text: '🏠', callback_data: 'menu_main' }]] });
+    return;
+  }
+  var hints = [];
+  if (/کلید نامعتبر|auth \(401/i.test(msg)) hints.push('🔑 کلید رد شد: Variable (AIPRIME_KEY/GAPGPT_KEY) را در Cloudflare بررسی کنید.');
+  if (/اعتبار\/سهمیه|quota/i.test(msg)) hints.push('💳 اعتبار/سهمیه کافی نیست؛ شارژ کنید یا سطح 🚀 سریع را انتخاب کنید.');
+  if (/مجوز مدل|perm/i.test(msg)) hints.push('🚫 این مدل در پلن/گروه کلید شما فعال نیست؛ /modeltest را اجرا کنید.');
+  if (/مدل در گیت‌وی|missing/i.test(msg)) hints.push('🔎 نام مدل در گیت‌وی نیست؛ /modeltest را اجرا کنید.');
+  if (/پارامتر|param/i.test(msg)) hints.push('⚙️ پارامتر درخواست سازگار نیست.');
+  if (/timeout|بودجه/i.test(msg)) hints.push('⏳ مدل به‌موقع پاسخ نداد.');
+  if (!hints.length) hints.push('🔁 دوباره امتحان کنید یا /modeltest را اجرا کنید.');
+  await sendMessage(token, chatId,
+    '❌ <b>مدل پاسخ نداد</b>\n\n<code>' + esc(msg.slice(0, 900)) + '</code>\n\n' + hints.join('\n'),
+    { inline_keyboard: [[{ text: '🎚️ سطح مدل', callback_data: 'settings_tier' }, { text: '🔻 Fallback', callback_data: 'settings_fallback' }], [{ text: '🧪 /modeltest', callback_data: 'menu_modeltest' }], [{ text: '🏠', callback_data: 'menu_main' }]] });
+}
 
 // ============================================
-// MONITOR WIZARD
+// MONITOR (limited concurrency + IDs + lastEvKey)
 // ============================================
-async function startMonitorWizard(token, chatId, env) {
-  await setUserState(env, chatId, { action: 'mon_add', step: 'symbol', data: {} });
-  await sendOrEdit(token, chatId, null, '🤖 <b>مانیتور جدید</b>\n\nمرحله ۱/۴ — نماد:', monitorSymbolMenu(false));
+function monitorEveryMin(m) {
+  if (m.timeframe === '3min' && (m.dataProvider === 'twelve' || !isCryptoSymbol(m.symbol))) return 5;
+  return TF_MINUTES[m.timeframe] || 5;
 }
 async function finishMonitorSetup(token, chatId, mid, symbol, tf, ai, dp, env) {
   var strict = await getStrictness(env, chatId);
@@ -2422,66 +2310,71 @@ async function finishMonitorSetup(token, chatId, mid, symbol, tf, ai, dp, env) {
   var kzMode = await getKzMode(env, chatId);
   var list = await getMonitors(env, chatId);
   list.push({
+    id: Date.now().toString(36) + Math.random().toString(36).slice(2, 5),
     symbol: symbol, timeframe: tf, aiProvider: ai, dataProvider: dp,
     mode: mode, strictness: strict, kzMode: kzMode,
     active: true, startAt: Date.now(), lastCheckAt: 0,
     signalCount: 0, kzSignalCount: 0, skippedCount: 0,
-    lastSignal: null, lastMss: null, lastError: null
+    lastSignal: null, lastEvKey: null, lastError: null
   });
   await saveMonitors(env, chatId, list);
   var aiLabel = ai === 'auto' ? '🤖 خودکار' : (PROVIDER_NAMES[ai] || ai);
   var dpLabel = { auto: '🔄', binance: '🟡', twelve: '📊' }[dp] || dp;
   await sendOrEdit(token, chatId, mid, '✅ <b>مانیتور فعال</b>\n\n<b>نماد:</b> ' + symbol + '\n<b>TF:</b> ' + timeframeLabel(tf) + '\n<b>AI:</b> ' + aiLabel + '\n<b>داده:</b> ' + dpLabel, { inline_keyboard: [[{ text: '📋', callback_data: 'mon_list' }], [{ text: '🏠', callback_data: 'menu_main' }]] });
 }
-
-// ============================================
-// MONITOR CHECK
-// ============================================
-async function checkAllMonitors(env) {
+async function checkAllMonitors(env, scheduledMs) {
   try {
     var token = env.TG_TOKEN;
+    var epochMin = Math.floor((scheduledMs || Date.now()) / 60000);
     var list = await env.KV.list({ prefix: 'monitors:' });
-    var now = Date.now();
     for (var ki = 0; ki < list.keys.length; ki++) {
       var key = list.keys[ki].name;
       var chatId = key.replace('monitors:', '');
-      var monitors = await env.KV.get(key, 'json') || [];
-      if (!monitors.length) continue;
+      var snap = await getMonitors(env, chatId);
+      var due = snap.filter(function(m) { return m.active && epochMin % monitorEveryMin(m) === 0; });
+      if (!due.length) continue;
 
       var defaultStrict = await getStrictness(env, chatId);
       var defaultMode = await getUserMode(env, chatId);
       var defaultKzMode = await getKzMode(env, chatId);
       var localFilter = await getLocalFilter(env, chatId);
+      var updates = {};
 
-      var changed = false;
-      for (var i = 0; i < monitors.length; i++) {
-        var m = monitors[i];
-        if (!m.active) continue;
-        var tfMs = (TF_MINUTES[m.timeframe] || 5) * 60 * 1000;
-        if (m.lastCheckAt && (now - m.lastCheckAt) < tfMs * 0.9) continue;
-
-        var strict = m.strictness || defaultStrict;
-        var mode = m.mode || defaultMode;
-        var kzMode = m.kzMode || defaultKzMode;
-        var cfg = MODE_CONFIG[mode];
-
-        var kzCheck = shouldCheckNow(m.symbol, kzMode);
-        if (!kzCheck.ok) { m.lastCheckAt = now; m.skippedCount = (m.skippedCount || 0) + 1; changed = true; continue; }
-
-        try {
-          await runMonitorForUser(env, token, chatId, m, strict, mode, cfg, localFilter);
-          m.lastCheckAt = Date.now();
-          m.lastError = null;
-          changed = true;
-        } catch (e) {
-          console.error('[MON ' + chatId + '] FAILED: ' + e.message);
-          m.lastCheckAt = Date.now();
-          m.lastError = String(e.message).slice(0, 200);
-          changed = true;
+      // 🔑 concurrency=2
+      var cursor = 0;
+      async function worker() {
+        while (cursor < due.length) {
+          var m0 = due[cursor++];
+          var m = Object.assign({}, m0);
+          var strict = m.strictness || defaultStrict;
+          var mode = m.mode || defaultMode;
+          var kzMode = m.kzMode || defaultKzMode;
+          if (!shouldCheckNow(m.symbol, kzMode).ok) continue;
+          try {
+            await sleep(3000);
+            await runMonitorForUser(env, token, chatId, m, strict, mode, MODE_CONFIG[mode], localFilter);
+            m.lastError = null;
+          } catch (e) {
+            console.error('[MON ' + chatId + '] FAILED: ' + e.message);
+            m.lastError = String(e.message).slice(0, 200);
+          }
+          var fields = ['signalCount', 'kzSignalCount', 'lastSignal', 'lastEvKey', 'lastError'];
+          var changed = fields.some(function(f) { return JSON.stringify(m[f]) !== JSON.stringify(m0[f]); });
+          if (changed) { var u = {}; fields.forEach(function(f) { u[f] = m[f]; }); updates[m0.id] = u; }
         }
-        await sleep(400);
       }
-      if (changed) await env.KV.put(key, JSON.stringify(monitors));
+      await Promise.all([worker(), worker()]);
+
+      var ids = Object.keys(updates);
+      if (ids.length) {
+        var fresh = await env.KV.get(key, 'json') || [];
+        var ch = false;
+        for (var i = 0; i < fresh.length; i++) {
+          var u2 = updates[fresh[i].id];
+          if (u2) { Object.assign(fresh[i], u2); ch = true; }
+        }
+        if (ch) await env.KV.put(key, JSON.stringify(fresh));
+      }
     }
   } catch (e) { console.error('checkAllMonitors: ' + e.message); }
 }
@@ -2497,23 +2390,17 @@ async function runMonitorForUser(env, token, chatId, m, strict, mode, cfg, local
     await resolveRejectedSignals(env, chatId, klines, symbol, tf);
   } catch (e) {}
 
-  var ls = localStructure(klines, 5);
-  if (localFilter === 'on' && !ls.fresh) { m.skippedCount = (m.skippedCount || 0) + 1; return; }
-  if (ls.fresh && m.lastMss) {
-    if (m.lastMss.type === ls.fresh.type && m.lastMss.level === ls.fresh.level && (Date.now() - m.lastMss.t) < (TF_MINUTES[tf] || 5) * 60000 * 3) {
-      m.skippedCount = (m.skippedCount || 0) + 1;
-      return;
-    }
-  }
-  if (ls.fresh) m.lastMss = { type: ls.fresh.type, level: ls.fresh.level, t: Date.now() };
+  var ls = localStructure(klines, 5, 2);
+  if (localFilter === 'on' && !ls.fresh) return;
+  var evKey = ls.fresh ? (ls.fresh.type + ls.fresh.dir + klines[ls.fresh.idx].datetime) : null;
+  if (evKey && evKey === m.lastEvKey) return;
 
   var currentPrice = klines[klines.length - 1].close;
   var atr = calcATR(klines, 14);
   var regime = computeLocalRegime(klines, tf);
 
   var promptBody = 'نماد: ' + symbol + '\nتایم‌فریم: ' + timeframeLabel(tf) + '\nقیمت فعلی: ' + currentPrice + '\n\n' + klinesToText(klines, symbol, timeframeLabel(tf));
-  var facts = '\n\n🧮 محلی:\n- ATR(14)=' + (atr ? atr.toFixed(4) : '?') + '\n- رژیم: ' + regime.regime + '\n';
-
+  var facts = '\n\n🧮 محلی:\n- ATR=' + (atr ? atr.toFixed(4) : '?') + '\n- رژیم: ' + regime.regime + '\n';
   var confMode = await getConfluenceMode(env, chatId);
   var sysPrompt = buildPromptForMode(SYSTEM_PROMPT, confMode);
   if (isCrypto) sysPrompt += CRYPTO_NOTE;
@@ -2521,20 +2408,13 @@ async function runMonitorForUser(env, token, chatId, m, strict, mode, cfg, local
 
   var result;
   var forcedProvider = m.aiProvider && m.aiProvider !== 'auto' ? m.aiProvider : null;
-  try {
-    result = await callWithFallback(env, fullPrompt, null, null, chatId, forcedProvider);
-  } catch (e) {
-    m.lastError = String(e.message).slice(0, 200);
-    console.log('[MON ' + chatId + '] AI ERROR: ' + e.message.slice(0, 150));
-    return;
-  }
+  try { result = await callWithFallback(env, fullPrompt, null, null, chatId, forcedProvider, { long: true }); }
+  catch (e) { m.lastError = String(e.message).slice(0, 200); console.log('[MON ' + chatId + '] AI ERROR: ' + e.message.slice(0, 150)); return; }
 
+  if (evKey) m.lastEvKey = evKey;
   var rawLevels = extractLevels(result.text);
   var originalDir = rawLevels.direction;
-  var levels = validateSignalStrict(rawLevels, {
-    strict: strict, minRR: cfg.minRR, minConfidence: cfg.minConfidence,
-    atr: atr, price: currentPrice
-  });
+  var levels = validateSignalStrict(rawLevels, { strict: strict, minRR: cfg.minRR, minConfidence: cfg.minConfidence, atr: atr, price: currentPrice });
   levels._atr = atr;
   levels._regime = regime;
   var adv = adversarialCheck(levels, klines, regime, atr);
@@ -2546,25 +2426,20 @@ async function runMonitorForUser(env, token, chatId, m, strict, mode, cfg, local
     levels.direction = 'WAIT';
     alreadyLogged = true;
   }
-
   var confluence = await resolveConfluence(env, chatId, levels, result.text);
   var ok = isSignalConfirmed(levels, confluence, strict, cfg, regime);
-
   if (ok) {
     var pr = await portfolioCheck(env, chatId, { sym: symbol, market: isCrypto ? 'crypto' : 'forex' });
     if (!pr.ok) {
       await logRejectedSignal(env, chatId, rawLevels, 'port:' + pr.issues[0], currentPrice, { symbol: symbol, tf: tf, provider: result.provider });
-      alreadyLogged = true;
-      ok = false;
+      alreadyLogged = true; ok = false;
     }
   }
-
   if (!ok && !alreadyLogged && (originalDir === 'BUY' || originalDir === 'SELL') && rawLevels.entry != null && rawLevels.sl != null && rawLevels.tp1 != null) {
     await logRejectedSignal(env, chatId, rawLevels, levels._schemaFailed ? 'schema' : 'filter', currentPrice, { symbol: symbol, tf: tf, provider: result.provider });
   }
 
-  var tol = (atr || 0) * 0.5;
-  var p = m.lastSignal;
+  var tol = (atr || 0) * 0.5, p = m.lastSignal;
   var dup = ok && p && p.dir === levels.direction && Math.abs(p.entry - levels.entry) <= tol && (Date.now() - p.t) < (TF_MINUTES[tf] || 5) * 60000 * 2;
 
   console.log('[MON ' + chatId + '] ' + symbol + ' ' + tf + ' | dir=' + levels.direction + ' conf=' + levels.confidence + ' model=' + (result.model || '?') + ' | ' + (ok ? (dup ? 'DUP' : 'SIGNAL ✅') : 'skip'));
@@ -2580,12 +2455,7 @@ async function runMonitorForUser(env, token, chatId, m, strict, mode, cfg, local
     var confRaw = levels.confidence;
     var calib = await calibrateConfidence(env, chatId, providerKey, tier, regime.regime, levels.confidence);
     if (calib.adjusted) { levels.confidence = calib.conf; levels._calibrated = true; levels._confRaw = confRaw; }
-
-    await autoJournalAdd(env, chatId, levels, result.provider, symbol, tf, currentPrice, {
-      atr: atr, regime: regime, adversarial: adv,
-      confidenceRaw: confRaw, confidenceAdjusted: calib.adjusted,
-      modelTier: tier, modelName: result.model, strictness: strict
-    });
+    await autoJournalAdd(env, chatId, levels, result.provider, symbol, tf, currentPrice, { atr: atr, regime: regime, adversarial: adv, confidenceRaw: confRaw, confidenceAdjusted: calib.adjusted, modelTier: tier, modelName: result.model, strictness: strict });
     await sendMonitorSignal(token, chatId, levels, confluence, result, currentPrice, symbol, tf);
   }
 }
@@ -2597,12 +2467,12 @@ function isSignalConfirmed(levels, confluence, strict, cfg, regime) {
     if (regime.regime === 'HIGH_VOL') { minConf += 5; minCF += 1; }
     if (regime.regime === 'COMPRESSION') { minCF += 0.5; }
   }
-  if (strict === 'easy') { minConf = Math.max(55, minConf - 5); minRR = Math.max(1.0, minRR * 0.7); minCF = Math.max(3.5, minCF - 2); }
+  if (strict === 'easy') { minConf = Math.max(55, minConf-5); minRR = Math.max(1.0, minRR*0.7); minCF = Math.max(3.5, minCF-2); }
   if (levels.confidence == null || levels.confidence < minConf) return false;
   if (levels.rr) { var rr = parseFloat(String(levels.rr).replace('1:', '')); if (!isNaN(rr) && rr < minRR) return false; }
   else if (strict === 'hard') return false;
-  if (strict === 'both') { if (!levels.dualEval) return false; if (!levels.dualEval.hard.approved) return false; return true; }
-  if (strict === 'hard' && !levels.tp1) return false;
+  if (strict === 'both') { if (!levels.dualEval || !levels.dualEval.hard.approved) return false; }
+  else if (strict === 'hard' && !levels.tp1) return false;
   if (confluence && confluence.confluence != null && confluence.confluence < minCF) return false;
   return true;
 }
@@ -2631,193 +2501,118 @@ async function checkWatchlist(env) {
     var token = env.TG_TOKEN;
     var list = await env.KV.list({ prefix: 'watch:' });
     for (var i = 0; i < list.keys.length; i++) {
-      var k = list.keys[i].name;
-      var cid = k.replace('watch:', '');
+      var k = list.keys[i].name, cid = k.replace('watch:', '');
       var wl = await env.KV.get(k, 'json');
       if (!wl || !wl.length) continue;
-      var rem = [];
+      var hit = [], prices = {};
       for (var j = 0; j < wl.length; j++) {
         var w = wl[j];
         try {
-          var price = await withTimeout(getCurrentPrice(w.symbol, env.TWELVE_KEY), 10000, 'Price');
+          if (prices[w.symbol] == null) prices[w.symbol] = await withTimeout(getCurrentPrice(w.symbol, env.TWELVE_KEY), 10000, 'Price');
+          var price = prices[w.symbol];
           var tg = (w.condition === 'above' && price >= w.price) || (w.condition === 'below' && price <= w.price);
-          if (tg) await sendMessage(token, cid, '🔔 <b>' + esc(w.symbol) + '</b> @ ' + price);
-          else rem.push(w);
-        } catch (e) { rem.push(w); }
+          if (tg) { var d = await sendMessage(token, cid, '🔔 <b>' + esc(w.symbol) + '</b> @ ' + price); if (d && d.ok) hit.push(JSON.stringify(w)); }
+        } catch (e) {}
       }
-      await env.KV.put(k, JSON.stringify(rem));
+      if (hit.length) {
+        var fresh = await env.KV.get(k, 'json') || [];
+        await env.KV.put(k, JSON.stringify(fresh.filter(function(x) { return hit.indexOf(JSON.stringify(x)) === -1; })));
+      }
     }
   } catch (e) { console.error('checkWatchlist: ' + e.message); }
 }
 
 // ============================================
-// CALLBACK & MESSAGE HANDLERS
+// CALLBACK & MESSAGE
 // ============================================
 async function handleCallback(token, chatId, mid, data, env) {
-    console.log('[CB] ENTER data=' + data + ' mid=' + mid);
+  console.log('[CB] ENTER data=' + data + ' mid=' + mid);
   try {
-  if (data === 'menu_main') { await showMainMenu(token, chatId, mid, env); return; }
-  if (data === 'menu_analyze') { await showSymbolMenu(token, chatId, mid); return; }
-  if (data === 'menu_mtf') { await showSymbolMenu(token, chatId, mid); return; }
-  if (data === 'menu_image') { await showImageGuide(token, chatId, mid); return; }
-  if (data === 'menu_journal') { await showJournalMenu(token, chatId, mid, env); return; }
-  if (data === 'menu_watch') { await showWatchMenu(token, chatId, mid, env); return; }
-  if (data === 'menu_settings') { await showSettingsMenu(token, chatId, mid, env); return; }
-  if (data === 'menu_status') { await showStatus(token, chatId, mid, env); return; }
-  if (data === 'menu_help') { await showHelp(token, chatId, mid); return; }
-  if (data === 'menu_monitor') { await showMonitorMenu(token, chatId, mid, env); return; }
-  if (data === 'mon_help') { await showMonitorHelp(token, chatId, mid); return; }
-  if (data === 'mon_list') { await showMonitorList(token, chatId, mid, env); return; }
-  if (data === 'mon_add') { await startMonitorWizard(token, chatId, env); return; }
-  if (data === 'mon_crypto_list') { await sendOrEdit(token, chatId, mid, '🪙', monitorSymbolMenu(true)); return; }
-  if (data.indexOf('mon_view_') === 0) { await showMonitorView(token, chatId, mid, env, parseInt(data.replace('mon_view_', ''))); return; }
-  if (data.indexOf('mon_toggle_') === 0) {
-    var idx = parseInt(data.replace('mon_toggle_', ''));
-    var list = await getMonitors(env, chatId);
-    if (list[idx]) { list[idx].active = !list[idx].active; await saveMonitors(env, chatId, list); }
-    await showMonitorView(token, chatId, mid, env, idx);
-    return;
-  }
-  if (data.indexOf('mon_restart_') === 0) {
-    var idx2 = parseInt(data.replace('mon_restart_', ''));
-    var list2 = await getMonitors(env, chatId);
-    if (list2[idx2]) { list2[idx2].lastCheckAt = 0; list2[idx2].lastError = null; list2[idx2].lastMss = null; list2[idx2].active = true; await saveMonitors(env, chatId, list2); }
-    await showMonitorView(token, chatId, mid, env, idx2);
-    return;
-  }
-  if (data.indexOf('mon_del_') === 0) {
-    var idx3 = parseInt(data.replace('mon_del_', ''));
-    var list3 = await getMonitors(env, chatId);
-    list3.splice(idx3, 1);
-    await saveMonitors(env, chatId, list3);
-    await sendOrEdit(token, chatId, mid, '🗑️', { inline_keyboard: [[{ text: '◀️', callback_data: 'mon_list' }]] });
-    return;
-  }
-  if (data === 'mon_cancel') { await clearUserState(env, chatId); await sendOrEdit(token, chatId, mid, '❌', { inline_keyboard: [[{ text: '🏠', callback_data: 'menu_main' }]] }); return; }
-  if (data.indexOf('msym_') === 0) {
-    var symRaw = data.replace('msym_', '');
-    if (symRaw === 'custom') {
-      await setUserState(env, chatId, { action: 'mon_add', step: 'symbol_custom', data: {} });
-      await sendOrEdit(token, chatId, mid, '✏️ نماد:', { inline_keyboard: [[{ text: '❌', callback_data: 'mon_cancel' }]] });
+    if (data === 'menu_main') { await showMainMenu(token, chatId, mid, env); return; }
+    if (data === 'menu_analyze') { await showSymbolMenu(token, chatId, mid); return; }
+    if (data === 'menu_mtf') { await showSymbolMenu(token, chatId, mid); return; }
+    if (data === 'menu_image') { await showImageGuide(token, chatId, mid); return; }
+    if (data === 'menu_journal') { await showJournalMenu(token, chatId, mid, env); return; }
+    if (data === 'menu_watch') { await showWatchMenu(token, chatId, mid, env); return; }
+    if (data === 'menu_settings') { await showSettingsMenu(token, chatId, mid, env); return; }
+    if (data === 'menu_status') { await showStatus(token, chatId, mid, env); return; }
+    if (data === 'menu_help') { await showHelp(token, chatId, mid); return; }
+    if (data === 'menu_monitor') { await showMonitorMenu(token, chatId, mid, env); return; }
+    if (data === 'menu_modeltest') { await enqueueJob(env, { type: 'diag', chatId: chatId }); await sendMessage(token, chatId, '🧪 تست مدل‌ها در صف است؛ ۱-۲ دقیقه دیگر می‌رسد.'); return; }
+    if (data === 'mon_help') { await showMonitorHelp(token, chatId, mid); return; }
+    if (data === 'mon_list') { await showMonitorList(token, chatId, mid, env); return; }
+    if (data === 'mon_add') { await startMonitorWizard(token, chatId, env); return; }
+    if (data === 'mon_crypto_list') { await sendOrEdit(token, chatId, mid, '🪙', monitorSymbolMenu(true)); return; }
+    if (data.indexOf('mon_view_') === 0) { await showMonitorView(token, chatId, mid, env, parseInt(data.replace('mon_view_', ''))); return; }
+    if (data.indexOf('mon_toggle_') === 0) { var idx = parseInt(data.replace('mon_toggle_', '')); var l1 = await getMonitors(env, chatId); if (l1[idx]) { l1[idx].active = !l1[idx].active; await saveMonitors(env, chatId, l1); } await showMonitorView(token, chatId, mid, env, idx); return; }
+    if (data.indexOf('mon_restart_') === 0) { var idx2 = parseInt(data.replace('mon_restart_', '')); var l2 = await getMonitors(env, chatId); if (l2[idx2]) { l2[idx2].lastCheckAt = 0; l2[idx2].lastError = null; l2[idx2].lastEvKey = null; l2[idx2].active = true; await saveMonitors(env, chatId, l2); } await showMonitorView(token, chatId, mid, env, idx2); return; }
+    if (data.indexOf('mon_del_') === 0) { var idx3 = parseInt(data.replace('mon_del_', '')); var l3 = await getMonitors(env, chatId); l3.splice(idx3, 1); await saveMonitors(env, chatId, l3); await sendOrEdit(token, chatId, mid, '🗑️', { inline_keyboard: [[{ text: '◀️', callback_data: 'mon_list' }]] }); return; }
+    if (data === 'mon_cancel') { await clearUserState(env, chatId); await sendOrEdit(token, chatId, mid, '❌', { inline_keyboard: [[{ text: '🏠', callback_data: 'menu_main' }]] }); return; }
+    if (data.indexOf('msym_') === 0) {
+      var symRaw = data.replace('msym_', '');
+      if (symRaw === 'custom') { await setUserState(env, chatId, { action: 'mon_add', step: 'symbol_custom', data: {} }); await sendOrEdit(token, chatId, mid, '✏️ نماد:', { inline_keyboard: [[{ text: '❌', callback_data: 'mon_cancel' }]] }); return; }
+      await setUserState(env, chatId, { action: 'mon_add', step: 'tf', data: { symbol: symRaw } });
+      await sendOrEdit(token, chatId, mid, '۲/۴ TF:', monitorTfMenu(symRaw));
       return;
     }
-    await setUserState(env, chatId, { action: 'mon_add', step: 'tf', data: { symbol: symRaw } });
-    await sendOrEdit(token, chatId, mid, '۲/۴ TF:', monitorTfMenu(symRaw));
-    return;
-  }
-  if (data.indexOf('mtf2_') === 0) {
-    var rest = data.replace('mtf2_', '');
-    var tfm = rest.match(/_([^_]+)$/);
-    if (!tfm) return;
-    await setUserState(env, chatId, { action: 'mon_add', step: 'ai', data: { symbol: rest.slice(0, -tfm[0].length), timeframe: tfm[1] } });
-    await sendOrEdit(token, chatId, mid, '۳/۴ AI:', monitorAiMenu(rest.slice(0, -tfm[0].length), tfm[1]));
-    return;
-  }
-  if (data.indexOf('mai_') === 0) {
-    var parts2 = data.replace('mai_', '').split('_');
-    if (parts2.length < 3) return;
-    var ai = parts2[0], tf2 = parts2[parts2.length - 1], sym2 = parts2.slice(1, -1).join('_');
-    await setUserState(env, chatId, { action: 'mon_add', step: 'dp', data: { symbol: sym2, timeframe: tf2, aiProvider: ai } });
-    await sendOrEdit(token, chatId, mid, '۴/۴ داده:', monitorDataMenu(sym2, tf2, ai));
-    return;
-  }
-  if (data.indexOf('mdp_') === 0) {
-    var parts3 = data.replace('mdp_', '').split('_');
-    if (parts3.length < 4) return;
-    var dp = parts3[0], ai3 = parts3[parts3.length - 1], tf3 = parts3[parts3.length - 2], sym3 = parts3.slice(1, -2).join('_');
-    await clearUserState(env, chatId);
-    await finishMonitorSetup(token, chatId, mid, normalizeSymbol(sym3), tf3, ai3, dp, env);
-    return;
-  }
-  if (data === 'wizard_cancel') { await clearUserState(env, chatId); await sendOrEdit(token, chatId, mid, '❌', { inline_keyboard: [[{ text: '🏠', callback_data: 'menu_main' }]] }); return; }
-  if (data === 'sym_custom') { await setUserState(env, chatId, { action: 'custom_symbol', step: 'input', data: {} }); await sendOrEdit(token, chatId, mid, '✏️ نماد:', { inline_keyboard: [[{ text: '❌', callback_data: 'wizard_cancel' }]] }); return; }
-  if (data.indexOf('sym_') === 0) { await showTimeframeMenu(token, chatId, mid, data.replace('sym_', '')); return; }
-  if (data.indexOf('mtf_') === 0) { await showProviderMenu(token, chatId, mid, data.replace('mtf_', ''), 'MTF', true, env); return; }
-  if (data.indexOf('tf_') === 0) {
-    var restT = data.replace('tf_', '');
-    var tfmT = restT.match(/_([^_]+)$/);
-    if (!tfmT) return;
-    await showProviderMenu(token, chatId, mid, restT.slice(0, -tfmT[0].length), tfmT[1], false, env);
-    return;
-  }
-  if (data.indexOf('pvd_') === 0) {
-    var partsP = data.replace('pvd_', '').split('_');
-    if (partsP.length < 3) return;
-    var prov = partsP[0], tfP = partsP[partsP.length - 1], srP = partsP.slice(1, -1).join('_');
-    var symbolP = normalizeSymbol(srP);
-    try { await fetch('https://api.telegram.org/bot' + token + '/deleteMessage', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ chat_id: chatId, message_id: mid }) }); } catch (e) {}
-    if (tfP === 'MTF') await runMultiTFAnalysis(token, chatId, symbolP, env, prov);
-    else await runAnalysis(token, chatId, symbolP, env, tfP, prov);
-    return;
-  }
-  if (data === 'journal_list') { await showJournalList(token, chatId, env); return; }
-  if (data === 'journal_stats') { await showJournalStats(token, chatId, env); return; }
-  if (data === 'journal_daily') { await showJournalDaily(token, chatId, env); return; }
-  if (data === 'journal_opp') { await showOpportunityReport(token, chatId, env); return; }
-  if (data === 'journal_clear') { await saveJournal(env, chatId, []); await sendOrEdit(token, chatId, mid, '🗑️', { inline_keyboard: [[{ text: '◀️', callback_data: 'menu_journal' }]] }); return; }
-  if (data === 'watch_add') { await setUserState(env, chatId, { action: 'watch_add', step: 'symbol', data: {} }); await sendOrEdit(token, chatId, mid, '🔔 ۱/۳ نماد:', { inline_keyboard: [[{ text: '❌', callback_data: 'wizard_cancel' }]] }); return; }
-  if (data === 'watch_list') { await showWatchList(token, chatId, env); return; }
-  if (data === 'watch_clear') { await saveWatchlist(env, chatId, []); await sendOrEdit(token, chatId, mid, '🗑️', { inline_keyboard: [[{ text: '◀️', callback_data: 'menu_watch' }]] }); return; }
-  if (data.indexOf('wiz_cond_') === 0) {
-    var stW = await getUserState(env, chatId);
-    if (!stW || stW.action !== 'watch_add') return;
-    stW.data.condition = data.replace('wiz_cond_', ''); stW.step = 'price';
-    await setUserState(env, chatId, stW);
-    await sendOrEdit(token, chatId, mid, '🔔 ۳/۳ قیمت:', { inline_keyboard: [[{ text: '❌', callback_data: 'wizard_cancel' }]] });
-    return;
-  }
-  if (data === 'settings_fallback') { await showFallbackMenu(token, chatId, mid, env); return; }
-  if (data === 'fb_strict' || data === 'fb_warn') {
-    var mFb = data.replace('fb_', '');
-    await setFallbackMode(env, chatId, mFb);
-    await showFallbackMenu(token, chatId, mid, env);
-    return;
-  }
-  if (data === 'settings_tier') { await sendOrEdit(token, chatId, mid, '🎚️ مدل:', modelTierProviderMenu()); return; }
-  if (data === 'tier_prov_aiprime') { await env.KV.put('last_tier_prov:' + chatId, 'aiprime'); var curA = await getUserModelTier(env, chatId, 'aiprime'); await sendOrEdit(token, chatId, mid, '🅰️ AIPrime', modelTierMenu(curA)); return; }
-  if (data === 'tier_prov_gapgpt') { await env.KV.put('last_tier_prov:' + chatId, 'gapgpt'); var curG = await getUserModelTier(env, chatId, 'gapgpt'); await sendOrEdit(token, chatId, mid, '💎 GapGPT', modelTierMenu(curG)); return; }
-  if (data === 'tier_fast' || data === 'tier_premium' || data === 'tier_deepseek') {
-    var nt = data.replace('tier_', '');
-    var lp = await env.KV.get('last_tier_prov:' + chatId) || 'aiprime';
-    await setUserModelTier(env, chatId, lp, nt);
-    await sendOrEdit(token, chatId, mid, '✅ ذخیره شد. تحلیل‌های بعدی از ' + TIER_ICON(nt) + ' ' + nt + ' استفاده می‌کنند.', modelTierMenu(nt));
-    return;
-  }
-  if (data === 'tier_reset') {
-    var lp2 = await env.KV.get('last_tier_prov:' + chatId) || 'aiprime';
-    await resetModelCacheFor(env, chatId, lp2);
-    var curT = await getUserModelTier(env, chatId, lp2);
-    await sendOrEdit(token, chatId, mid, '🔄 کش ' + lp2 + ' پاک شد', modelTierMenu(curT));
-    return;
-  }
-  if (data === 'settings_strict') { var curSt = await getStrictness(env, chatId); await sendOrEdit(token, chatId, mid, '🎚️ نوع:', strictnessMenu(curSt)); return; }
-  if (data === 'strict_hard' || data === 'strict_easy' || data === 'strict_both') { var mSt = data.replace('strict_', ''); await setStrictness(env, chatId, mSt); await sendOrEdit(token, chatId, mid, '✅ ' + STRICTNESS_MODES[mSt].label, strictnessMenu(mSt)); return; }
-  if (data === 'settings_kz') { var curK = await getKzMode(env, chatId); await sendOrEdit(token, chatId, mid, '⚙️ KZ:', kzModeMenu(curK)); return; }
-  if (data === 'kz_off' || data === 'kz_priority' || data === 'kz_only') { var mK = data.replace('kz_', ''); await setKzMode(env, chatId, mK); await sendOrEdit(token, chatId, mid, '✅ ' + KZ_MODES[mK].label, kzModeMenu(mK)); return; }
-  if (data === 'settings_localfilter') { var curLF = await getLocalFilter(env, chatId); await sendOrEdit(token, chatId, mid, '🔍 فیلتر محلی:', localFilterMenu(curLF)); return; }
-  if (data === 'lf_on' || data === 'lf_off') { var mLF = data.replace('lf_', ''); await setLocalFilter(env, chatId, mLF); await sendOrEdit(token, chatId, mid, '✅ ' + (mLF === 'on' ? 'فعال' : 'غیرفعال'), localFilterMenu(mLF)); return; }
-  if (data === 'settings_mode') { var curM = await getUserMode(env, chatId); await sendOrEdit(token, chatId, mid, '🎯 حالت:', modeMenu(curM)); return; }
-  if (data.indexOf('mode_') === 0) { var mM = data.replace('mode_', ''); await setUserMode(env, chatId, mM); await sendOrEdit(token, chatId, mid, '✅ ' + MODE_CONFIG[mM].label, modeMenu(mM)); return; }
-  if (data === 'settings_confluence') { var curC = await getConfluenceMode(env, chatId); await sendOrEdit(token, chatId, mid, '🧠:', confluenceModeMenu(curC)); return; }
-  if (data.indexOf('conf_') === 0) { var mC = data.replace('conf_', ''); await setConfluenceMode(env, chatId, mC); await sendOrEdit(token, chatId, mid, '✅ ' + mC, confluenceModeMenu(mC)); return; }
-     } catch (e) {
+    if (data.indexOf('mtf2_') === 0) { var rest = data.replace('mtf2_', ''); var tfm = rest.match(/_([^_]+)$/); if (!tfm) return; await setUserState(env, chatId, { action: 'mon_add', step: 'ai', data: { symbol: rest.slice(0, -tfm[0].length), timeframe: tfm[1] } }); await sendOrEdit(token, chatId, mid, '۳/۴ AI:', monitorAiMenu(rest.slice(0, -tfm[0].length), tfm[1])); return; }
+    if (data.indexOf('mai_') === 0) { var parts2 = data.replace('mai_', '').split('_'); if (parts2.length < 3) return; var ai = parts2[0], tf2 = parts2[parts2.length-1], sym2 = parts2.slice(1, -1).join('_'); await setUserState(env, chatId, { action: 'mon_add', step: 'dp', data: { symbol: sym2, timeframe: tf2, aiProvider: ai } }); await sendOrEdit(token, chatId, mid, '۴/۴ داده:', monitorDataMenu(sym2, tf2, ai)); return; }
+    if (data.indexOf('mdp_') === 0) { var parts3 = data.replace('mdp_', '').split('_'); if (parts3.length < 4) return; var dp = parts3[0], ai3 = parts3[parts3.length-1], tf3 = parts3[parts3.length-2], sym3 = parts3.slice(1, -2).join('_'); await clearUserState(env, chatId); await finishMonitorSetup(token, chatId, mid, normalizeSymbol(sym3), tf3, ai3, dp, env); return; }
+    if (data === 'wizard_cancel') { await clearUserState(env, chatId); await sendOrEdit(token, chatId, mid, '❌', { inline_keyboard: [[{ text: '🏠', callback_data: 'menu_main' }]] }); return; }
+    if (data === 'sym_custom') { await setUserState(env, chatId, { action: 'custom_symbol', step: 'input', data: {} }); await sendOrEdit(token, chatId, mid, '✏️ نماد:', { inline_keyboard: [[{ text: '❌', callback_data: 'wizard_cancel' }]] }); return; }
+    if (data.indexOf('sym_') === 0) { await showTimeframeMenu(token, chatId, mid, data.replace('sym_', '')); return; }
+    if (data.indexOf('mtf_') === 0) { await showProviderMenu(token, chatId, mid, data.replace('mtf_', ''), 'MTF', true, env); return; }
+    if (data.indexOf('tf_') === 0) { var restT = data.replace('tf_', ''); var tfmT = restT.match(/_([^_]+)$/); if (!tfmT) return; await showProviderMenu(token, chatId, mid, restT.slice(0, -tfmT[0].length), tfmT[1], false, env); return; }
+    if (data.indexOf('pvd_') === 0) { var partsP = data.replace('pvd_', '').split('_'); if (partsP.length < 3) return; var prov = partsP[0], tfP = partsP[partsP.length-1], srP = partsP.slice(1, -1).join('_'); var symbolP = normalizeSymbol(srP); try { await fetch('https://api.telegram.org/bot' + token + '/deleteMessage', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ chat_id: chatId, message_id: mid }) }); } catch (e) {} if (tfP === 'MTF') await runMultiTFAnalysis(token, chatId, symbolP, env, prov); else await runAnalysis(token, chatId, symbolP, env, tfP, prov); return; }
+    if (data === 'journal_list') { await showJournalList(token, chatId, env); return; }
+    if (data === 'journal_stats') { await showJournalStats(token, chatId, env); return; }
+    if (data === 'journal_daily') { await showJournalDaily(token, chatId, env); return; }
+    if (data === 'journal_opp') { await showOpportunityReport(token, chatId, env); return; }
+    if (data === 'journal_clear') { await saveJournal(env, chatId, []); await sendOrEdit(token, chatId, mid, '🗑️', { inline_keyboard: [[{ text: '◀️', callback_data: 'menu_journal' }]] }); return; }
+    if (data === 'watch_add') { await setUserState(env, chatId, { action: 'watch_add', step: 'symbol', data: {} }); await sendOrEdit(token, chatId, mid, '🔔 ۱/۳ نماد:', { inline_keyboard: [[{ text: '❌', callback_data: 'wizard_cancel' }]] }); return; }
+    if (data === 'watch_list') { await showWatchList(token, chatId, env); return; }
+    if (data === 'watch_clear') { await saveWatchlist(env, chatId, []); await sendOrEdit(token, chatId, mid, '🗑️', { inline_keyboard: [[{ text: '◀️', callback_data: 'menu_watch' }]] }); return; }
+    if (data.indexOf('wiz_cond_') === 0) { var stW = await getUserState(env, chatId); if (!stW || stW.action !== 'watch_add') return; stW.data.condition = data.replace('wiz_cond_', ''); stW.step = 'price'; await setUserState(env, chatId, stW); await sendOrEdit(token, chatId, mid, '🔔 ۳/۳ قیمت:', { inline_keyboard: [[{ text: '❌', callback_data: 'wizard_cancel' }]] }); return; }
+    if (data === 'settings_fallback') { await showFallbackMenu(token, chatId, mid, env); return; }
+    if (data === 'fb_strict' || data === 'fb_warn') { await setFallbackMode(env, chatId, data.replace('fb_', '')); await showFallbackMenu(token, chatId, mid, env); return; }
+    if (data === 'settings_tier') { await sendOrEdit(token, chatId, mid, '🎚️ مدل:', modelTierProviderMenu()); return; }
+    if (data === 'tier_prov_aiprime') { await env.KV.put('last_tier_prov:' + chatId, 'aiprime'); var curA = await getUserModelTier(env, chatId, 'aiprime'); await sendOrEdit(token, chatId, mid, '🅰️ AIPrime', modelTierMenu(curA)); return; }
+    if (data === 'tier_prov_gapgpt') { await env.KV.put('last_tier_prov:' + chatId, 'gapgpt'); var curG = await getUserModelTier(env, chatId, 'gapgpt'); await sendOrEdit(token, chatId, mid, '💎 GapGPT', modelTierMenu(curG)); return; }
+    if (data === 'tier_fast' || data === 'tier_premium' || data === 'tier_deepseek') { var nt = data.replace('tier_', ''); var lp = await env.KV.get('last_tier_prov:' + chatId) || 'aiprime'; await setUserModelTier(env, chatId, lp, nt); await sendOrEdit(token, chatId, mid, '✅ ذخیره شد. تحلیل‌های بعدی از ' + TIER_ICON(nt) + ' ' + nt + ' استفاده می‌کنند.', modelTierMenu(nt)); return; }
+    if (data === 'tier_reset') { var lp2 = await env.KV.get('last_tier_prov:' + chatId) || 'aiprime'; await resetModelCacheFor(env, chatId, lp2); var curT = await getUserModelTier(env, chatId, lp2); await sendOrEdit(token, chatId, mid, '🔄 کش ' + lp2 + ' پاک شد', modelTierMenu(curT)); return; }
+    if (data === 'settings_strict') { var curSt = await getStrictness(env, chatId); await sendOrEdit(token, chatId, mid, '🎚️ نوع:', strictnessMenu(curSt)); return; }
+    if (data === 'strict_hard' || data === 'strict_easy' || data === 'strict_both') { var mSt = data.replace('strict_', ''); await setStrictness(env, chatId, mSt); await sendOrEdit(token, chatId, mid, '✅ ' + STRICTNESS_MODES[mSt].label, strictnessMenu(mSt)); return; }
+    if (data === 'settings_kz') { var curK = await getKzMode(env, chatId); await sendOrEdit(token, chatId, mid, '⚙️ KZ:', kzModeMenu(curK)); return; }
+    if (data === 'kz_off' || data === 'kz_priority' || data === 'kz_only') { var mK = data.replace('kz_', ''); await setKzMode(env, chatId, mK); await sendOrEdit(token, chatId, mid, '✅ ' + KZ_MODES[mK].label, kzModeMenu(mK)); return; }
+    if (data === 'settings_localfilter') { var curLF = await getLocalFilter(env, chatId); await sendOrEdit(token, chatId, mid, '🔍 فیلتر:', localFilterMenu(curLF)); return; }
+    if (data === 'lf_on' || data === 'lf_off') { var mLF = data.replace('lf_', ''); await setLocalFilter(env, chatId, mLF); await sendOrEdit(token, chatId, mid, '✅ ' + (mLF === 'on' ? 'فعال' : 'غیرفعال'), localFilterMenu(mLF)); return; }
+    if (data === 'settings_mode') { var curM = await getUserMode(env, chatId); await sendOrEdit(token, chatId, mid, '🎯 حالت:', modeMenu(curM)); return; }
+    if (data.indexOf('mode_') === 0) { var mM = data.replace('mode_', ''); await setUserMode(env, chatId, mM); await sendOrEdit(token, chatId, mid, '✅ ' + MODE_CONFIG[mM].label, modeMenu(mM)); return; }
+    if (data === 'settings_confluence') { var curC = await getConfluenceMode(env, chatId); await sendOrEdit(token, chatId, mid, '🧠:', confluenceModeMenu(curC)); return; }
+    if (data.indexOf('conf_') === 0) { var mC = data.replace('conf_', ''); await setConfluenceMode(env, chatId, mC); await sendOrEdit(token, chatId, mid, '✅ ' + mC, confluenceModeMenu(mC)); return; }
+  } catch (e) {
     console.error('[CB] FATAL: ' + e.message + '\n' + (e.stack || ''));
     try { await sendMessage(token, chatId, '❌ CB error: ' + e.message); } catch (x) {}
-  } 
+  }
 }
-async function sendAccessDenied(token, chatId) { await sendMessage(token, chatId, '🔒 <b>دسترسی محدود</b>\n\nChat ID:\n<code>' + chatId + '</code>'); }
+async function startMonitorWizard(token, chatId, env) {
+  await setUserState(env, chatId, { action: 'mon_add', step: 'symbol', data: {} });
+  await sendOrEdit(token, chatId, null, '🤖 <b>مانیتور جدید</b>\n\nمرحله ۱/۴:', monitorSymbolMenu(false));
+}
+async function sendAccessDenied(token, chatId) {
+  await sendMessage(token, chatId, '🔒 <b>دسترسی محدود</b>\n\nChat ID:\n<code>' + chatId + '</code>');
+}
 
 async function handleUpdate(update, env) {
   var token = env.TG_TOKEN;
-  if (!token) { console.error('[handleUpdate] TG_TOKEN missing'); return; }
-
+  if (!token) return;
   if (update.message) {
     var chatId = update.message.chat.id;
     var text = (update.message.text || '').trim();
     if (text === '/myid') { await sendMessage(token, chatId, '🆔 <code>' + chatId + '</code>'); return; }
     if (isSecurityEnabled(env) && !isAdmin(env, chatId)) { await sendAccessDenied(token, chatId); return; }
 
-    if (update.message.photo && update.message.photo.length) { await runImageAnalysis(token, chatId, update.message.photo[update.message.photo.length - 1].file_id, env); return; }
+    if (update.message.photo && update.message.photo.length) { await runImageAnalysis(token, chatId, update.message.photo[update.message.photo.length-1].file_id, env); return; }
     if (update.message.document && update.message.document.mime_type && update.message.document.mime_type.indexOf('image/') === 0) { await runImageAnalysis(token, chatId, update.message.document.file_id, env); return; }
 
     var st = await getUserState(env, chatId);
@@ -2849,11 +2644,11 @@ async function handleUpdate(update, env) {
     if (text === '/journal') { await showJournalMenu(token, chatId, null, env); return; }
     if (text === '/watch') { await showWatchMenu(token, chatId, null, env); return; }
     if (text === '/monitor') { await showMonitorMenu(token, chatId, null, env); return; }
+    if (text === '/modeltest') { await enqueueJob(env, { type: 'diag', chatId: chatId }); await sendMessage(token, chatId, '🧪 تست در صف است؛ ۱-۲ دقیقه دیگر می‌رسد.'); return; }
 
     if (text && text.charAt(0) !== '/' && /^[A-Za-z]{2,10}(\/[A-Za-z]{2,10})?$/.test(text)) { await showTimeframeMenu(token, chatId, null, normalizeSymbol(text).replace('/', '')); return; }
     await sendMessage(token, chatId, '❓', mainMenu());
   }
-
   if (update.callback_query) {
     var cb = update.callback_query;
     var cid = cb.message.chat.id;
@@ -2870,54 +2665,44 @@ export default {
   async fetch(request, env, ctx) {
     var url = new URL(request.url);
     if (url.pathname === '/debug_gapgpt') {
-  var key = getKey(env, 'gapgpt');
-  if (!key) return new Response('GAPGPT_KEY not defined', { status: 200 });
-  try {
-    var testResp = await fetch('https://api.gapgpt.app/v1/models', {
-      headers: { 'Authorization': 'Bearer ' + key }
-    });
-    var testBody = await testResp.text();
-    return new Response(
-      'Key length: ' + key.length + '\n' +
-      'Key first 4: ' + key.slice(0, 4) + '\n' +
-      'Key last 4: ' + key.slice(-4) + '\n' +
-      'HTTP status: ' + testResp.status + '\n' +
-      'Response body: ' + testBody.slice(0, 500),
-      { status: 200 }
-    );
-  } catch (e) {
-    return new Response('Fetch failed: ' + e.message, { status: 200 });
-  }
-}
+      var key = getKey(env, 'gapgpt');
+      if (!key) return new Response('GAPGPT_KEY not defined', { status: 200 });
+      try {
+        var r = await fetch('https://api.gapgpt.app/v1/models', { headers: { 'Authorization': 'Bearer ' + key } });
+        var b = await r.text();
+        return new Response('Key length: ' + key.length + '\nFirst 4: ' + key.slice(0, 4) + '\nLast 4: ' + key.slice(-4) + '\nHTTP: ' + r.status + '\nBody: ' + b.slice(0, 500), { status: 200 });
+      } catch (e) { return new Response('Fetch failed: ' + e.message, { status: 200 }); }
+    }
     if (url.pathname === '/' || url.pathname === '') {
-      return new Response('Everest Bot v8.2.10 — HTML parity: real models, 500-word analysis, no silent downgrade', { status: 200 });
+      return new Response('Everest Bot v8.3.5 — merged v8.2.10 + v8.3 best parts', { status: 200 });
     }
     if (request.method === 'POST' && url.pathname === '/webhook') {
+      if (env.WEBHOOK_SECRET && request.headers.get('X-Telegram-Bot-Api-Secret-Token') !== env.WEBHOOK_SECRET) return new Response('Forbidden', { status: 403 });
       var update;
       try { update = await request.json(); }
-      catch (e) { console.error('[WEBHOOK] json parse failed: ' + e.message); return new Response('Bad Request', { status: 400 }); }
+      catch (e) { return new Response('Bad Request', { status: 400 }); }
       try {
         var kind = update.message ? 'msg' : update.callback_query ? 'cbq' : 'other';
         var txt = update.message ? (update.message.text || '[non-text]') : update.callback_query ? update.callback_query.data : '?';
         var cid = update.message ? update.message.chat.id : update.callback_query ? update.callback_query.message.chat.id : '?';
         console.log('[UPDATE] kind=' + kind + ' chat=' + cid + ' data=' + String(txt).slice(0, 100));
       } catch (e) {}
-      ctx.waitUntil(
-        handleUpdate(update, env).catch(function(e) {
-          console.error('[handleUpdate FATAL] ' + e.message + '\n' + (e.stack || ''));
-        })
-      );
+      ctx.waitUntil(handleUpdate(update, env).catch(function(e) {
+        console.error('[handleUpdate FATAL] ' + e.message + '\n' + (e.stack || ''));
+      }));
       return new Response('OK', { status: 200 });
     }
     return new Response('Not found', { status: 404 });
   },
   async scheduled(event, env, ctx) {
-    ctx.waitUntil(
-      Promise.all([
-        checkWatchlist(env).catch(function(e) { console.error('[scheduled/wl] ' + e.message); }),
-        checkAllMonitors(env).catch(function(e) { console.error('[scheduled/mon] ' + e.message); }),
-        runExpiryWatchdog(env).catch(function(e) { console.error('[scheduled/wd] ' + e.message); })
-      ])
-    );
+    var st = (event && event.scheduledTime) || Date.now();
+    var em = Math.floor(st / 60000);
+    ctx.waitUntil(processJobs(env).catch(function(e) { console.error('[scheduled/jobs] ' + e.message); }));
+    ctx.waitUntil(checkWatchlist(env).catch(function(e) { console.error('[scheduled/wl] ' + e.message); }));
+    ctx.waitUntil(checkAllMonitors(env, st).catch(function(e) { console.error('[scheduled/mon] ' + e.message); }));
+    ctx.waitUntil((async function() {
+      await resolveOpenSignalsCron(env, em);
+      await runExpiryWatchdog(env);
+    })().catch(function(e) { console.error('[scheduled/res] ' + e.message); }));
   }
 };
