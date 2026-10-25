@@ -307,16 +307,35 @@ function findLocalSR(klines) {
   return { support: below, resistance: above };
 }
 
-function buildChartConfig(klines, levels, symbol, tf) {
+function buildChartConfig(klines, levels, symbol, tf, chartType) {
+  chartType = chartType || 'candlestick';
   var slice = klines.slice(-70);
   if (slice.length < 20) return null;
-  var ohlc = slice.map(function(k) {
-    return { x: String(k.datetime || '').replace(' ', 'T').slice(0, 19), o: +k.open, h: +k.high, l: +k.low, c: +k.close };
-  });
-  var xMin = ohlc[0].x, xMax = ohlc[ohlc.length-1].x;
-  var cp = ohlc[ohlc.length-1].c;
+
+  var cp = klines[klines.length-1].close;
   var priceWindow = Math.max(Math.abs(cp) * 0.15, 0.01);
   function inRange(p) { return isFinite(p) && Math.abs(p - cp) <= priceWindow; }
+
+  // 🔑 نرمال‌سازی x — همیشه "YYYY-MM-DDTHH:mm:ss"
+  function xOf(k) {
+    var s = String(k.datetime || '').trim();
+    if (!s) return null;
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s + 'T00:00:00';
+    if (/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}/.test(s)) return s.replace(' ', 'T').slice(0, 19);
+    if (/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}$/.test(s)) return s.replace(' ', 'T') + ':00';
+    return s;
+  }
+
+  var candleData = [], lineData = [], firstX = null, lastX = null;
+  slice.forEach(function(k) {
+    var x = xOf(k);
+    if (!x) return;
+    if (firstX === null) firstX = x;
+    lastX = x;
+    candleData.push({ x: x, o: +k.open, h: +k.high, l: +k.low, c: +k.close });
+    lineData.push({ x: x, y: +k.close });
+  });
+  if (candleData.length < 20) return null;
 
   var annotations = {}, idx = 0;
   function addAnn(v) { annotations['a' + (idx++)] = v; }
@@ -325,13 +344,12 @@ function buildChartConfig(klines, levels, symbol, tf) {
     if (!inRange(price)) return;
     addAnn({
       type: 'line',
-      xMin: xMin, xMax: xMax, yMin: price, yMax: price,
+      xMin: firstX, xMax: lastX, yMin: price, yMax: price,
       borderColor: color,
       borderWidth: bold ? 2 : 1,
       borderDash: [8, 4],
       label: {
-        display: true, content: label,
-        position: 'end',
+        display: true, content: label, position: 'end',
         backgroundColor: bg, color: '#fff',
         font: { size: bold ? 11 : 9, weight: bold ? 'bold' : 'normal' },
         padding: 3, borderRadius: 4
@@ -343,12 +361,11 @@ function buildChartConfig(klines, levels, symbol, tf) {
     if (!isFinite(top) || !isFinite(bottom)) return;
     addAnn({
       type: 'box',
-      xMin: xMin, xMax: xMax,
+      xMin: firstX, xMax: lastX,
       yMin: Math.min(top, bottom), yMax: Math.max(top, bottom),
       backgroundColor: bg, borderColor: border, borderWidth: 1,
       label: {
-        display: true, content: label,
-        position: 'start',
+        display: true, content: label, position: 'start',
         color: color, font: { size: 9, weight: 'bold' },
         backgroundColor: 'rgba(0,0,0,0.5)', padding: 2, borderRadius: 3
       }
@@ -390,15 +407,14 @@ function buildChartConfig(klines, levels, symbol, tf) {
   var titleTxt = symbol + ' · ' + tf + ' · ' + (levels.direction || 'WAIT');
   if (levels.confidence != null) titleTxt += ' · ' + levels.confidence + '%';
 
+  var isCandle = chartType === 'candlestick';
+  var dataset = isCandle
+    ? { label: symbol, data: candleData, color: { up: '#22c55e', down: '#ef4444', unchanged: '#94a3b8' } }
+    : { label: symbol, data: lineData, borderColor: '#6ea8fe', backgroundColor: 'rgba(110,168,254,0.08)', borderWidth: 2, pointRadius: 0, fill: true };
+
   return {
-    type: 'candlestick',
-    data: {
-      datasets: [{
-        label: symbol,
-        data: ohlc,
-        color: { up: '#22c55e', down: '#ef4444', unchanged: '#94a3b8' }
-      }]
-    },
+    type: isCandle ? 'candlestick' : 'line',
+    data: { datasets: [dataset] },
     options: {
       animation: false,
       plugins: {
@@ -409,11 +425,7 @@ function buildChartConfig(klines, levels, symbol, tf) {
       scales: {
         x: {
           type: 'timeseries',
-          time: {
-            unit: 'minute',
-            displayFormats: { minute: 'HH:mm', hour: 'HH:mm', day: 'MM-dd' },
-            tooltipFormat: 'yyyy-MM-dd HH:mm'
-          },
+          time: { tooltipFormat: 'yyyy-MM-dd HH:mm' },
           ticks: { color: '#94a3b8', maxRotation: 45, autoSkip: true, maxTicksLimit: 12 },
           grid: { color: 'rgba(148,163,184,0.08)' }
         },
@@ -426,17 +438,9 @@ function buildChartConfig(klines, levels, symbol, tf) {
     }
   };
 }
-
-async function sendChartPhoto(token, chatId, klines, levels, symbol, tf, caption, keyboard) {
-  if (!klines || klines.length < 20) return null;
-  var config;
-  try { config = buildChartConfig(klines, levels, symbol, tf); }
-  catch (e) { console.error('[Chart] build: ' + e.message); return null; }
-  if (!config) return null;
-
-  var qcRes;
+async function _quickChartPost(config) {
   try {
-    qcRes = await fetchWithTimeout('https://quickchart.io/chart', {
+    return await fetchWithTimeout('https://quickchart.io/chart', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -444,12 +448,44 @@ async function sendChartPhoto(token, chatId, klines, levels, symbol, tf, caption
         width: 1000,
         height: 600,
         format: 'png',
-        backgroundColor: '#0a101e',
-        devicePixelRatio: 1.5
+        backgroundColor: '#0a101e'
+        // 🔑 devicePixelRatio حذف شد — QuickChart فقط عدد صحیح ۱..۴ می‌پذیرد
       })
     }, 20000, 'QuickChart');
-  } catch (e) { console.error('[Chart] qc: ' + e.message); return null; }
-  if (!qcRes.ok) { console.error('[Chart] qc status ' + qcRes.status); return null; }
+  } catch (e) {
+    console.error('[Chart] qc fetch: ' + e.message);
+    return null;
+  }
+}
+
+async function sendChartPhoto(token, chatId, klines, levels, symbol, tf, caption, keyboard) {
+  if (!klines || klines.length < 20) return null;
+
+  // ۱) اول candlestick
+  var cfg = null;
+  try { cfg = buildChartConfig(klines, levels, symbol, tf, 'candlestick'); }
+  catch (e) { console.error('[Chart] candle build: ' + e.message); }
+
+  var qcRes = cfg ? await _quickChartPost(cfg) : null;
+  if (qcRes && !qcRes.ok) {
+    try { var b1 = await qcRes.text(); console.error('[Chart] candle 400 body: ' + b1.slice(0, 400)); } catch (e) {}
+  }
+
+  // ۲) اگر candlestick رد شد → line chart
+  if (!qcRes || !qcRes.ok) {
+    console.warn('[Chart] candlestick failed → trying line chart');
+    var cfg2 = null;
+    try { cfg2 = buildChartConfig(klines, levels, symbol, tf, 'line'); }
+    catch (e) { console.error('[Chart] line build: ' + e.message); return null; }
+    qcRes = cfg2 ? await _quickChartPost(cfg2) : null;
+    if (qcRes && !qcRes.ok) {
+      try { var b2 = await qcRes.text(); console.error('[Chart] line 400 body: ' + b2.slice(0, 400)); } catch (e) {}
+    }
+    if (!qcRes || !qcRes.ok) {
+      console.error('[Chart] ❌ both candle & line failed');
+      return null;
+    }
+  }
 
   var blob;
   try { blob = await qcRes.blob(); }
@@ -467,7 +503,10 @@ async function sendChartPhoto(token, chatId, klines, levels, symbol, tf, caption
   try {
     var tgRes = await fetch('https://api.telegram.org/bot' + token + '/sendPhoto', { method: 'POST', body: formData });
     var tgData = await tgRes.json();
-    if (!tgData.ok) { console.error('[Chart] tg: ' + JSON.stringify(tgData).slice(0, 200)); return null; }
+    if (!tgData.ok) {
+      console.error('[Chart] tg: ' + JSON.stringify(tgData).slice(0, 200));
+      return null;
+    }
     console.log('[Chart] ✅ sent ' + symbol + ' ' + tf);
     return tgData;
   } catch (e) { console.error('[Chart] tg fetch: ' + e.message); return null; }
