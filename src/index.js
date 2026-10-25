@@ -316,7 +316,6 @@ function buildChartConfig(klines, levels, symbol, tf, chartType) {
   var priceWindow = Math.max(Math.abs(cp) * 0.15, 0.01);
   function inRange(p) { return isFinite(p) && Math.abs(p - cp) <= priceWindow; }
 
-  // 🔑 نرمال‌سازی x — همیشه "YYYY-MM-DDTHH:mm:ss"
   function xOf(k) {
     var s = String(k.datetime || '').trim();
     if (!s) return null;
@@ -327,13 +326,16 @@ function buildChartConfig(klines, levels, symbol, tf, chartType) {
   }
 
   var candleData = [], lineData = [], firstX = null, lastX = null;
+
   slice.forEach(function(k) {
-    var x = xOf(k);
-    if (!x) return;
-    if (firstX === null) firstX = x;
-    lastX = x;
-    candleData.push({ x: x, o: +k.open, h: +k.high, l: +k.low, c: +k.close });
-    lineData.push({ x: x, y: +k.close });
+    var xStr = xOf(k);
+    if (!xStr) return;
+    var xNum = Date.parse(xStr);
+    if (!Number.isFinite(xNum)) return;
+    if (firstX === null) firstX = xNum;
+    lastX = xNum;
+    candleData.push({ x: xNum, o: +k.open, h: +k.high, l: +k.low, c: +k.close });
+    lineData.push({ x: xNum, y: +k.close });
   });
   if (candleData.length < 20) return null;
 
@@ -363,11 +365,15 @@ function buildChartConfig(klines, levels, symbol, tf, chartType) {
       type: 'box',
       xMin: firstX, xMax: lastX,
       yMin: Math.min(top, bottom), yMax: Math.max(top, bottom),
-      backgroundColor: bg, borderColor: border, borderWidth: 1,
+      backgroundColor: bg,
+      borderColor: border,
+      borderWidth: 1,
       label: {
         display: true, content: label, position: 'start',
-        color: color, font: { size: 9, weight: 'bold' },
-        backgroundColor: 'rgba(0,0,0,0.5)', padding: 2, borderRadius: 3
+        color: color,
+        font: { size: 9, weight: 'bold' },
+        backgroundColor: 'rgba(0,0,0,0.5)',
+        padding: 2, borderRadius: 3
       }
     });
   }
@@ -424,7 +430,7 @@ function buildChartConfig(klines, levels, symbol, tf, chartType) {
       },
       scales: {
         x: {
-          type: 'timeseries',
+          type: 'time',
           time: { tooltipFormat: 'yyyy-MM-dd HH:mm' },
           ticks: { color: '#94a3b8', maxRotation: 45, autoSkip: true, maxTicksLimit: 12 },
           grid: { color: 'rgba(148,163,184,0.08)' }
@@ -438,18 +444,19 @@ function buildChartConfig(klines, levels, symbol, tf, chartType) {
     }
   };
 }
+
 async function _quickChartPost(config) {
   try {
     return await fetchWithTimeout('https://quickchart.io/chart', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
+        version: '4',
         chart: config,
         width: 1000,
         height: 600,
         format: 'png',
         backgroundColor: '#0a101e'
-        // 🔑 devicePixelRatio حذف شد — QuickChart فقط عدد صحیح ۱..۴ می‌پذیرد
       })
     }, 20000, 'QuickChart');
   } catch (e) {
@@ -461,7 +468,6 @@ async function _quickChartPost(config) {
 async function sendChartPhoto(token, chatId, klines, levels, symbol, tf, caption, keyboard) {
   if (!klines || klines.length < 20) return null;
 
-  // ۱) اول candlestick
   var cfg = null;
   try { cfg = buildChartConfig(klines, levels, symbol, tf, 'candlestick'); }
   catch (e) { console.error('[Chart] candle build: ' + e.message); }
@@ -471,7 +477,6 @@ async function sendChartPhoto(token, chatId, klines, levels, symbol, tf, caption
     try { var b1 = await qcRes.text(); console.error('[Chart] candle 400 body: ' + b1.slice(0, 400)); } catch (e) {}
   }
 
-  // ۲) اگر candlestick رد شد → line chart
   if (!qcRes || !qcRes.ok) {
     console.warn('[Chart] candlestick failed → trying line chart');
     var cfg2 = null;
@@ -946,6 +951,53 @@ function parseJsonBlock(text) {
   if (m2 && m2.length) { try { return JSON.parse(m2[m2.length-1]); } catch (e) {} }
   return null;
 }
+
+// 🆕 پارسر OB/FVG برای متن غیر-JSON (یا JSON ناقص)
+function parseOrderBlocksAndFVG(text) {
+  var orderBlocks = [];
+  var fvg = [];
+  if (!text) return { orderBlocks: orderBlocks, fvg: fvg };
+
+  // ۱) پیدا کردن همه بلوک‌های {type:..., top:..., bottom:...}
+  var allBlocks = [];
+  var blockRegex = /type\s*:\s*['"]?(bullish|bearish)['"]?\s*,\s*top\s*:\s*['"]?([\d.]+)['"]?\s*,\s*bottom\s*:\s*['"]?([\d.]+)['"]?/gi;
+  var m;
+  while ((m = blockRegex.exec(text)) !== null) {
+    var t = parseFloat(m[2]), b = parseFloat(m[3]);
+    if (!isFinite(t) || !isFinite(b) || t === b) continue;
+    allBlocks.push({
+      index: m.index,
+      type: m[1].toLowerCase(),
+      top: Math.max(t, b),
+      bottom: Math.min(t, b)
+    });
+  }
+
+  // ۲) تفکیک OB از FVG بر اساس نزدیک‌ترین هدر قبل از هر بلوک
+  for (var i = 0; i < allBlocks.length; i++) {
+    var block = allBlocks[i];
+    var before = text.slice(Math.max(0, block.index - 500), block.index).toLowerCase();
+
+    var obMarkers = ['orderblocks', 'order blocks', 'orderblock', 'order block', 'order_blocks', 'بلوک‌های سفارش', 'بلوک های سفارش', 'بلوک سفارش', 'ob:', 'ob :', ' ob', 'ob '];
+    var fvgMarkers = ['fvg', 'fair value gap', 'fairvaluegap', 'fair value gaps', 'fairvaluegaps'];
+
+    var lastOB = -1, lastFVG = -1;
+    for (var oi = 0; oi < obMarkers.length; oi++) { var p = before.lastIndexOf(obMarkers[oi]); if (p > lastOB) lastOB = p; }
+    for (var fi = 0; fi < fvgMarkers.length; fi++) { var pf = before.lastIndexOf(fvgMarkers[fi]); if (pf > lastFVG) lastFVG = pf; }
+
+    var entry = { type: block.type, top: block.top, bottom: block.bottom };
+    if (lastFVG > lastOB) fvg.push(entry);
+    else if (lastOB >= 0) orderBlocks.push(entry);
+    // اگر هیچ هدری نبود، پیش‌فرض OB
+    else orderBlocks.push(entry);
+  }
+
+  return {
+    orderBlocks: orderBlocks.slice(0, 3),
+    fvg: fvg.slice(0, 3)
+  };
+}
+
 function findValue(text, labels) {
   for (var i = 0; i < labels.length; i++) {
     var p = new RegExp('\\*{0,2}' + labels[i] + '\\*{0,2}\\s*[:：=]\\s*\\*{0,2}\\s*([-\\d,،]+(?:\\.\\d+)?)', 'i');
@@ -961,7 +1013,19 @@ function detectDirection(text) {
 }
 function extractLevels(rawText) {
   var j = parseJsonBlock(rawText);
+
+  // 🆕 همیشه پارسر متنی را اجرا کن — هم برای ادغام، هم برای fallback
+  var parsedText = parseOrderBlocksAndFVG(rawText);
+
   if (j) {
+    // ادغام: اگر JSON OB/FVG داشت از آن، وگرنه از پارسر متنی
+    var jsonOB = Array.isArray(j.orderBlocks)
+      ? j.orderBlocks.filter(function(o){ return o && isFinite(o.top) && isFinite(o.bottom); }).slice(0, 3)
+      : [];
+    var jsonFVG = Array.isArray(j.fvg)
+      ? j.fvg.filter(function(f){ return f && isFinite(f.top) && isFinite(f.bottom); }).slice(0, 3)
+      : [];
+
     return {
       direction: normDir(j.direction), regime: j.regime || null,
       confidence: num(j.confidence !== undefined && j.confidence !== null ? j.confidence : j.confidenceScore),
@@ -973,16 +1037,19 @@ function extractLevels(rawText) {
       aiScores: j.scores || null, validationIssues: [],
       support: Array.isArray(j.support) ? j.support.filter(function(p){ return isFinite(p); }).slice(0, 3) : [],
       resistance: Array.isArray(j.resistance) ? j.resistance.filter(function(p){ return isFinite(p); }).slice(0, 3) : [],
-      orderBlocks: Array.isArray(j.orderBlocks) ? j.orderBlocks.filter(function(o){ return o && isFinite(o.top) && isFinite(o.bottom); }).slice(0, 3) : [],
-      fvg: Array.isArray(j.fvg) ? j.fvg.filter(function(f){ return f && isFinite(f.top) && isFinite(f.bottom); }).slice(0, 3) : []
+      orderBlocks: jsonOB.length ? jsonOB : parsedText.orderBlocks,
+      fvg: jsonFVG.length ? jsonFVG : parsedText.fvg
     };
   }
+
+  // مسیر متنی fallback
   var blocks = rawText.match(/---\s*\n([\s\S]*?)\n\s*---/g);
   var text = rawText;
   if (blocks && blocks.length) text = blocks[blocks.length-1];
   var regimeMatch = text.match(/Regime\s*[:：]\s*(TRENDING_UP|TRENDING_DOWN|RANGING|TRANSITIONAL)/i);
   var rrMatch = text.match(/R\/R\s*[:：=]\s*([\d\.:]+)/i);
   var confMatch = text.match(/ConfluenceScore\s*[:：=]\s*([\d\.]+)/i);
+
   return {
     direction: detectDirection(rawText),
     regime: regimeMatch ? regimeMatch[1].toUpperCase() : null,
@@ -993,7 +1060,9 @@ function extractLevels(rawText) {
     rr: rrMatch ? rrMatch[1] : null,
     confluenceScore: confMatch ? parseFloat(confMatch[1]) : null,
     aiScores: null, validationIssues: [],
-    support: [], resistance: [], orderBlocks: [], fvg: []
+    support: [], resistance: [],
+    orderBlocks: parsedText.orderBlocks,
+    fvg: parsedText.fvg
   };
 }
 
@@ -1575,6 +1644,15 @@ function timeframeLabel(tf) { return TF_LABELS[tf] || tf; }
 // ============================================
 function tgFormat(text) {
   var c = text.replace(/```json[\s\S]*?```/gi, '').replace(/```[\s\S]*?```/g, '');
+
+  // 🆕 حذف بلوک‌های OB/FVG خام که مدل به‌صورت متن آزاد تولید می‌کند
+  // (چون حالا از طریق پارسر به چارت می‌روند، نیازی به نمایش متنی نیست)
+  c = c.replace(/\{[^\}\n]*type\s*:\s*['"]?(?:bullish|bearish)['"]?[^\}\n]*\}/gi, '');
+  // حذف هدرهای خالیِ "بلوک‌های سفارش:" / "Order Blocks:" / "FVG:" که بعد از حذف بلوک‌ها خالی می‌مانند
+  c = c.replace(/^[\s\-•]*\*{0,2}(?:بلوک[‌\s]*های?\s*سفارش|Order\s*Blocks?|FVG|Fair\s*Value\s*Gaps?)\*{0,2}\s*:?\s*$/gmi, '');
+  // جمع کردن خطوط خالی پشت سر هم
+  c = c.replace(/\n{3,}/g, '\n\n');
+
   var h = c.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   h = h.replace(/^#{1,4}\s*(.+)$/gm, '\n━━━━━━━━━━━━━━━\n📌 <b>$1</b>\n━━━━━━━━━━━━━━━');
   h = h.replace(/\*\*([^*\n]+)\*\*/g, '<b>$1</b>');
@@ -2421,14 +2499,12 @@ async function runAnalysis(token, chatId, symbol, env, tf, forcedProvider, opts)
     levels._adversarial = adv;
     var conf = await resolveConfluence(env, chatId, levels, result.text);
 
-    // 🔑 Fallback S/R اگر AI نداد
     if ((!levels.support || !levels.support.length || !levels.resistance || !levels.resistance.length) && klines.length > 20) {
       var sr = findLocalSR(klines);
       if (!levels.support || !levels.support.length) levels.support = sr.support;
       if (!levels.resistance || !levels.resistance.length) levels.resistance = sr.resistance;
     }
 
-    // 🔑 چارت را اول بفرست
     if (!env.CHART_DISABLED) {
       var shortCap = '📊 <b>' + esc(symbol) + '</b> · ' + TF_LABELS[tf] + ' · ' +
         (levels.direction === 'BUY' ? '🟢' : levels.direction === 'SELL' ? '🔴' : '⏸️') +
@@ -2485,7 +2561,6 @@ async function runMultiTFAnalysis(token, chatId, symbol, env, forcedProvider, op
     levels._adversarial = adv;
     var conf = await resolveConfluence(env, chatId, levels, result.text);
 
-    // 🔑 Chart MTF
     if (!env.CHART_DISABLED && k15 && k15.length >= 20) {
       if ((!levels.support || !levels.support.length) && k15.length > 20) {
         var sr3 = findLocalSR(k15);
@@ -2716,7 +2791,6 @@ async function runMonitorForUser(env, token, chatId, m, strict, mode, cfg, local
     if (calib.adjusted) { levels.confidence = calib.conf; levels._calibrated = true; levels._confRaw = confRaw; }
     await autoJournalAdd(env, chatId, levels, result.provider, symbol, tf, currentPrice, { atr: atr, regime: regime, adversarial: adv, confidenceRaw: confRaw, confidenceAdjusted: calib.adjusted, modelTier: tier, modelName: result.model, strictness: strict });
 
-    // 🔑 fallback S/R + chart
     if ((!levels.support || !levels.support.length || !levels.resistance || !levels.resistance.length) && klines.length > 20) {
       var sr2 = findLocalSR(klines);
       if (!levels.support || !levels.support.length) levels.support = sr2.support;
@@ -2746,7 +2820,6 @@ async function sendMonitorSignal(token, chatId, levels, confluence, result, curr
   var d = levels.direction;
   var et = detectEntryType(levels, currentPrice);
 
-  // 🔑 Chart first for monitor
   if (!env || !env.CHART_DISABLED) {
     if (klines && klines.length >= 20) {
       var shortCap = '🚨 <b>' + esc(symbol) + '</b> · ' + timeframeLabel(tf) + ' · ' + (d === 'BUY' ? '🟢 خرید' : '🔴 فروش');
