@@ -1719,8 +1719,7 @@ var PROVIDER_FUNCS = {
   gemini: callGeminiText, groq: callGroqText, github: callGitHubText,
   together: callTogetherText, openrouter: callOpenRouterText, mistral: callMistralText,
   huggingface: callHuggingFaceText, cloudflare: callCloudflareText, nvidia: callNvidiaText,
-  
-      llm7: callLLM7Text, avalai: callAvalAIText, metis: callMetisText, onexai: callOneXAiText
+  llm7: callLLM7Text, avalai: callAvalAIText, metis: callMetisText, onexai: callOneXAiText
 };
 
 async function callWithFallback(env, prompt, imgB64, imgMime, chatId, forcedProvider, aiOpts) {
